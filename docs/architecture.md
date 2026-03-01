@@ -2,22 +2,23 @@
 
 ## System Overview
 
-```
+```text
 Spec (markdown) ──→ Attractor Loop ──→ Generated Code ──→ Docker Build
                         │                                      │
                         │         (holdout wall)               ▼
                         │                              Running Container
                         │                                      │
                         ◄──── Failure Feedback ◄──── Validator + LLM Judge
-                                                              │
+                                                               │
                                                     Satisfaction Score (0-100)
 ```
 
-The attractor loop generates code from a spec, builds it in Docker, validates it against holdout scenarios using an LLM judge, and iterates on failures until satisfaction converges above threshold.
+The attractor loop generates code from a spec, builds it in Docker, validates it against holdout
+scenarios using an LLM judge, and iterates on failures until satisfaction converges above threshold.
 
 ## Repository Structure
 
-```
+```text
 octopusgarden/
 ├── CLAUDE.md
 ├── README.md
@@ -89,7 +90,9 @@ cmd/octopusgarden
     └── internal/store       (sqlite)
 ```
 
-Key constraint: `internal/attractor` never imports `internal/scenario`. The attractor receives spec content and failure feedback as strings. The validator (scenario runner + judge) is invoked by `cmd/octopusgarden`, not by the attractor.
+Key constraint: `internal/attractor` never imports `internal/scenario`. The attractor receives spec
+content and failure feedback as strings. The validator (scenario runner + judge) is invoked by
+`cmd/octopusgarden`, not by the attractor.
 
 ## LLM Client Interface
 
@@ -143,26 +146,33 @@ type Message struct {
 ### Anthropic Backend (`internal/llm/anthropic.go`)
 
 Uses `github.com/anthropics/anthropic-sdk-go`. Key features:
+
 - Prompt caching via `CacheControl` on system prompt blocks
 - Native token counting from API response
 - Cost estimation from model pricing table
 
 ### OpenAI Backend (`internal/llm/openai.go`)
 
-Uses `github.com/sashabaranov/go-openai`. For GPT models and OpenAI-compatible endpoints (Ollama at `localhost:11434`).
+Uses `github.com/sashabaranov/go-openai`. For GPT models and OpenAI-compatible endpoints (Ollama at
+`localhost:11434`).
 
 ## Prompt Caching Strategy
 
-The spec content is included in every attractor iteration as a system prompt. Without caching, this is the dominant cost.
+The spec content is included in every attractor iteration as a system prompt. Without caching, this
+is the dominant cost.
 
 Anthropic's prompt caching:
+
 1. First request: full cost (cache write)
-2. Subsequent requests with same prefix: ~10% of input cost (cache read)
-3. Cache TTL: 5 minutes (resets on each hit)
+1. Subsequent requests with same prefix: ~10% of input cost (cache read)
+1. Cache TTL: 5 minutes (resets on each hit)
 
 Implementation:
-- Set `CacheControl: &CacheControl{Type: "ephemeral"}` on the system message block containing spec content
-- The failure feedback in user messages changes each iteration (not cached — that's fine, it's small)
+
+- Set `CacheControl: &CacheControl{Type: "ephemeral"}` on the system message block containing spec
+  content
+- The failure feedback in user messages changes each iteration (not cached — that's fine, it's
+  small)
 - Expected savings: 80-90% on input tokens for iterations 2+
 
 ## Spec Data Structures
@@ -264,10 +274,11 @@ satisfaction_criteria: |
 ### Variable Capture and Substitution
 
 The scenario runner:
+
 1. Executes each step sequentially
-2. After each step, evaluates `capture` rules against the response body
-3. Stores captured values in a variable map
-4. Before executing subsequent steps, substitutes `{variable_name}` in paths, headers, and bodies
+1. After each step, evaluates `capture` rules against the response body
+1. Stores captured values in a variable map
+1. Before executing subsequent steps, substitutes `{variable_name}` in paths, headers, and bodies
 
 ## Scenario Runner
 
@@ -333,7 +344,8 @@ Does this response satisfy the expectation?
 
 ### Aggregation
 
-Per-scenario score = average of step scores. Overall satisfaction = weighted average of scenario scores (using scenario `weight` field).
+Per-scenario score = average of step scores. Overall satisfaction = weighted average of scenario
+scores (using scenario `weight` field).
 
 Use a cheap model for judging (Claude Haiku, GPT-4o-mini).
 
@@ -394,9 +406,10 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions) (*Run
 ### Context Window Management
 
 Priority order for context (drop from bottom first):
+
 1. Spec content (always included, cached)
-2. Latest failure feedback
-3. Previous failure feedback (up to 3 total)
+1. Latest failure feedback
+1. Previous failure feedback (up to 3 total)
 
 If context exceeds model limit, drop oldest failures first.
 
@@ -428,11 +441,13 @@ func (m *Manager) WaitHealthy(ctx context.Context, url string, timeout time.Dura
 
 ### Port Allocation
 
-Use port 0 — Docker assigns a random available host port. Read back the assigned port from container inspect.
+Use port 0 — Docker assigns a random available host port. Read back the assigned port from container
+inspect.
 
 ### Health Check
 
-After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to 30s. Any non-5xx response means healthy.
+After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to 30s. Any non-5xx response
+means healthy.
 
 ### Cleanup
 

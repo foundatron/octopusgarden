@@ -115,6 +115,8 @@ linters:
           - errorlint   # test error comparisons are intentionally direct
           - godot       # test function comments don't need trailing period
           - errcheck    # w.Write in httptest handlers; test helper ignoring errors is intentional
+          - gocognit    # table-driven tests with check funcs naturally have high cognitive complexity
+          - cyclop      # table-driven tests with check funcs naturally have high cyclomatic complexity
 
 formatters:
   enable:

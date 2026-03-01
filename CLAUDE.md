@@ -1,6 +1,10 @@
 # CLAUDE.md — OctopusGarden
 
-OctopusGarden is an open-source, self-hostable software dark factory. Humans write specifications and scenarios. OctopusGarden orchestrates AI coding agents that autonomously generate, test, and converge working software — with zero human code review. The core loop: specs -> agent generates code -> validator runs holdout scenarios -> LLM judge scores satisfaction -> failures fed back -> agent iterates -> converges.
+OctopusGarden is an open-source, self-hostable software dark factory. Humans write specifications
+and scenarios. OctopusGarden orchestrates AI coding agents that autonomously generate, test, and
+converge working software — with zero human code review. The core loop: specs -> agent generates
+code -> validator runs holdout scenarios -> LLM judge scores satisfaction -> failures fed back ->
+agent iterates -> converges.
 
 ## Module & Stack
 
@@ -13,7 +17,8 @@ OctopusGarden is an open-source, self-hostable software dark factory. Humans wri
 
 Minimize. Use stdlib where possible. Key exceptions:
 
-- `github.com/anthropics/anthropic-sdk-go` — Anthropic API (Claude models, prompt caching, streaming)
+- `github.com/anthropics/anthropic-sdk-go` — Anthropic API (Claude models, prompt caching,
+  streaming)
 - `github.com/sashabaranov/go-openai` — OpenAI and Ollama only
 - `gopkg.in/yaml.v3` — scenario YAML parsing
 - `github.com/mattn/go-sqlite3` — run history and metrics
@@ -21,19 +26,30 @@ Minimize. Use stdlib where possible. Key exceptions:
 
 ## Design Invariants
 
-1. **Holdout isolation is sacred.** The attractor loop MUST NOT have access to scenario files during code generation. Scenarios are only used by the validator after code is generated. This prevents reward hacking. Enforce this architecturally — the attractor receives spec content as a string, never scenario content or file paths.
+1. **Holdout isolation is sacred.** The attractor loop MUST NOT have access to scenario files during
+   code generation. Scenarios are only used by the validator after code is generated. This prevents
+   reward hacking. Enforce this architecturally — the attractor receives spec content as a string,
+   never scenario content or file paths.
 
-2. **Satisfaction is probabilistic, not boolean.** The validator produces a 0-100 score per scenario via LLM-as-judge, not pass/fail. Aggregate satisfaction determines convergence. Default threshold: 95%.
+1. **Satisfaction is probabilistic, not boolean.** The validator produces a 0-100 score per scenario
+   via LLM-as-judge, not pass/fail. Aggregate satisfaction determines convergence. Default
+   threshold: 95%.
 
-3. **Code is opaque weights.** Generated code is a build artifact. Internal structure doesn't matter — only externally observable behavior matters. Never optimize for "readable" generated code.
+1. **Code is opaque weights.** Generated code is a build artifact. Internal structure doesn't matter
+   — only externally observable behavior matters. Never optimize for "readable" generated code.
 
-4. **Specs are the source of truth.** If generated code doesn't match the spec, the code is wrong. If the spec is ambiguous, improve the spec.
+1. **Specs are the source of truth.** If generated code doesn't match the spec, the code is wrong.
+   If the spec is ambiguous, improve the spec.
 
-5. **Cost-aware by default.** Every LLM call is logged with token counts and estimated cost. Budget caps are configurable. Cheap models for judging, expensive models for generation.
+1. **Cost-aware by default.** Every LLM call is logged with token counts and estimated cost. Budget
+   caps are configurable. Cheap models for judging, expensive models for generation.
 
 ## Prompt Caching
 
-Spec content repeats every attractor iteration. Use Anthropic's prompt caching (`cache_control: {type: "ephemeral"}`) on the system prompt containing the spec. This gives ~90% cost reduction on cache reads after the first write. The `anthropic-sdk-go` client supports this natively via `CacheControl` on message blocks.
+Spec content repeats every attractor iteration. Use Anthropic's prompt caching
+(`cache_control: {type: "ephemeral"}`) on the system prompt containing the spec. This gives ~90%
+cost reduction on cache reads after the first write. The `anthropic-sdk-go` client supports this
+natively via `CacheControl` on message blocks.
 
 ## Coding Standards
 
@@ -48,6 +64,7 @@ Spec content repeats every attractor iteration. Use Anthropic's prompt caching (
 ## Architecture Reference
 
 See [docs/architecture.md](docs/architecture.md) for:
+
 - Repository structure and package dependency DAG
 - LLM client interface design
 - Attractor loop pseudocode and context window management
@@ -59,4 +76,5 @@ See [docs/architecture.md](docs/architecture.md) for:
 
 ## Session Plan
 
-See [docs/sessions.md](docs/sessions.md) for the implementation roadmap: 10 sessions across 2 phases, with exact types, test criteria, and done conditions.
+See [docs/sessions.md](docs/sessions.md) for the implementation roadmap: 10 sessions across 2
+phases, with exact types, test criteria, and done conditions.

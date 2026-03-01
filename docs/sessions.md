@@ -6,9 +6,11 @@ Goal: end-to-end loop working on a trivial example. Spec in, working software ou
 
 ### Session 1 — Go Module + CLI + LLM Client
 
-**Scope:** Initialize the Go module, build the CLI skeleton, and implement the Anthropic LLM client with prompt caching support.
+**Scope:** Initialize the Go module, build the CLI skeleton, and implement the Anthropic LLM client
+with prompt caching support.
 
 **Types/Interfaces:**
+
 ```go
 // internal/llm/client.go
 type Client interface {
@@ -50,22 +52,26 @@ type JudgeResponse struct {
 }
 ```
 
-**Tests:** Mock HTTP server returning canned Anthropic API responses. Verify token counting, cost estimation, and cache control header propagation.
+**Tests:** Mock HTTP server returning canned Anthropic API responses. Verify token counting, cost
+estimation, and cache control header propagation.
 
 **Done when:**
+
 - `go build ./...` succeeds
 - `go test ./internal/llm/...` passes
 - `./octopusgarden run --help` prints usage
 - `./octopusgarden validate --help` prints usage
 - `./octopusgarden status --help` prints usage
 
----
+______________________________________________________________________
 
 ### Session 2 — Spec Parser + Scenario Loader
 
-**Scope:** Parse markdown specs into structured Go types. Load YAML scenario files with variable capture support.
+**Scope:** Parse markdown specs into structured Go types. Load YAML scenario files with variable
+capture support.
 
 **Types/Interfaces:**
+
 ```go
 // internal/spec/types.go
 type Spec struct {
@@ -112,19 +118,23 @@ type Capture struct {
 }
 ```
 
-**Tests:** Embedded test fixtures — a sample spec.md and sample scenario YAML. Verify parsing round-trips correctly, weight defaults to 1.0, capture fields parse.
+**Tests:** Embedded test fixtures — a sample spec.md and sample scenario YAML. Verify parsing
+round-trips correctly, weight defaults to 1.0, capture fields parse.
 
 **Done when:**
+
 - `go test ./internal/spec/...` passes
 - `go test ./internal/scenario/...` passes
 
----
+______________________________________________________________________
 
 ### Session 3 — Scenario Runner + LLM Judge
 
-**Scope:** Execute scenario steps as HTTP requests against a running server. Capture variables from responses and substitute into subsequent steps. Score each step with the LLM judge.
+**Scope:** Execute scenario steps as HTTP requests against a running server. Capture variables from
+responses and substitute into subsequent steps. Score each step with the LLM judge.
 
 **Functions:**
+
 ```go
 // internal/scenario/runner.go
 type Runner struct {
@@ -149,19 +159,23 @@ type StepScore struct {
 }
 ```
 
-**Tests:** httptest server with canned responses. Mock LLM client returning canned judge scores. Verify variable capture from JSON responses and substitution into paths/bodies.
+**Tests:** httptest server with canned responses. Mock LLM client returning canned judge scores.
+Verify variable capture from JSON responses and substitution into paths/bodies.
 
 **Done when:**
+
 - `go test ./internal/scenario/...` passes
 - Variable capture + substitution works end-to-end in tests
 
----
+______________________________________________________________________
 
 ### Session 4 — Docker Container Management
 
-**Scope:** Build Docker images from generated code directories and run containers with random port allocation, health checking, and cleanup.
+**Scope:** Build Docker images from generated code directories and run containers with random port
+allocation, health checking, and cleanup.
 
 **Functions:**
+
 ```go
 // internal/container/docker.go
 type Manager struct {
@@ -174,24 +188,29 @@ func (m *Manager) WaitHealthy(ctx context.Context, url string, timeout time.Dura
 ```
 
 **Implementation details:**
+
 - Port 0 allocation (Docker assigns random available host port)
 - Health check: poll GET / every 1s, 30s timeout, non-5xx = healthy
 - `stopFn` stops and removes container
 - Build errors surfaced with full Docker build log
 
-**Tests:** Unit tests with mocked Docker client. Integration tests behind `//go:build integration` tag that actually build/run a trivial container.
+**Tests:** Unit tests with mocked Docker client. Integration tests behind `//go:build integration`
+tag that actually build/run a trivial container.
 
 **Done when:**
+
 - `go build ./internal/container/...` succeeds
 - Unit tests pass: `go test ./internal/container/...`
 
----
+______________________________________________________________________
 
 ### Session 5 — Attractor Loop
 
-**Scope:** Core convergence loop. Wires together LLM generation, file parsing, container management, and receives validation feedback.
+**Scope:** Core convergence loop. Wires together LLM generation, file parsing, container management,
+and receives validation feedback.
 
 **Functions:**
+
 ```go
 // internal/attractor/loop.go
 type Attractor struct {
@@ -224,27 +243,32 @@ func ParseFiles(output string) (map[string]string, error)
 ```
 
 **Key behaviors:**
+
 - File block parser extracts `=== FILE: path === ... === END FILE ===`
 - Stall detection: 3 iterations without improvement -> stop
 - Budget enforcement: cumulative cost > budget -> save checkpoint, stop
 - Checkpoint: save best-scoring codebase to workspace/{run_id}/best/
 
 **Tests:** Mock all dependencies. Table-driven tests verifying:
+
 1. Convergence: satisfaction meets threshold -> returns "converged"
-2. Stall: 3 iterations flat -> returns "stalled"
-3. Budget: cost exceeds limit -> returns "budget_exceeded"
-4. File parser handles well-formed and malformed LLM output
+1. Stall: 3 iterations flat -> returns "stalled"
+1. Budget: cost exceeds limit -> returns "budget_exceeded"
+1. File parser handles well-formed and malformed LLM output
 
 **Done when:**
+
 - `go test ./internal/attractor/...` passes
 
----
+______________________________________________________________________
 
 ### Session 6 — SQLite Store + Wire CLI + Hello-API Example
 
-**Scope:** SQLite persistence, wire the `run` subcommand end-to-end, create the hello-api example spec and scenarios.
+**Scope:** SQLite persistence, wire the `run` subcommand end-to-end, create the hello-api example
+spec and scenarios.
 
 **Functions:**
+
 ```go
 // internal/store/db.go
 type Store struct {
@@ -260,6 +284,7 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error)
 ```
 
 **Example artifacts:**
+
 - `specs/examples/hello-api/spec.md` — Items REST API (CRUD, list, pagination, validation)
 - `scenarios/examples/hello-api/crud.yaml` — Create, read, update, delete with variable capture
 - `scenarios/examples/hello-api/list.yaml` — List items, verify array response
@@ -270,11 +295,13 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error)
 **Tests:** Store CRUD tests with in-memory SQLite.
 
 **Done when:**
+
 - `go build ./cmd/octopusgarden` produces a binary
 - `go test ./...` — all tests pass
-- Manual smoke test: `./octopusgarden run --spec specs/examples/hello-api/spec.md --scenarios scenarios/examples/hello-api/ --model claude-sonnet-4-20250514 --threshold 90`
+- Manual smoke test:
+  `./octopusgarden run --spec specs/examples/hello-api/spec.md --scenarios scenarios/examples/hello-api/ --model claude-sonnet-4-20250514 --threshold 90`
 
----
+______________________________________________________________________
 
 ## Phase 2: Hardened Validation (Sessions 7-10)
 
@@ -282,28 +309,35 @@ Goal: trustworthy validation, convergence detection, and a real demo.
 
 ### Session 7 — Holdout Isolation Enforcement
 
-**Scope:** Ensure the attractor can never access scenario content. This is architectural, not convention.
+**Scope:** Ensure the attractor can never access scenario content. This is architectural, not
+convention.
 
 **Implementation:**
+
 - Attractor receives spec content as `string`, never file paths
 - The `cmd/octopusgarden` orchestrator loads scenarios separately and passes only to the validator
 - `internal/attractor` does not import `internal/scenario`
 
 **Tests:**
+
 - Verify `internal/attractor` has no import of `internal/scenario` (go vet or build constraint)
-- Test that attractor context string never contains scenario text (inject known scenario strings, assert they don't appear in LLM prompts)
+- Test that attractor context string never contains scenario text (inject known scenario strings,
+  assert they don't appear in LLM prompts)
 
 **Done when:**
+
 - Isolation test passes
 - Import graph verified
 
----
+______________________________________________________________________
 
 ### Session 8 — Convergence Detection + Checkpoints
 
-**Scope:** Improve convergence detection with plateau/regression/improvement classification. Save and restore checkpoints.
+**Scope:** Improve convergence detection with plateau/regression/improvement classification. Save
+and restore checkpoints.
 
 **Functions:**
+
 ```go
 // internal/attractor/convergence.go
 type Trend string
@@ -322,33 +356,40 @@ func LoadCheckpoint(dir string) (map[string]string, CheckpointMeta, error)
 **Tests:** Table-driven tests for all trend cases. Checkpoint save/load round-trip.
 
 **Done when:**
+
 - `go test ./internal/attractor/...` passes with trend detection + checkpoint tests
 
----
+______________________________________________________________________
 
 ### Session 9 — Todo App Demo
 
 **Scope:** More complex demo that exercises the full system.
 
 **Artifacts:**
-- `specs/examples/todo-app/spec.md` — Users, auth (API key), todos per user, filtering (completed/pending), pagination
-- 12+ scenario YAML files covering: registration, login, CRUD, ownership isolation, filtering, pagination, validation, 404, auth failures
+
+- `specs/examples/todo-app/spec.md` — Users, auth (API key), todos per user, filtering
+  (completed/pending), pagination
+- 12+ scenario YAML files covering: registration, login, CRUD, ownership isolation, filtering,
+  pagination, validation, 404, auth failures
 
 **Done when:**
+
 - Factory runs against todo-app spec
 - Converges with 90%+ satisfaction (or clear failures that inform spec improvements)
 
----
+______________________________________________________________________
 
 ### Session 10 — Standalone Validate Command
 
-**Scope:** `octopusgarden validate --scenarios <dir> --target <url>` runs scenarios against any running service.
+**Scope:** `octopusgarden validate --scenarios <dir> --target <url>` runs scenarios against any
+running service.
 
 **Done when:**
+
 - Can validate the hello-api example against a manually started server
 - Outputs per-scenario satisfaction scores and aggregate
 
----
+______________________________________________________________________
 
 ## Future Work (GitHub Issues, Not Sessions)
 

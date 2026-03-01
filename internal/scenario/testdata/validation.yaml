@@ -1,0 +1,22 @@
+id: validation
+description: "Validate input constraints"
+type: api
+steps:
+  - description: "Create item with missing name"
+    request:
+      method: POST
+      path: /items
+      headers:
+        Content-Type: application/json
+      body: { "description": "no name provided" }
+    expect: "Returns 400 Bad Request with an error message about missing name"
+  - description: "Create item with empty name"
+    request:
+      method: POST
+      path: /items
+      headers:
+        Content-Type: application/json
+      body: { "name": "", "description": "empty name" }
+    expect: "Returns 400 Bad Request with an error message about empty name"
+satisfaction_criteria: |
+  Invalid input is rejected with appropriate error messages.

@@ -1,0 +1,37 @@
+id: items-crud
+description: "Create, read, update, and delete items"
+type: api
+weight: 1.0
+setup:
+  - description: "Create a test item"
+    request:
+      method: POST
+      path: /items
+      body: { "name": "test item", "description": "for testing" }
+    capture:
+      - name: item_id
+        jsonpath: $.id
+steps:
+  - description: "Read the created item"
+    request:
+      method: GET
+      path: /items/{item_id}
+    expect: "Returns the item with name 'test item' and a valid ID"
+  - description: "Update the item"
+    request:
+      method: PUT
+      path: /items/{item_id}
+      body: { "name": "updated item" }
+    expect: "Returns the updated item with name 'updated item'"
+  - description: "Delete the item"
+    request:
+      method: DELETE
+      path: /items/{item_id}
+    expect: "Returns 200 or 204 indicating successful deletion"
+  - description: "Verify deletion"
+    request:
+      method: GET
+      path: /items/{item_id}
+    expect: "Returns 404 Not Found"
+satisfaction_criteria: |
+  All CRUD operations work correctly with appropriate status codes.
