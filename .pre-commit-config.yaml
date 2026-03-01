@@ -1,0 +1,69 @@
+default_stages: [pre-commit]
+
+repos:
+  # ── Universal hygiene ───────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # ── Markdown ────────────────────────────────────────────────────────────────
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.22
+    hooks:
+      - id: mdformat
+        additional_dependencies:
+          - mdformat-gfm
+        args: [--wrap, "100"]
+
+  # ── Shell scripts (future-proof, dormant until .sh files appear) ────────────
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  # ── Dockerfiles (future-proof, dormant until session 4 Docker work) ─────────
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint-docker
+
+  # ── Makefile ─────────────────────────────────────────────────────────────────
+  - repo: https://github.com/checkmake/checkmake
+    rev: v0.3.2
+    hooks:
+      - id: checkmake
+
+  # ── Go: format + incremental lint on commit ─────────────────────────────────
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.4.0
+    hooks:
+      - id: golangci-lint-config-verify
+      - id: golangci-lint-fmt
+      - id: golangci-lint
+        name: golangci-lint (incremental)
+        args: [--new-from-rev=HEAD, --fix]
+
+  # ── Go: full lint + tests on push ───────────────────────────────────────────
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.4.0
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint (full module)
+        args: [--fix]
+        stages: [pre-push]
+
+  - repo: local
+    hooks:
+      - id: go-test
+        name: go test
+        language: system
+        entry: go test ./...
+        pass_filenames: false
+        stages: [pre-push]

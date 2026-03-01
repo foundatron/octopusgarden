@@ -22,7 +22,8 @@ type AnthropicClient struct {
 // NewAnthropicClient creates a new Anthropic client. The variadic opts enable
 // test injection via option.WithBaseURL(server.URL).
 func NewAnthropicClient(apiKey string, logger *slog.Logger, opts ...option.RequestOption) *AnthropicClient {
-	allOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	allOpts := make([]option.RequestOption, 0, 1+len(opts))
+	allOpts = append(allOpts, option.WithAPIKey(apiKey))
 	allOpts = append(allOpts, opts...)
 	return &AnthropicClient{
 		client: anthropic.NewClient(allOpts...),
@@ -111,9 +112,9 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 
 // judgeResult is the expected JSON structure from the judge LLM.
 type judgeResult struct {
-	Score    int      `json:"score"`
-	Reasoning string  `json:"reasoning"`
-	Failures []string `json:"failures"`
+	Score     int      `json:"score"`
+	Reasoning string   `json:"reasoning"`
+	Failures  []string `json:"failures"`
 }
 
 // Judge calls the Anthropic Messages API to score satisfaction.
@@ -163,16 +164,16 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		// On malformed JSON: return Score=0 with raw text as reasoning, not an error.
 		return JudgeResponse{
-			Score:    0,
+			Score:     0,
 			Reasoning: content,
-			CostUSD:  cost,
+			CostUSD:   cost,
 		}, nil
 	}
 
 	return JudgeResponse{
-		Score:    result.Score,
+		Score:     result.Score,
 		Reasoning: result.Reasoning,
-		Failures: result.Failures,
-		CostUSD:  cost,
+		Failures:  result.Failures,
+		CostUSD:   cost,
 	}, nil
 }

@@ -1,0 +1,134 @@
+version: "2"
+
+run:
+  timeout: 3m
+  go: "1.23"
+
+linters:
+  default: standard   # inherits: errcheck, govet, ineffassign, staticcheck, unused
+
+  enable:
+    # Correctness
+    - bodyclose       # HTTP response body must be closed
+    - noctx           # net/http calls must pass context.Context
+    - err113          # enforce sentinel errors / no inline errors.New()
+    - errorlint       # find errors.Is/As misuse, non-wrapping comparisons
+    - wastedassign    # dead assignments
+
+    # Security
+    - gosec
+
+    # Complexity bounds (prefer these over funlen)
+    - cyclop          # cyclomatic complexity per function
+    - nestif          # deeply nested if statements
+    - gocognit        # cognitive complexity
+
+    # Code quality
+    - misspell        # spelling in comments and strings
+    - revive          # flexible style linter (replaces golint)
+    - unconvert       # remove unnecessary type conversions
+    - prealloc        # suggest slice preallocation
+    - godot           # exported doc comments should end with period
+
+  disable:
+    # Conflicts with established project patterns
+    - exhaustruct       # forces all struct fields — project uses zero-value defaults
+    - gochecknoglobals  # pricingTable, fallbackPricing, compile-time interface checks are intentional
+    - gochecknoinits    # not applicable
+    - testpackage       # project uses package llm (same-package tests), not package llm_test
+    - nonamedreturns    # named returns are acceptable
+
+    # Excessive whitespace/style pedantry
+    - wsl
+    - nlreturn
+    - lll               # line length enforced by editor, not linter
+    - godox             # TODO comments OK during active development
+
+    # Premature for early-stage project
+    - goheader          # no file header requirement
+    - varnamelen        # too pedantic for short-lived loop vars
+    - tagliatelle       # JSON/YAML tag style — no struct tags yet
+    - exhaustive        # exhaustive switch — noisy for string enums
+    - decorder          # declaration order pedantry
+    - grouper           # grouping pedantry
+    - importas          # no import alias conventions yet
+    - musttag           # no struct tags yet
+
+    # Noisy for this codebase
+    - paralleltest      # httptest.Server tests; adding t.Parallel() requires refactor
+    - dupl              # OpenAI stub has intentional structural similarity to Anthropic client
+    - funlen            # replaced by cyclop + gocognit
+    - ireturn           # too restrictive for interface return patterns
+    - forcetypeassert   # too strict in test helpers
+
+  settings:
+    cyclop:
+      max-complexity: 15
+
+    nestif:
+      min-complexity: 5
+
+    gocognit:
+      min-complexity: 20
+
+    gosec:
+      excludes:
+        - G104   # unhandled errors in defer — errcheck already covers this
+        - G304   # file path from variable — acceptable in a CLI tool
+
+    revive:
+      rules:
+        - name: exported
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: unreachable-code
+        - name: empty-block
+        - name: superfluous-else
+        - name: dot-imports
+        - name: errorf
+        - name: context-as-argument
+        - name: context-keys-type
+
+    misspell:
+      locale: US
+
+    godot:
+      scope: toplevel    # check exported symbol doc comments only
+      period: true
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+  exclusions:
+    rules:
+      - path: "_test\\.go"
+        linters:
+          - gosec       # test fixtures with hardcoded values / httptest servers
+          - err113      # test helpers legitimately use fmt.Errorf inline
+          - errorlint   # test error comparisons are intentionally direct
+          - godot       # test function comments don't need trailing period
+          - errcheck    # w.Write in httptest handlers; test helper ignoring errors is intentional
+
+formatters:
+  enable:
+    - gci       # import ordering: stdlib → third-party → local
+    - gofumpt   # stricter gofmt
+
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/foundatron/octopusgarden)
+      custom-order: true
+
+    gofumpt:
+      module-path: github.com/foundatron/octopusgarden
+      extra-rules: false

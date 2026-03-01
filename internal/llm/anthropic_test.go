@@ -42,11 +42,11 @@ func anthropicResponse(text string, inputTokens, cacheCreation, cacheRead, outpu
 
 func TestAnthropicGenerate(t *testing.T) {
 	tests := []struct {
-		name             string
-		cacheCreation    int
-		cacheRead        int
-		wantCacheHit     bool
-		wantInputTokens  int
+		name            string
+		cacheCreation   int
+		cacheRead       int
+		wantCacheHit    bool
+		wantInputTokens int
 	}{
 		{
 			name:            "no cache",

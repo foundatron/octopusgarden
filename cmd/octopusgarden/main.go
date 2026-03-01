@@ -8,6 +8,11 @@ import (
 	"os"
 )
 
+var (
+	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
+	errScenariosAndTargetRequired = errors.New("--scenarios and --target are required")
+)
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
@@ -25,7 +30,7 @@ func main() {
 	case "status":
 		err = statusCmd(logger, os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1]) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 		printUsage()
 		os.Exit(1)
 	}
@@ -70,7 +75,7 @@ func runCmd(logger *slog.Logger, args []string) error {
 
 	if *spec == "" || *scenarios == "" {
 		fs.Usage()
-		return fmt.Errorf("--spec and --scenarios are required")
+		return errSpecAndScenariosRequired
 	}
 
 	logger.Info("run: not yet implemented",
@@ -99,7 +104,7 @@ func validateCmd(logger *slog.Logger, args []string) error {
 
 	if *scenarios == "" || *target == "" {
 		fs.Usage()
-		return fmt.Errorf("--scenarios and --target are required")
+		return errScenariosAndTargetRequired
 	}
 
 	logger.Info("validate: not yet implemented",

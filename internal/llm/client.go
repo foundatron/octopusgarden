@@ -40,10 +40,10 @@ type JudgeRequest struct {
 
 // JudgeResponse contains the result of a judge call.
 type JudgeResponse struct {
-	Score    int
+	Score     int
 	Reasoning string
-	Failures []string
-	CostUSD  float64
+	Failures  []string
+	CostUSD   float64
 }
 
 // Message represents a single message in a conversation.
