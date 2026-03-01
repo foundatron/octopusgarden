@@ -1,0 +1,21 @@
+id: validation
+description: Verify request validation returns 400 for invalid input
+type: functional
+satisfaction_criteria: Invalid requests are rejected with 400 and an error message
+
+steps:
+  - description: Create item with empty name
+    request:
+      method: POST
+      path: /items
+      body:
+        name: ""
+    expect: "Status 400. Response body contains an 'error' field with a message about the name being invalid."
+
+  - description: Create item with missing name
+    request:
+      method: POST
+      path: /items
+      body:
+        description: "No name provided"
+    expect: "Status 400. Response body contains an 'error' field with a message about the name being required or missing."

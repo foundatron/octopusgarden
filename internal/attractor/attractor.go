@@ -311,7 +311,15 @@ file content here
 
 - Generate ONLY the file blocks, minimize explanatory text
 - The application MUST listen on port 8080
-- Include all dependencies and configuration files`, spec)
+- Include all dependencies and configuration files
+
+DEPENDENCY RULES:
+- ALWAYS prefer standard library over third-party dependencies. For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid), etc.
+- NEVER generate lock files or checksum files (go.sum, package-lock.json, yarn.lock, etc.) — you cannot compute valid hashes; the build will fail
+- For Go: generate only go.mod with no "require" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run "go mod tidy" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build
+- For Node.js: generate only package.json; use "npm install" in the Dockerfile
+- For Python: generate only requirements.txt; use "pip install" in the Dockerfile
+- Let the package manager resolve and verify dependencies at build time`, spec)
 }
 
 // buildMessages constructs the user message for the current iteration.

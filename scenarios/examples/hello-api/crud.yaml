@@ -1,0 +1,50 @@
+id: crud
+description: Create, read, update, and delete an item
+type: functional
+satisfaction_criteria: All CRUD operations return correct status codes and response bodies
+
+setup:
+  - description: Create an item
+    request:
+      method: POST
+      path: /items
+      body:
+        name: "Test Item"
+        description: "A test item"
+    capture:
+      - name: item_id
+        jsonpath: $.id
+
+steps:
+  - description: Read the created item
+    request:
+      method: GET
+      path: /items/{item_id}
+    expect: "Status 200. Response body contains name 'Test Item' and description 'A test item'. Response has id and created_at fields."
+
+  - description: Update the item
+    request:
+      method: PUT
+      path: /items/{item_id}
+      body:
+        name: "Updated Item"
+        description: "Updated description"
+    expect: "Status 200. Response body contains name 'Updated Item' and description 'Updated description'. The id should remain the same."
+
+  - description: Verify update persisted
+    request:
+      method: GET
+      path: /items/{item_id}
+    expect: "Status 200. Response body contains name 'Updated Item' and description 'Updated description'."
+
+  - description: Delete the item
+    request:
+      method: DELETE
+      path: /items/{item_id}
+    expect: "Status 204. Response body should be empty or absent."
+
+  - description: Verify delete
+    request:
+      method: GET
+      path: /items/{item_id}
+    expect: "Status 404."
