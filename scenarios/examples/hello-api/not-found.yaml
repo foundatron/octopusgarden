@@ -1,0 +1,25 @@
+id: not-found
+description: Verify 404 responses for nonexistent items
+type: functional
+satisfaction_criteria: GET, PUT, and DELETE on nonexistent IDs return 404
+
+steps:
+  - description: GET nonexistent item
+    request:
+      method: GET
+      path: /items/00000000-0000-0000-0000-000000000000
+    expect: "Status 404."
+
+  - description: PUT nonexistent item
+    request:
+      method: PUT
+      path: /items/00000000-0000-0000-0000-000000000000
+      body:
+        name: "Ghost"
+    expect: "Status 404."
+
+  - description: DELETE nonexistent item
+    request:
+      method: DELETE
+      path: /items/00000000-0000-0000-0000-000000000000
+    expect: "Status 404."

@@ -1,0 +1,25 @@
+id: list
+description: Create multiple items and verify list endpoint
+type: functional
+satisfaction_criteria: List endpoint returns all created items with correct total count
+
+setup:
+  - description: Create first item
+    request:
+      method: POST
+      path: /items
+      body:
+        name: "Item One"
+  - description: Create second item
+    request:
+      method: POST
+      path: /items
+      body:
+        name: "Item Two"
+
+steps:
+  - description: List all items
+    request:
+      method: GET
+      path: /items
+    expect: "Status 200. Response has 'items' array with at least 2 items and 'total' field >= 2. Items should have id, name, and created_at fields."
