@@ -2,6 +2,8 @@ package attractor
 
 import (
 	"errors"
+	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -72,10 +74,11 @@ func ParseFiles(output string) (map[string]string, error) {
 
 // validatePath rejects paths containing traversal components.
 func validatePath(path string) error {
-	if strings.Contains(path, "..") {
+	if strings.HasPrefix(path, "/") {
 		return errPathTraversal
 	}
-	if strings.HasPrefix(path, "/") {
+	cleaned := filepath.Clean(path)
+	if slices.Contains(strings.Split(cleaned, string(filepath.Separator)), "..") {
 		return errPathTraversal
 	}
 	return nil

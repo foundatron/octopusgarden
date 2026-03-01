@@ -128,10 +128,8 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 
 	opts = withDefaults(opts)
 	s := &runState{
-		runID:   generateRunID(),
-		opts:    opts,
-		baseDir: filepath.Join(opts.WorkspaceDir, generateRunID()),
-		bestDir: "",
+		runID: generateRunID(),
+		opts:  opts,
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -200,7 +198,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	url, stop, err := a.containerMgr.Run(ctx, tag)
 	if err != nil {
 		a.logger.Warn("container run failed", "iteration", iter, "error", err)
-		s.recordStall(iter, "health_error", fmt.Sprintf("Container failed to start: %s", err))
+		s.recordStall(iter, "run_error", fmt.Sprintf("Container failed to start: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
 
@@ -229,9 +227,8 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 		if err := writeFiles(s.bestDir, files); err != nil {
 			return nil, fmt.Errorf("attractor: write best files: %w", err)
 		}
-		result := s.result(iter, StatusConverged)
-		result.Satisfaction = satisfaction
-		return result, nil
+		s.bestSatisfaction = satisfaction
+		return s.result(iter, StatusConverged), nil
 	}
 
 	if satisfaction > s.bestSatisfaction {

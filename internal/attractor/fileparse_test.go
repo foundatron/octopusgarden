@@ -104,6 +104,29 @@ package main
 			wantFiles: 1,
 		},
 		{
+			name: "duplicate path last wins",
+			input: `=== FILE: main.go ===
+version 1
+=== END FILE ===
+=== FILE: main.go ===
+version 2
+=== END FILE ===`,
+			want: map[string]string{
+				"main.go": "version 2\n",
+			},
+			wantFiles: 1,
+		},
+		{
+			name: "double dot in filename allowed",
+			input: `=== FILE: archive..tar ===
+content
+=== END FILE ===`,
+			want: map[string]string{
+				"archive..tar": "content\n",
+			},
+			wantFiles: 1,
+		},
+		{
 			name: "unclosed block replaced by new block",
 			input: `=== FILE: first.go ===
 first content

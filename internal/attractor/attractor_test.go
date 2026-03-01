@@ -408,3 +408,23 @@ func TestCheckpointWritten(t *testing.T) {
 		t.Error("expected best/main.go to exist")
 	}
 }
+
+func TestValidateError(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 0, nil, 0, fmt.Errorf("judge unavailable")
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	_, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate)
+	if err == nil {
+		t.Fatal("expected error from validate failure")
+	}
+	if !strings.Contains(err.Error(), "judge unavailable") {
+		t.Errorf("expected validate error in message, got: %v", err)
+	}
+}
