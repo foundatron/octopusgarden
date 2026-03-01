@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: cycjimmy/semantic-release-action@v6.0.0
+        id: semantic
+        with:
+          extra_plugins: |
+            conventional-changelog-conventionalcommits
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v6.3.0
+        if: steps.semantic.outputs.new_release_published == 'true'
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v7.0.0
+        if: steps.semantic.outputs.new_release_published == 'true'
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: v${{ steps.semantic.outputs.new_release_version }}

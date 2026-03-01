@@ -1,6 +1,14 @@
 default_stages: [pre-commit]
 
 repos:
+  # ── Conventional Commits (commit-msg hook) ──────────────────────────────────
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, style, refactor, perf, test, chore, build, ci, revert]
+
   # ── Universal hygiene ───────────────────────────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -32,6 +40,12 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
+
+  # ── GitHub Actions ───────────────────────────────────────────────────────────
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.11
+    hooks:
+      - id: actionlint
 
   # ── Dockerfiles (future-proof, dormant until session 4 Docker work) ─────────
   - repo: https://github.com/hadolint/hadolint
