@@ -1,2 +1,6 @@
 # Compiled binary
 /octopusgarden
+
+# Claude Code local state (keep .claude/skills/ if needed)
+.claude/settings.local.json
+.claude/agent-memory-local/
