@@ -75,6 +75,7 @@ linters:
       excludes:
         - G104   # unhandled errors in defer — errcheck already covers this
         - G304   # file path from variable — acceptable in a CLI tool
+        - G107   # URL from variable — container port URLs are controlled, not user-provided
 
     revive:
       rules:
