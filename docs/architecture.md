@@ -75,7 +75,7 @@ octopusgarden/
 
 ## Package Dependency DAG
 
-```
+```text
 cmd/octopusgarden
     ├── internal/attractor   (loop, convergence, context)
     │       ├── internal/llm
@@ -317,7 +317,7 @@ The judge scores each step independently, then aggregates per scenario.
 
 ### Judge Prompt
 
-```
+```text
 System: You are evaluating whether software correctly satisfies a user scenario.
 Score from 0-100 based on how well observed behavior matches expected behavior.
 Return JSON: {"score": N, "reasoning": "...", "failures": ["..."]}
@@ -382,7 +382,7 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions) (*Run
 
 ### Loop Pseudocode
 
-```
+```text
 1. Build context: spec content (cached) + failure history (last 3)
 2. Call LLM: "Generate a complete implementation matching this spec"
    - Iteration 1: spec only
@@ -417,7 +417,7 @@ If context exceeds model limit, drop oldest failures first.
 
 The LLM outputs files in this format:
 
-```
+```text
 === FILE: path/to/file.ext ===
 file contents here
 === END FILE ===
@@ -459,7 +459,7 @@ On convergence, tag the successful image as `octopusgarden/{project}:latest`.
 
 ## CLI Interface
 
-```
+```text
 octopusgarden run --spec <path> --scenarios <dir> [--model claude-sonnet-4-20250514] [--budget 5.00] [--threshold 95]
 octopusgarden validate --scenarios <dir> --target http://localhost:8080
 octopusgarden status  # show recent runs, scores, costs
@@ -504,7 +504,7 @@ Store as Go string constants in `internal/llm/prompt.go`.
 
 ### Code Generation Prompt
 
-```
+```text
 You are building software to match this specification exactly.
 
 SPECIFICATION:
@@ -531,7 +531,7 @@ file contents here
 
 ### Satisfaction Judge Prompt
 
-```
+```text
 You are a QA evaluator. Score how well this software behavior matches the expected behavior.
 
 Scenario: {scenario_description}

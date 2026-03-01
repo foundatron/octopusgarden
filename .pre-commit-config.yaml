@@ -22,6 +22,11 @@ repos:
           - mdformat-gfm
         args: [--wrap, "100"]
 
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.21.0
+    hooks:
+      - id: markdownlint-cli2
+
   # ── Shell scripts (future-proof, dormant until .sh files appear) ────────────
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1

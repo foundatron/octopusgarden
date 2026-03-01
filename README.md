@@ -23,7 +23,7 @@ This prevents reward hacking and produces genuinely correct software.
 
 ## How It Works
 
-```
+```text
 Spec (markdown) ──→ Attractor Loop ──→ Generated Code ──→ Docker Build
                         │                                      │
                         │         (holdout wall)               ▼
