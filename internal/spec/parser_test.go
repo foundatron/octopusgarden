@@ -119,6 +119,8 @@ func TestParse(t *testing.T) {
 		{
 			name:         "raw content preserved",
 			input:        "# Title\n\nBody text\n\n## Section\n\nMore text\n",
+			wantTitle:    "Title",
+			wantDesc:     "Body text",
 			wantSections: 2,
 		},
 		{
@@ -131,7 +133,48 @@ func TestParse(t *testing.T) {
 			name:         "bare hash ignored",
 			input:        "#\n\nSome text\n\n# Real Title\n\nDescription\n",
 			wantTitle:    "Real Title",
+			wantDesc:     "Description",
 			wantSections: 1,
+		},
+		{
+			name:         "CRLF line endings",
+			input:        "# Title\r\n\r\nDescription\r\n\r\n## Section\r\n\r\nContent\r\n",
+			wantTitle:    "Title",
+			wantDesc:     "Description",
+			wantSections: 2,
+		},
+		{
+			name:         "heading inside fenced code block ignored",
+			input:        "# Title\n\n```bash\n# Not a heading\n## Also not\n```\n\n## Real Section\n\nContent\n",
+			wantTitle:    "Title",
+			wantDesc:     "```bash\n# Not a heading\n## Also not\n```",
+			wantSections: 2,
+			checkSections: func(t *testing.T, sections []Section) {
+				t.Helper()
+				if sections[1].Heading != "Real Section" {
+					t.Errorf("sections[1].Heading = %q, want %q", sections[1].Heading, "Real Section")
+				}
+			},
+		},
+		{
+			name:         "heading inside tilde fenced block ignored",
+			input:        "# Title\n\n~~~\n# Not a heading\n~~~\n\n## Real\n\nContent\n",
+			wantTitle:    "Title",
+			wantDesc:     "~~~\n# Not a heading\n~~~",
+			wantSections: 2,
+		},
+		{
+			name:         "level 6 heading",
+			input:        "###### Deep\n\nContent\n",
+			wantTitle:    "Deep",
+			wantDesc:     "Content",
+			wantSections: 1,
+		},
+		{
+			name:         "level 7 rejected",
+			input:        "####### Too Deep\n\nContent\n",
+			wantTitle:    "",
+			wantSections: 0,
 		},
 	}
 
@@ -147,18 +190,19 @@ func TestParse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if tt.wantTitle != "" && got.Title != tt.wantTitle {
+			if got.Title != tt.wantTitle {
 				t.Errorf("Title = %q, want %q", got.Title, tt.wantTitle)
 			}
-			if tt.wantDesc != "" && got.Description != tt.wantDesc {
+			if got.Description != tt.wantDesc {
 				t.Errorf("Description = %q, want %q", got.Description, tt.wantDesc)
 			}
 			if len(got.Sections) != tt.wantSections {
 				t.Errorf("len(Sections) = %d, want %d", len(got.Sections), tt.wantSections)
 			}
-			// RawContent should be the whitespace-trimmed input.
-			if got.RawContent != strings.TrimSpace(tt.input) {
-				t.Errorf("RawContent = %q, want %q", got.RawContent, strings.TrimSpace(tt.input))
+			// RawContent should be the whitespace-trimmed, CRLF-normalized input.
+			wantRaw := strings.TrimSpace(strings.ReplaceAll(tt.input, "\r\n", "\n"))
+			if got.RawContent != wantRaw {
+				t.Errorf("RawContent = %q, want %q", got.RawContent, wantRaw)
 			}
 			if tt.checkSections != nil {
 				tt.checkSections(t, got.Sections)

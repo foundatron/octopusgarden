@@ -38,7 +38,7 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 
 	// Execute setup steps — fatal on failure.
 	for i, step := range scenario.Setup {
-		resp, _, err := r.executeStep(ctx, step, vars)
+		_, resp, _, err := r.executeStep(ctx, step, vars)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
 		}
@@ -51,8 +51,7 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 	// Execute judged steps — non-fatal on failure.
 	results := make([]StepResult, 0, len(scenario.Steps))
 	for i, step := range scenario.Steps {
-		req := substituteRequest(step.Request, vars)
-		resp, dur, err := r.executeStep(ctx, step, vars)
+		req, resp, dur, err := r.executeStep(ctx, step, vars)
 		result := StepResult{
 			Description: step.Description,
 			Request:     req,
@@ -79,12 +78,12 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 	}, nil
 }
 
-func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]string) (HTTPResponse, time.Duration, error) {
+func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]string) (Request, HTTPResponse, time.Duration, error) {
 	req := substituteRequest(step.Request, vars)
 
 	body, err := buildRequestBody(req.Body, vars)
 	if err != nil {
-		return HTTPResponse{}, 0, fmt.Errorf("build request body: %w", err)
+		return req, HTTPResponse{}, 0, fmt.Errorf("build request body: %w", err)
 	}
 
 	var bodyReader io.Reader
@@ -95,7 +94,7 @@ func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]str
 	url := r.BaseURL + req.Path
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, url, bodyReader)
 	if err != nil {
-		return HTTPResponse{}, 0, fmt.Errorf("create request: %w", err)
+		return req, HTTPResponse{}, 0, fmt.Errorf("create request: %w", err)
 	}
 
 	// Default Content-Type for requests with a body.
@@ -112,13 +111,13 @@ func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]str
 	resp, err := r.HTTPClient.Do(httpReq) //nolint:gosec // URL is constructed from configured BaseURL + scenario path, not user input
 	dur := time.Since(start)
 	if err != nil {
-		return HTTPResponse{}, dur, err
+		return req, HTTPResponse{}, dur, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return HTTPResponse{}, dur, fmt.Errorf("read response body: %w", err)
+		return req, HTTPResponse{}, dur, fmt.Errorf("read response body: %w", err)
 	}
 
 	headers := make(map[string]string, len(resp.Header))
@@ -126,7 +125,7 @@ func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]str
 		headers[k] = resp.Header.Get(k)
 	}
 
-	return HTTPResponse{
+	return req, HTTPResponse{
 		Status:  resp.StatusCode,
 		Headers: headers,
 		Body:    string(respBody),

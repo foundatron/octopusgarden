@@ -35,6 +35,9 @@ func evalJSONPath(body string, path string) (string, error) {
 	for i, key := range keys {
 		obj, ok := current.(map[string]any)
 		if !ok {
+			if i == 0 {
+				return "", fmt.Errorf("%w: root is not an object", errJSONPathNotObject)
+			}
 			return "", fmt.Errorf("%w: at key %q", errJSONPathNotObject, keys[i-1])
 		}
 		val, exists := obj[key]

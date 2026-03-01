@@ -201,16 +201,15 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		s.recordStall(iter, "run_error", fmt.Sprintf("Container failed to start: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
+	defer stop()
 
 	if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
 		a.logger.Warn("health check failed", "iteration", iter, "error", err)
-		stop()
 		s.recordStall(iter, "health_error", fmt.Sprintf("Health check failed: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
 
 	satisfaction, failures, valCost, err := validate(ctx, url)
-	stop()
 	if err != nil {
 		return nil, fmt.Errorf("attractor: validate iteration %d: %w", iter, err)
 	}
@@ -364,7 +363,7 @@ func writeOneFile(absDir, path, content string) error {
 	if err != nil {
 		return fmt.Errorf("attractor: abs path %s: %w", path, err)
 	}
-	if !strings.HasPrefix(absPath, absDir+string(filepath.Separator)) && absPath != absDir {
+	if !strings.HasPrefix(absPath, absDir+string(filepath.Separator)) {
 		return fmt.Errorf("%w: %s escapes workspace", errPathTraversal, path)
 	}
 

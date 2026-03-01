@@ -26,16 +26,25 @@ func Parse(r io.Reader) (Spec, error) {
 	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
 	lines := strings.Split(strings.TrimRight(normalized, "\n"), "\n")
 
-	spec := Spec{RawContent: strings.TrimSpace(raw)}
+	spec := Spec{RawContent: strings.TrimSpace(normalized)}
 
 	// First pass: find all headings and their line indices.
+	// Track fenced code blocks (``` or ~~~) to avoid treating lines inside them as headings.
 	type heading struct {
 		level int
 		text  string
 		line  int
 	}
 	var headings []heading
+	inFencedBlock := false
 	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFencedBlock = !inFencedBlock
+		}
+		if inFencedBlock {
+			continue
+		}
 		level, text := parseHeading(line)
 		if level > 0 {
 			headings = append(headings, heading{level: level, text: text, line: i})

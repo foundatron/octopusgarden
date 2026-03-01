@@ -79,12 +79,15 @@ func newManager(docker dockerAPI, httpClient *http.Client, logger *slog.Logger) 
 // Build builds a Docker image from the given directory with the given tag.
 // The directory must contain a Dockerfile and all required build context files.
 func (m *Manager) Build(ctx context.Context, dir, tag string) error {
-	buildContext, err := tarDirectory(dir)
+	pr, err := tarDirectory(dir)
 	if err != nil {
 		return fmt.Errorf("container: tar directory: %w", err)
 	}
+	// Ensure the pipe reader is closed so the tar goroutine can exit
+	// even if ImageBuild returns early without fully consuming the stream.
+	defer func() { _ = pr.Close() }()
 
-	resp, err := m.docker.ImageBuild(ctx, buildContext, dockerbuild.ImageBuildOptions{
+	resp, err := m.docker.ImageBuild(ctx, pr, dockerbuild.ImageBuildOptions{
 		Tags:   []string{tag},
 		Remove: true,
 	})
@@ -111,6 +114,7 @@ func parseBuildLog(r io.Reader, logger *slog.Logger) error {
 		line := scanner.Text()
 		var event buildEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			logger.Debug("docker build: unparseable line", "line", line, "err", err)
 			continue
 		}
 		if event.Stream != "" {
@@ -243,7 +247,7 @@ func (m *Manager) checkHealth(ctx context.Context, url string) (bool, error) {
 // Uses io.Pipe to avoid buffering the entire build context in memory.
 // Symlinks are skipped to prevent path traversal outside the build context.
 // File paths are normalized to forward slashes for cross-platform Docker compatibility.
-func tarDirectory(dir string) (io.Reader, error) {
+func tarDirectory(dir string) (*io.PipeReader, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("tar directory: %w", err)

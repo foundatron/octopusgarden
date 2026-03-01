@@ -75,6 +75,24 @@ func TestEvalJSONPath(t *testing.T) {
 			path:    "$.list",
 			wantErr: errJSONPathNotScalar,
 		},
+		{
+			name:    "root is array not object",
+			body:    `[1, 2, 3]`,
+			path:    "$.foo",
+			wantErr: errJSONPathNotObject,
+		},
+		{
+			name:    "root is string",
+			body:    `"hello"`,
+			path:    "$.foo",
+			wantErr: errJSONPathNotObject,
+		},
+		{
+			name: "null value at path",
+			body: `{"id": null}`,
+			path: "$.id",
+			want: "null",
+		},
 	}
 
 	for _, tt := range tests {

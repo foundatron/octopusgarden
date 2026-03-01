@@ -409,6 +409,36 @@ func TestCheckpointWritten(t *testing.T) {
 	}
 }
 
+func TestContainerRunFailure(t *testing.T) {
+	var runCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runFn: func(_ context.Context, _ string) (string, container.StopFunc, error) {
+			n := runCount.Add(1)
+			if n == 1 {
+				return "", nil, fmt.Errorf("port conflict")
+			}
+			return "http://127.0.0.1:9999", func() {}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, mgr, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+}
+
 func TestValidateError(t *testing.T) {
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {

@@ -17,8 +17,6 @@ var (
 	errMissingID     = errors.New("scenario: missing id")
 )
 
-var defaultWeight = 1.0
-
 // Load reads a scenario from r and returns a parsed Scenario.
 func Load(r io.Reader) (Scenario, error) {
 	data, err := io.ReadAll(r)
@@ -88,8 +86,10 @@ func parseScenario(data []byte) (Scenario, error) {
 	}
 
 	// Default weight to 1.0 if not specified.
+	// Allocate a fresh float64 per scenario to avoid shared pointer mutation.
 	if s.Weight == nil {
-		s.Weight = &defaultWeight
+		w := 1.0
+		s.Weight = &w
 	}
 
 	return s, nil

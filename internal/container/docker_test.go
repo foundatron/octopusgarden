@@ -91,6 +91,26 @@ func inspectResponseWithPort(containerID, hostPort string) dockercontainer.Inspe
 // Build tests
 // ---------------------------------------------------------------------------
 
+func TestBuildNonExistentDir(t *testing.T) {
+	m := newManager(nil, nil, newTestLogger())
+	err := m.Build(context.Background(), "/nonexistent/path", "test:latest")
+	if err == nil {
+		t.Fatal("expected error for non-existent directory")
+	}
+}
+
+func TestBuildNotADirectory(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(f, []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(nil, nil, newTestLogger())
+	err := m.Build(context.Background(), f, "test:latest")
+	if !errors.Is(err, errNotADirectory) {
+		t.Errorf("expected errNotADirectory, got: %v", err)
+	}
+}
+
 func TestBuildSuccess(t *testing.T) {
 	mock := &mockDockerAPI{
 		imageBuildFunc: func(_ context.Context, _ io.Reader, _ dockerbuild.ImageBuildOptions) (dockerbuild.ImageBuildResponse, error) {
