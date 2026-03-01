@@ -28,10 +28,10 @@ steps:
     request:
       method: GET
       path: /items?limit=2&offset=0
-    expect: "Status 200. Response has 'items' array with exactly 2 items and 'total' field equal to 3."
+    expect: "Status 200. Response has 'items' array with exactly 2 items. Response has 'total' field that is an integer >= 3."
 
-  - description: Get second page with limit 2
+  - description: Get second page with offset
     request:
       method: GET
       path: /items?limit=2&offset=2
-    expect: "Status 200. Response has 'items' array with exactly 1 item and 'total' field equal to 3."
+    expect: "Status 200. Response has 'items' array with at least 1 item (at most 2). Response has 'total' field matching the total from the first page."

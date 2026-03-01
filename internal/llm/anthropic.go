@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -159,9 +160,10 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 		"cost_usd", cost,
 	)
 
-	// Parse JSON response.
+	// Parse JSON response — strip markdown code fences if present.
+	cleaned := extractJSON(content)
 	var result judgeResult
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
+	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 		// On malformed JSON: return Score=0 with raw text as reasoning, not an error.
 		return JudgeResponse{
 			Score:     0,
@@ -176,4 +178,22 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 		Failures:  result.Failures,
 		CostUSD:   cost,
 	}, nil
+}
+
+// extractJSON strips markdown code fences from LLM output to get raw JSON.
+// Handles ```json\n...\n``` and ```\n...\n``` patterns.
+func extractJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		// Strip opening fence (with optional language tag).
+		if idx := strings.Index(s, "\n"); idx != -1 {
+			s = s[idx+1:]
+		}
+		// Strip closing fence.
+		if idx := strings.LastIndex(s, "```"); idx != -1 {
+			s = s[:idx]
+		}
+		s = strings.TrimSpace(s)
+	}
+	return s
 }
