@@ -684,12 +684,14 @@ After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to the c
 ## CLI Interface
 
 ```text
-octog run --spec <path> --scenarios <dir> [--model claude-sonnet-4-20250514] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0]
-octog validate --scenarios <dir> --target http://localhost:8080 [--threshold 0]
-octog status  # show recent runs, scores, costs
+octog run --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0]
+octog validate --scenarios <dir> --target http://localhost:8080 [--judge-model claude-haiku-4-5] [--threshold 0]
+octog status   # show recent runs, scores, costs
+octog models   # list available models from the API
 ```
 
-MVP does not include `twin`, `dashboard`, or `transfuse` subcommands.
+Subcommands: `run`, `validate`, `status`, `models`. MVP does not include `twin`, `dashboard`, or
+`transfuse` subcommands.
 
 ### Config File
 

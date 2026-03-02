@@ -28,8 +28,6 @@ import (
 	"github.com/foundatron/octopusgarden/internal/store"
 )
 
-const judgeModel = "claude-haiku-4-5-20251001"
-
 // stepPassThreshold is the per-step score below which a step is labeled FAIL
 // in validation output. This is purely cosmetic — the --threshold flag on
 // validateCmd controls the aggregate satisfaction gate.
@@ -41,6 +39,7 @@ var (
 	errMissingAPIKey              = errors.New("ANTHROPIC_API_KEY not set (use env var or ~/.octopusgarden/config)")
 	errBelowThreshold             = errors.New("satisfaction below threshold")
 	errInvalidThreshold           = errors.New("--threshold must be between 0 and 100")
+	errNoJudgeModelPricing        = errors.New("judge model has no pricing entry")
 )
 
 func main() {
@@ -48,11 +47,6 @@ func main() {
 
 	if err := loadConfig(logger); err != nil {
 		logger.Warn("failed to load config", "error", err)
-	}
-
-	if !llm.HasModelPricing(judgeModel) {
-		logger.Error("judge model has no pricing entry", "model", judgeModel)
-		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -71,6 +65,8 @@ func main() {
 		err = validateCmd(ctx, logger, os.Args[2:])
 	case "status":
 		err = statusCmd(ctx, logger, os.Args[2:])
+	case "models":
+		err = modelsCmd(ctx, logger, os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1]) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 		printUsage()
@@ -93,6 +89,7 @@ Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
+  models     List available models
 
 Run 'octog <command> --help' for details.
 `)
@@ -102,7 +99,8 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	specFlag := fs.String("spec", "", "path to spec file (required)")
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
-	model := fs.String("model", "claude-sonnet-4-20250514", "LLM model to use for generation")
+	model := fs.String("model", "claude-sonnet-4-6", "LLM model to use for generation")
+	judgeModel := fs.String("judge-model", "claude-haiku-4-5", "LLM model for satisfaction judging")
 	budget := fs.Float64("budget", 5.00, "maximum budget in USD")
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
@@ -122,8 +120,8 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errSpecAndScenariosRequired
 	}
 
-	if *threshold < 0 || *threshold > 100 {
-		return errInvalidThreshold
+	if err := validateJudgeFlags(*threshold, *judgeModel); err != nil {
+		return err
 	}
 
 	// Parse spec.
@@ -160,7 +158,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	defer func() { _ = st.Close() }()
 
 	// Build validate function.
-	validateFn := buildValidateFn(scenarios, llmClient, logger)
+	validateFn := buildValidateFn(scenarios, llmClient, logger, *judgeModel)
 
 	// Create attractor and run.
 	att := attractor.New(llmClient, containerMgr, logger)
@@ -224,6 +222,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
 	target := fs.String("target", "", "target URL to validate against (required)")
+	judgeModel := fs.String("judge-model", "claude-haiku-4-5", "LLM model for satisfaction judging")
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
 
 	fs.Usage = func() {
@@ -240,8 +239,8 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return errScenariosAndTargetRequired
 	}
 
-	if *threshold < 0 || *threshold > 100 {
-		return errInvalidThreshold
+	if err := validateJudgeFlags(*threshold, *judgeModel); err != nil {
+		return err
 	}
 
 	// Load scenarios.
@@ -257,7 +256,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	}
 	llmClient := llm.NewAnthropicClient(apiKey, logger)
 
-	agg, err := runAndScore(ctx, scenarios, *target, llmClient, logger)
+	agg, err := runAndScore(ctx, scenarios, *target, llmClient, logger, *judgeModel)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -311,6 +310,45 @@ func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 	return nil
 }
 
+func validateJudgeFlags(threshold float64, judgeModel string) error {
+	if threshold < 0 || threshold > 100 {
+		return errInvalidThreshold
+	}
+	if !llm.HasModelPricing(judgeModel) {
+		return fmt.Errorf("%s: %w", judgeModel, errNoJudgeModelPricing)
+	}
+	return nil
+}
+
+func modelsCmd(ctx context.Context, logger *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("models", flag.ContinueOnError)
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: octog models\n\nList available models from the Anthropic API.\n")
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return errMissingAPIKey
+	}
+
+	client := llm.NewAnthropicClient(apiKey, logger)
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("list models: %w", err)
+	}
+
+	fmt.Printf("%-40s %-30s %s\n", "ID", "NAME", "CREATED")
+	for _, m := range models {
+		fmt.Printf("%-40s %-30s %s\n", m.ID, m.DisplayName, m.CreatedAt.Format(time.DateOnly))
+	}
+	return nil
+}
+
 func openStore(ctx context.Context) (*store.Store, error) {
 	path, err := resolveStorePath()
 	if err != nil {
@@ -331,7 +369,7 @@ func resolveStorePath() (string, error) {
 	return filepath.Join(dir, "runs.db"), nil
 }
 
-func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger) (scenario.AggregateResult, error) {
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string) (scenario.AggregateResult, error) {
 	type indexedResult struct {
 		index int
 		ss    scenario.ScoredScenario
@@ -400,9 +438,9 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 	return scenario.Aggregate(scored), nil
 }
 
-func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger) attractor.ValidateFn {
+func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string) attractor.ValidateFn {
 	return func(ctx context.Context, url string) (float64, []string, float64, error) {
-		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger)
+		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel)
 		if err != nil {
 			return 0, nil, 0, err
 		}

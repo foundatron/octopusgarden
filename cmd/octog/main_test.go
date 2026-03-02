@@ -82,7 +82,7 @@ func TestRunAndScore(t *testing.T) {
 		},
 	}
 
-	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger())
+	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001")
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 
 	mock := &mockLLMClient{}
 	// Use unreachable address to deterministically cause connection errors.
-	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger())
+	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger(), "claude-haiku-4-5-20251001")
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestValidateThreshold(t *testing.T) {
 				},
 			}
 
-			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger())
+			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001")
 			if err != nil {
 				t.Fatalf("runAndScore: %v", err)
 			}
@@ -416,6 +416,34 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 	// Unknown key should not be set.
 	if got := os.Getenv("UNKNOWN_KEY"); got == "value" {
 		t.Error("unknown key should not be set in environment")
+	}
+}
+
+func TestValidateJudgeFlags(t *testing.T) {
+	tests := []struct {
+		name       string
+		threshold  float64
+		judgeModel string
+		wantErr    error
+	}{
+		{"valid", 95, "claude-haiku-4-5", nil},
+		{"threshold too high", 200, "claude-haiku-4-5", errInvalidThreshold},
+		{"threshold negative", -1, "claude-haiku-4-5", errInvalidThreshold},
+		{"unknown judge model", 95, "nonexistent-model", errNoJudgeModelPricing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateJudgeFlags(tt.threshold, tt.judgeModel)
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("got %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
