@@ -30,17 +30,19 @@ octopusgarden/
 ├── internal/
 │   ├── spec/
 │   │   ├── parser.go           # Parse markdown specs into structured form
-│   │   └── types.go            # Spec data structures
+│   │   ├── types.go            # Spec data structures
+│   │   └── summary.go          # Pyramid summaries for large specs
 │   ├── scenario/
 │   │   ├── loader.go           # Load scenarios from YAML files
 │   │   ├── runner.go           # Execute scenario steps against running software
 │   │   ├── judge.go            # LLM-as-judge satisfaction scoring
-│   │   └── types.go            # Scenario data structures
+│   │   ├── types.go            # Scenario data structures
+│   │   ├── result.go           # Result, StepScore, ScoredStep, ScoredScenario, AggregateResult
+│   │   └── jsonpath.go         # Dot-notation JSONPath evaluator ($.field.sub)
 │   ├── attractor/
-│   │   ├── loop.go             # Core attractor convergence loop
-│   │   ├── context.go          # Context window management
-│   │   ├── convergence.go      # Stall detection, checkpoint management
-│   │   └── fileparse.go        # Parse LLM output into files
+│   │   ├── attractor.go        # Core attractor convergence loop
+│   │   ├── convergence.go      # Trend detection, checkpoint management
+│   │   └── fileparse.go        # Parse LLM output into files, merge for patch mode
 │   ├── container/
 │   │   └── docker.go           # Build and run Docker containers
 │   ├── llm/
@@ -51,12 +53,14 @@ octopusgarden/
 │   │   └── prompt.go           # Prompt templates
 │   └── store/
 │       ├── db.go               # SQLite: run history, satisfaction scores, costs
-│       └── migrations.go       # Schema migrations
+│       └── types.go            # Run, Iteration structs
 ├── specs/
 │   └── examples/
 │       ├── hello-api/
 │       │   └── spec.md
-│       └── todo-app/
+│       ├── todo-app/
+│       │   └── spec.md
+│       └── expense-tracker/
 │           └── spec.md
 ├── scenarios/
 │   └── examples/
@@ -66,8 +70,37 @@ octopusgarden/
 │       │   ├── pagination.yaml
 │       │   ├── validation.yaml
 │       │   └── not-found.yaml
-│       └── todo-app/
-│           └── *.yaml
+│       ├── todo-app/
+│       │   ├── crud.yaml
+│       │   ├── list.yaml
+│       │   ├── pagination.yaml
+│       │   ├── validation.yaml
+│       │   ├── not-found.yaml
+│       │   ├── register.yaml
+│       │   ├── register-duplicate.yaml
+│       │   ├── register-validation.yaml
+│       │   ├── auth-required.yaml
+│       │   ├── auth-invalid.yaml
+│       │   ├── ownership.yaml
+│       │   ├── mark-completed.yaml
+│       │   └── filter-completed.yaml
+│       └── expense-tracker/
+│           ├── expense-crud.yaml
+│           ├── expense-list.yaml
+│           ├── expense-filter.yaml
+│           ├── expense-summary.yaml
+│           ├── expense-validation.yaml
+│           ├── expense-no-category.yaml
+│           ├── category-crud.yaml
+│           ├── category-duplicate.yaml
+│           ├── category-validation.yaml
+│           ├── register.yaml
+│           ├── register-duplicate.yaml
+│           ├── register-validation.yaml
+│           ├── auth-required.yaml
+│           ├── auth-invalid.yaml
+│           ├── ownership.yaml
+│           └── not-found.yaml
 └── docs/
     ├── architecture.md         # This file
     └── sessions.md             # Implementation roadmap
@@ -77,22 +110,22 @@ octopusgarden/
 
 ```text
 cmd/octopusgarden
-    ├── internal/attractor   (loop, convergence, context)
+    ├── internal/attractor   (loop, convergence, fileparse)
     │       ├── internal/llm
     │       ├── internal/spec
-    │       ├── internal/container
-    │       └── internal/store
+    │       └── internal/container
     ├── internal/scenario    (loader, runner, judge)
     │       └── internal/llm
     ├── internal/llm         (client interface, anthropic, openai, models, prompts)
     ├── internal/container   (docker build/run)
-    ├── internal/spec        (parser, types)
+    ├── internal/spec        (parser, types, summary)
     └── internal/store       (sqlite)
 ```
 
 Key constraint: `internal/attractor` never imports `internal/scenario`. The attractor receives spec
 content and failure feedback as strings. The validator (scenario runner + judge) is invoked by
-`cmd/octopusgarden`, not by the attractor.
+`cmd/octopusgarden`, not by the attractor. Store interaction is also owned by `cmd/octopusgarden` —
+the attractor returns a `RunResult` and the CLI records it post-hoc.
 
 ## LLM Client Interface
 
@@ -194,19 +227,58 @@ type Section struct {
 }
 ```
 
+### Pyramid Summaries (`internal/spec/summary.go`)
+
+For large specs that exceed a context budget, the spec package produces multi-level summaries to fit
+within a token limit while preserving detail for failure-relevant sections.
+
+```go
+// internal/spec/summary.go
+
+type SummarizedSpec struct {
+    Spec     *Spec
+    Sections []SectionSummary // per-section 2-3 sentence summaries
+    Outline  string           // headings + one-line descriptions
+    Abstract string           // single paragraph
+}
+
+type SectionSummary struct {
+    Heading string
+    Summary string
+}
+
+type SummarizeResult struct {
+    Summary *SummarizedSpec
+    CostUSD float64
+}
+
+func EstimateTokens(text string) int              // len(text)/4 heuristic
+func Summarize(ctx context.Context, s *Spec, client llm.Client, model string) (SummarizeResult, error)
+func SelectContent(ss *SummarizedSpec, budget int, failures []string) string
+```
+
+`SelectContent` picks the richest representation that fits within the budget:
+
+1. Full spec (if it fits)
+1. Section summaries with failure-relevant sections expanded to full content
+1. Outline + failure-relevant sections
+1. Abstract + failure-relevant sections
+1. Abstract alone
+1. Truncated raw content (last resort)
+
 ## Scenario Data Structures
 
 ```go
 // internal/scenario/types.go
 
 type Scenario struct {
-    ID                    string  `yaml:"id"`
-    Description           string  `yaml:"description"`
-    Type                  string  `yaml:"type"`  // "api" only for MVP
-    Weight                float64 `yaml:"weight"` // default 1.0
-    Setup                 []Step  `yaml:"setup"`
-    Steps                 []Step  `yaml:"steps"`
-    SatisfactionCriteria  string  `yaml:"satisfaction_criteria"`
+    ID                    string   `yaml:"id"`
+    Description           string   `yaml:"description"`
+    Type                  string   `yaml:"type"`   // "api" only for MVP
+    Weight                *float64 `yaml:"weight"` // nil means not set, defaults to 1.0
+    Setup                 []Step   `yaml:"setup"`
+    Steps                 []Step   `yaml:"steps"`
+    SatisfactionCriteria  string   `yaml:"satisfaction_criteria"`
 }
 
 type Step struct {
@@ -226,6 +298,55 @@ type Request struct {
 type Capture struct {
     Name     string `yaml:"name"`     // variable name
     JSONPath string `yaml:"jsonpath"` // path into response body
+}
+```
+
+### Result Types (`internal/scenario/result.go`)
+
+```go
+type HTTPResponse struct {
+    Status  int
+    Headers map[string]string
+    Body    string
+}
+
+type StepResult struct {
+    Description string
+    Request     Request
+    Response    HTTPResponse
+    Duration    time.Duration
+    Err         error // non-nil only for network/transport failures
+}
+
+type Result struct {
+    ScenarioID string
+    Steps      []StepResult // judged steps only, not setup
+}
+
+type StepScore struct {
+    Score     int
+    Reasoning string
+    Failures  []string
+    CostUSD   float64
+}
+
+type ScoredStep struct {
+    StepResult StepResult
+    StepScore  StepScore
+}
+
+type ScoredScenario struct {
+    ScenarioID string
+    Weight     float64
+    Steps      []ScoredStep
+    Score      float64 // average of step scores
+}
+
+type AggregateResult struct {
+    Scenarios    []ScoredScenario
+    Satisfaction float64 // weighted average, 0-100
+    TotalCostUSD float64
+    Failures     []string // deduplicated, sorted
 }
 ```
 
@@ -280,6 +401,9 @@ The scenario runner:
 1. Stores captured values in a variable map
 1. Before executing subsequent steps, substitutes `{variable_name}` in paths, headers, and bodies
 
+JSONPath evaluation (`internal/scenario/jsonpath.go`) supports dot-notation only (`$.field.sub`) —
+no library dependency.
+
 ## Scenario Runner
 
 ```go
@@ -288,51 +412,73 @@ The scenario runner:
 type Runner struct {
     HTTPClient *http.Client
     BaseURL    string
+    Logger     *slog.Logger
 }
 
-func (r *Runner) Run(ctx context.Context, scenario Scenario) (ScenarioResult, error)
+func NewRunner(baseURL string, httpClient *http.Client, logger *slog.Logger) *Runner
 
-type ScenarioResult struct {
-    ScenarioID string
-    Steps      []StepResult
-}
-
-type StepResult struct {
-    Description string
-    Request     Request
-    Response    HTTPResponse
-    Duration    time.Duration
-}
-
-type HTTPResponse struct {
-    Status  int
-    Headers map[string]string
-    Body    string
-}
+func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error)
 ```
+
+Setup steps are fatal — if any setup step fails, the runner returns an error immediately. Judged
+steps are non-fatal — transport errors are recorded in `StepResult.Err` and the step is scored 0 by
+the judge without making an LLM call.
 
 ## LLM Judge
 
 The judge scores each step independently, then aggregates per scenario.
 
+```go
+// internal/scenario/judge.go
+
+type Judge struct {
+    LLM    llm.Client
+    Model  string
+    Logger *slog.Logger
+}
+
+func NewJudge(client llm.Client, model string, logger *slog.Logger) *Judge
+
+func (j *Judge) Score(ctx context.Context, scenario Scenario, step Step, response HTTPResponse) (StepScore, error)
+func (j *Judge) ScoreScenario(ctx context.Context, scenario Scenario, result Result) (ScoredScenario, error)
+
+// Package-level function.
+func Aggregate(scenarios []ScoredScenario) AggregateResult
+```
+
 ### Judge Prompt
 
+The judge uses a split system/user prompt (`internal/llm/prompt.go`):
+
+**System** (`SatisfactionJudgeSystem`):
+
 ```text
-System: You are evaluating whether software correctly satisfies a user scenario.
-Score from 0-100 based on how well observed behavior matches expected behavior.
-Return JSON: {"score": N, "reasoning": "...", "failures": ["..."]}
+You are a QA evaluator. Score how well this software behavior matches the expected behavior.
 
-User:
-Scenario: {scenario.description}
-Step: {step.description}
-Expected: {step.expect}
-Actual HTTP Response:
-  Status: {response.status}
-  Headers: {response.headers}
-  Body: {response.body}
+Respond with JSON only:
+{"score": <0-100>, "reasoning": "<brief explanation>", "failures": ["<specific failure>"]}
 
-Does this response satisfy the expectation?
+Scoring guide:
+- 100: Perfect match to expected behavior
+- 80-99: Works correctly with minor deviations
+- 50-79: Partially correct
+- 1-49: Mostly broken but shows some correct behavior
+- 0: Complete failure or error
 ```
+
+**User** (`SatisfactionJudgeUser`):
+
+```text
+Scenario: {scenario_description}
+Step: {step_description}
+
+Expected behavior: {expected}
+
+Actual observed behavior:
+{observed}
+```
+
+The combined `SatisfactionJudgePrompt` constant is deprecated.
 
 ### Scoring Guide
 
@@ -345,27 +491,46 @@ Does this response satisfy the expectation?
 ### Aggregation
 
 Per-scenario score = average of step scores. Overall satisfaction = weighted average of scenario
-scores (using scenario `weight` field).
+scores (using scenario `weight` field, defaulting to 1.0 when nil).
 
 Use a cheap model for judging (Claude Haiku, GPT-4o-mini).
 
 ## Attractor Loop
 
 ```go
-// internal/attractor/loop.go
+// internal/attractor/attractor.go
 
 type Attractor struct {
-    LLM          llm.Client
-    ContainerMgr *container.Manager
-    Store        *store.Store
+    llm          llm.Client
+    containerMgr ContainerManager
+    logger       *slog.Logger
+}
+
+func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger) *Attractor
+
+// ValidateFn runs holdout scenarios against a running container and returns results.
+// The attractor never imports internal/scenario — the CLI provides this closure.
+type ValidateFn func(ctx context.Context, url string) (satisfaction float64, failures []string, cost float64, err error)
+
+// ContainerManager is the interface to Docker container operations.
+// *container.Manager satisfies this automatically.
+type ContainerManager interface {
+    Build(ctx context.Context, dir, tag string) error
+    Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
+    WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
 }
 
 type RunOptions struct {
     Model         string
-    BudgetUSD     float64
-    Threshold     float64 // 0-100, default 95
-    MaxIterations int     // default 10
-    StallLimit    int     // default 3
+    BudgetUSD     float64       // 0 = unlimited
+    Threshold     float64       // default 95
+    MaxIterations int           // default 10
+    StallLimit    int           // default 3
+    WorkspaceDir  string        // default "./workspace"
+    HealthTimeout time.Duration // default 30s
+    Progress      ProgressFunc  // optional per-iteration callback
+    PatchMode     bool          // if true, iteration 2+ sends prev best files + failures
+    ContextBudget int           // max estimated tokens for spec in system prompt; 0 = unlimited
 }
 
 type RunResult struct {
@@ -374,33 +539,69 @@ type RunResult struct {
     Satisfaction float64
     CostUSD      float64
     OutputDir    string
-    Status       string // "converged", "stalled", "budget_exceeded"
+    Status       string // "converged", "stalled", "budget_exceeded", "max_iterations"
 }
 
-func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions) (*RunResult, error)
+func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, validate ValidateFn) (*RunResult, error)
 ```
+
+### Progress Reporting
+
+```go
+type ProgressFunc func(IterationProgress)
+
+type IterationProgress struct {
+    RunID            string
+    Iteration        int
+    MaxIterations    int
+    Outcome          IterationOutcome
+    Satisfaction     float64
+    BestSatisfaction float64
+    Threshold        float64
+    Trend            Trend
+    IterationCostUSD float64
+    TotalCostUSD     float64
+    BudgetUSD        float64
+    Elapsed          time.Duration
+    StallCount       int
+}
+
+type IterationOutcome string // "validated", "build_fail", "run_fail", "health_fail", "parse_fail"
+```
+
+The `ProgressFunc` callback is called synchronously after each iteration completes. The CLI uses
+this to print real-time progress to stderr.
 
 ### Loop Pseudocode
 
 ```text
-1. Build context: spec content (cached) + failure history (last 3)
-2. Call LLM: "Generate a complete implementation matching this spec"
-   - Iteration 1: spec only
-   - Iteration N>1: spec + "Previous attempt failed: {feedback}"
-3. Parse LLM output into files (=== FILE: path === ... === END FILE ===)
-4. Write files to workspace/{run_id}/iter_{n}/
-5. docker build in that directory
-   - Build failure → satisfaction = 0, record error, goto 1
-6. docker run with port 0 (random available port)
-7. Wait for health check (GET / returns non-5xx, 30s timeout)
-   - Health check failure → satisfaction = 0, stop container, goto 1
-8. Return (container_url, stop_func) to caller
-   Caller runs validator, feeds back satisfaction + failures
-9. If satisfaction >= threshold → save checkpoint, return "converged"
-10. If satisfaction improved → save checkpoint, update best
-11. If stalled for N iterations → return "stalled" with failure report
-12. If cost > budget → save checkpoint, return "budget_exceeded"
-13. Collect failure details, add to context, goto 1
+1. If ContextBudget > 0 and spec exceeds budget, summarize spec (pyramid summaries)
+2. For iter = 1 to MaxIterations:
+   a. Check budget
+   b. Select spec content (full or summarized with failure-relevant sections expanded)
+   c. Build messages:
+      - Normal mode: spec only (iter 1) or spec + last 3 failure summaries (iter N>1)
+      - Patch mode (iter 2+ with bestFiles): previous best files + failures, ask for only changed files
+   d. Call LLM: generate code
+   e. Parse LLM output into files (=== FILE: path === ... === END FILE ===)
+      - Parse failure → satisfaction = 0, increment stall count, continue
+   f. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
+   g. Write files to workspace/{run_id}/iter_{n}/
+   h. docker build in that directory
+      - Build failure → satisfaction = 0, increment stall count, continue
+   i. docker run with port 0 (random available port)
+      - Run failure → satisfaction = 0, increment stall count, continue
+   j. Wait for health check (GET /, non-5xx, configurable timeout)
+      - Health check failure → satisfaction = 0, stop container, continue
+   k. Call validate(ctx, url) — caller runs scenarios + judge
+   l. If satisfaction >= threshold → write best, return "converged"
+   m. If satisfaction improved → write best, reset stall count
+   n. If satisfaction did not improve → increment stall count
+      - Patch mode: track regressions; after 2 consecutive, disable patch mode
+   o. If stall count >= stall limit → return "stalled"
+   p. If cost > budget → return "budget_exceeded"
+   q. Call Progress callback with IterationProgress
+3. Return "max_iterations"
 ```
 
 ### Context Window Management
@@ -411,7 +612,9 @@ Priority order for context (drop from bottom first):
 1. Latest failure feedback
 1. Previous failure feedback (up to 3 total)
 
-If context exceeds model limit, drop oldest failures first.
+When `ContextBudget` is set and the spec exceeds it, the spec is summarized at multiple levels (see
+Pyramid Summaries above). Each iteration selects the richest representation that fits, with
+failure-relevant sections expanded to full content.
 
 ### File Block Parser
 
@@ -425,17 +628,53 @@ file contents here
 
 `internal/attractor/fileparse.go` extracts these into a map of `path -> content`.
 
+In patch mode, `=== UNCHANGED: path ===` markers are recognized and skipped — carry-forward is
+handled by `MergeFiles(newFiles, prevFiles)`, which copies all previous best files and overlays the
+new output on top.
+
+## Convergence (`internal/attractor/convergence.go`)
+
+```go
+type Trend string // "improving", "plateau", "regressing", "converged"
+
+func DetectTrend(history []float64, threshold float64, stallLimit int) Trend
+
+type CheckpointMeta struct {
+    Iteration    int       `json:"iteration"`
+    Satisfaction float64   `json:"satisfaction"`
+    Trend        Trend     `json:"trend"`
+    Timestamp    time.Time `json:"timestamp"`
+}
+
+func SaveCheckpoint(dir string, files map[string]string, meta CheckpointMeta) error
+func LoadCheckpoint(dir string) (map[string]string, CheckpointMeta, error)
+```
+
+`DetectTrend` classifies the score trajectory using a sliding window of size `stallLimit`:
+
+- `converged`: last score >= threshold
+- `improving`: last score > baseline
+- `regressing`: last score < peak within window
+- `plateau`: all scores in window identical, or no movement
+
+Checkpoints save generated files alongside a `checkpoint.json` metadata file.
+
 ## Docker Container Strategy
 
 ```go
 // internal/container/docker.go
 
 type Manager struct {
-    Client *client.Client // Docker API client
+    docker dockerAPI     // Docker client (interface for testability)
+    http   *http.Client
+    logger *slog.Logger
 }
 
-func (m *Manager) Build(ctx context.Context, dir string, tag string) error
-func (m *Manager) Run(ctx context.Context, tag string) (url string, stopFn func(), err error)
+type StopFunc func()
+
+func NewManager(logger *slog.Logger) (*Manager, error)
+func (m *Manager) Build(ctx context.Context, dir, tag string) error
+func (m *Manager) Run(ctx context.Context, tag string) (url string, stop StopFunc, err error)
 func (m *Manager) WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
 ```
 
@@ -446,26 +685,29 @@ inspect.
 
 ### Health Check
 
-After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to 30s. Any non-5xx response
-means healthy.
+After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to the configured timeout
+(default 30s). Any non-5xx response means healthy.
 
 ### Cleanup
 
-`stopFn` returned by `Run` stops and removes the container. Always defer cleanup.
-
-### Image Tagging
-
-On convergence, tag the successful image as `octopusgarden/{project}:latest`.
+`StopFunc` returned by `Run` stops and removes the container. Always defer cleanup. Cleanup uses
+`context.Background()` to succeed even after caller context cancellation.
 
 ## CLI Interface
 
 ```text
-octopusgarden run --spec <path> --scenarios <dir> [--model claude-sonnet-4-20250514] [--budget 5.00] [--threshold 95]
-octopusgarden validate --scenarios <dir> --target http://localhost:8080
+octopusgarden run --spec <path> --scenarios <dir> [--model claude-sonnet-4-20250514] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0]
+octopusgarden validate --scenarios <dir> --target http://localhost:8080 [--threshold 0]
 octopusgarden status  # show recent runs, scores, costs
 ```
 
 MVP does not include `twin`, `dashboard`, or `transfuse` subcommands.
+
+### Config File
+
+On startup, the CLI loads `~/.octopusgarden/config` (KEY=VALUE format, one per line). Currently
+supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`. Environment variables take precedence over config
+values. The config file permissions are checked — a warning is logged if the file is world-readable.
 
 ## SQLite Schema
 
@@ -504,55 +746,18 @@ Store as Go string constants in `internal/llm/prompt.go`.
 
 ### Code Generation Prompt
 
-```text
-You are building software to match this specification exactly.
-
-SPECIFICATION:
-{spec_content}
-
-{if iteration > 1}
-PREVIOUS ATTEMPT FEEDBACK:
-The previous version failed these validations:
-{failure_details}
-
-Fix these issues while maintaining all previously passing behavior.
-{endif}
-
-Generate a complete, working implementation. Include:
-- All source code files
-- A Dockerfile that builds and runs the application
-- Any configuration files needed
-
-Output each file in this format:
-=== FILE: path/to/file.ext ===
-file contents here
-=== END FILE ===
-```
+The attractor builds the system prompt inline via `buildSystemPrompt()` in
+`internal/attractor/attractor.go`. The `CodeGenerationPrompt` constant in `prompt.go` exists as a
+reference template but is not directly used by the attractor — the attractor's version includes
+additional instructions about dependency management and port configuration.
 
 ### Satisfaction Judge Prompt
 
-```text
-You are a QA evaluator. Score how well this software behavior matches the expected behavior.
+The judge uses split prompts for the `Judge` interface:
 
-Scenario: {scenario_description}
-Step: {step_description}
+- `SatisfactionJudgeSystem` — system prompt with scoring guide and JSON response format
+- `SatisfactionJudgeUser` — user prompt template with `{scenario_description}`,
+  `{step_description}`, `{expected}`, and `{observed}` placeholders
 
-Expected behavior: {expected}
-
-Actual observed behavior:
-{observed}
-
-Respond with JSON only:
-{
-  "score": <0-100>,
-  "reasoning": "<brief explanation>",
-  "failures": ["<specific failure 1>", "<specific failure 2>"]
-}
-
-Scoring guide:
-- 100: Perfect match to expected behavior
-- 80-99: Works correctly with minor deviations (different wording, extra fields)
-- 50-79: Partially correct (some aspects work, others don't)
-- 1-49: Mostly broken but shows some correct behavior
-- 0: Complete failure or error
-```
+The combined `SatisfactionJudgePrompt` constant is deprecated — retained for backward compatibility
+but not used by the judge implementation.

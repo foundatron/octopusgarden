@@ -39,7 +39,7 @@ Spec (markdown) ──→ Attractor Loop ──→ Generated Code ──→ Dock
                         │                              Running Container
                         │                                      │
                         ◄──── Failure Feedback ◄──── Validator + LLM Judge
-                                                              │
+                                                               │
                                                     Satisfaction Score (0-100)
 ```
 
