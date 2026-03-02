@@ -878,3 +878,153 @@ func TestValidateError(t *testing.T) {
 		t.Errorf("expected validate error in message, got: %v", err)
 	}
 }
+
+func TestContextBudgetZeroPreservesBehavior(t *testing.T) {
+	var generateCalls int
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			generateCalls++
+			// Summarize calls have a different system prompt; generation calls contain the spec.
+			if strings.Contains(req.SystemPrompt, "technical writer") {
+				t.Error("summarize should not be called when ContextBudget is 0")
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.ContextBudget = 0 // explicitly zero
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), strings.Repeat("x", 40000), opts, validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// Only 1 generate call (no summarize call).
+	if generateCalls != 1 {
+		t.Errorf("expected 1 generate call, got %d", generateCalls)
+	}
+}
+
+func TestContextBudgetTriggersSummarization(t *testing.T) {
+	var summarizeCalled bool
+	var capturedSystemPrompts []string
+	var callCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if strings.Contains(req.SystemPrompt, "technical writer") {
+				summarizeCalled = true
+				return llm.GenerateResponse{
+					Content: `=== SECTION SUMMARIES ===
+### Title
+Summary of the spec.
+
+=== OUTLINE ===
+- Title: A spec
+
+=== ABSTRACT ===
+Brief abstract of the spec.`,
+					CostUSD: 0.001,
+				}, nil
+			}
+			capturedSystemPrompts = append(capturedSystemPrompts, req.SystemPrompt)
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			return 60, []string{"missing endpoint"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	// Create a spec large enough to exceed the context budget.
+	largeSpec := "# Title\n\n" + strings.Repeat("x", 4000) // ~1000 tokens
+	opts := defaultOpts(t)
+	opts.ContextBudget = 500 // budget is less than spec tokens
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), largeSpec, opts, validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !summarizeCalled {
+		t.Error("expected summarize to be called for large spec with context budget")
+	}
+	if len(capturedSystemPrompts) < 2 {
+		t.Fatalf("expected at least 2 system prompts, got %d", len(capturedSystemPrompts))
+	}
+	// Both iterations should use summarized content (not full spec) since budget is exceeded.
+	for i, prompt := range capturedSystemPrompts {
+		if strings.Contains(prompt, strings.Repeat("x", 4000)) {
+			t.Errorf("iteration %d should use summarized spec, not full content", i+1)
+		}
+	}
+	// Summarization cost should be tracked in the total.
+	if result.CostUSD < 0.001 {
+		t.Errorf("expected summarization cost to be tracked, total cost: %.4f", result.CostUSD)
+	}
+}
+
+func TestContextBudgetSummarizeFailureNonFatal(t *testing.T) {
+	var generateCalls int
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			generateCalls++
+			// Fail the summarize call.
+			if strings.Contains(req.SystemPrompt, "technical writer") {
+				return llm.GenerateResponse{}, fmt.Errorf("summarize unavailable")
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	largeSpec := "# Title\n\nSome content.\n\n## Section\n\n" + strings.Repeat("y", 4000)
+	opts := defaultOpts(t)
+	opts.ContextBudget = 500
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), largeSpec, opts, validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// Should have 2 calls: 1 failed summarize + 1 generation.
+	if generateCalls != 2 {
+		t.Errorf("expected 2 generate calls (1 failed summarize + 1 gen), got %d", generateCalls)
+	}
+}
+
+func TestExtractFailureStrings(t *testing.T) {
+	history := []iterationFeedback{
+		{iteration: 1, kind: "validation", message: "Satisfaction score: 60.0/100\nFailures:\n- missing endpoint"},
+		{iteration: 2, kind: "build_error", message: "Docker build failed: syntax error"},
+		{iteration: 3, kind: "validation", message: ""},
+	}
+
+	failures := extractFailureStrings(history)
+	if len(failures) != 2 {
+		t.Fatalf("expected 2 non-empty failure strings, got %d", len(failures))
+	}
+	if !strings.Contains(failures[0], "missing endpoint") {
+		t.Errorf("expected first failure to mention missing endpoint, got %q", failures[0])
+	}
+	if !strings.Contains(failures[1], "syntax error") {
+		t.Errorf("expected second failure to mention syntax error, got %q", failures[1])
+	}
+}

@@ -102,6 +102,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	budget := fs.Float64("budget", 5.00, "maximum budget in USD")
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
+	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octopusgarden run [flags]\n\nFlags:\n")
@@ -159,10 +160,11 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	// Create attractor and run.
 	att := attractor.New(llmClient, containerMgr, logger)
 	opts := attractor.RunOptions{
-		Model:     *model,
-		BudgetUSD: *budget,
-		Threshold: *threshold,
-		PatchMode: *patchMode,
+		Model:         *model,
+		BudgetUSD:     *budget,
+		Threshold:     *threshold,
+		PatchMode:     *patchMode,
+		ContextBudget: *contextBudget,
 		Progress: func(p attractor.IterationProgress) {
 			if p.Outcome != attractor.OutcomeValidated {
 				fmt.Fprintf(os.Stderr, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
