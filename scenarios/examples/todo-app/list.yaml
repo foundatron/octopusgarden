@@ -1,0 +1,48 @@
+id: list
+description: Create multiple todos and verify list endpoint
+type: functional
+satisfaction_criteria: List endpoint returns all created todos with correct total count
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "list_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create first todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Todo One"
+  - description: Create second todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Todo Two"
+  - description: Create third todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Todo Three"
+
+steps:
+  - description: List all todos
+    request:
+      method: GET
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response has 'todos' array with exactly 3 items and 'total' field equal to 3. Each todo should have id, title, completed, user_id, and created_at fields."

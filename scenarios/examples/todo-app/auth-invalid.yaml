@@ -1,0 +1,23 @@
+id: auth-invalid
+description: Requests with invalid API key return 401
+type: functional
+satisfaction_criteria: Invalid Bearer tokens are rejected with 401
+
+steps:
+  - description: GET /todos with invalid token
+    request:
+      method: GET
+      path: /todos
+      headers:
+        Authorization: "Bearer not-a-real-api-key"
+    expect: "Status 401. Response body contains an 'error' field."
+
+  - description: POST /todos with invalid token
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer 00000000-0000-0000-0000-000000000000"
+      body:
+        title: "Invalid auth todo"
+    expect: "Status 401. Response body contains an 'error' field."

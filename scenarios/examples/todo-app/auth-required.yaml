@@ -1,0 +1,33 @@
+id: auth-required
+description: Requests without Authorization header return 401
+type: functional
+satisfaction_criteria: All todo endpoints reject unauthenticated requests with 401
+
+steps:
+  - description: GET /todos without auth
+    request:
+      method: GET
+      path: /todos
+    expect: "Status 401. Response body contains an 'error' field."
+
+  - description: POST /todos without auth
+    request:
+      method: POST
+      path: /todos
+      body:
+        title: "Unauthorized todo"
+    expect: "Status 401. Response body contains an 'error' field."
+
+  - description: PUT /todos/{id} without auth
+    request:
+      method: PUT
+      path: /todos/00000000-0000-0000-0000-000000000000
+      body:
+        title: "Unauthorized update"
+    expect: "Status 401. Response body contains an 'error' field."
+
+  - description: DELETE /todos/{id} without auth
+    request:
+      method: DELETE
+      path: /todos/00000000-0000-0000-0000-000000000000
+    expect: "Status 401. Response body contains an 'error' field."

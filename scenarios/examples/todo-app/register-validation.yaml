@@ -1,0 +1,28 @@
+id: register-validation
+description: Verify user registration validation
+type: functional
+satisfaction_criteria: Invalid registration requests are rejected with appropriate error codes
+
+steps:
+  - description: Register with empty username
+    request:
+      method: POST
+      path: /users
+      body:
+        username: ""
+    expect: "Status 400. Response body contains an 'error' field with a message about the username being invalid or empty."
+
+  - description: Register with short username
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "ab"
+    expect: "Status 400. Response body contains an 'error' field with a message about the username being too short."
+
+  - description: Register with missing username
+    request:
+      method: POST
+      path: /users
+      body: {}
+    expect: "Status 400. Response body contains an 'error' field with a message about the username being required or missing."

@@ -1,0 +1,46 @@
+id: validation
+description: Verify request validation for todo creation
+type: functional
+satisfaction_criteria: Invalid todo requests are rejected with 400 and an error message
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "validation_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: Create todo with empty title
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: ""
+    expect: "Status 400. Response body contains an 'error' field with a message about the title being invalid or empty."
+
+  - description: Create todo with missing title
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        completed: false
+    expect: "Status 400. Response body contains an 'error' field with a message about the title being required or missing."
+
+  - description: Create todo with title exceeding 200 characters
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    expect: "Status 400. Response body contains an 'error' field with a message about the title exceeding the maximum length."
