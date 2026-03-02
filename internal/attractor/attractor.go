@@ -15,9 +15,14 @@ import (
 
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/llm"
+	specpkg "github.com/foundatron/octopusgarden/internal/spec"
 )
 
 var errEmptySpec = errors.New("attractor: spec content is empty")
+
+// summarizeModel is the cheap model used for spec summarization.
+// Same model as judgeModel in cmd/octopusgarden/main.go — both use Haiku for cost efficiency.
+const summarizeModel = "claude-haiku-4-5-20251001"
 
 // Status constants for RunResult.
 const (
@@ -91,6 +96,7 @@ type RunOptions struct {
 	HealthTimeout time.Duration // default 30s
 	Progress      ProgressFunc  // optional per-iteration callback
 	PatchMode     bool          // if true, iteration 2+ sends prev best files + failures
+	ContextBudget int           // max estimated tokens for spec in system prompt; 0 = unlimited
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -124,9 +130,10 @@ type runState struct {
 	lastOutcome          IterationOutcome
 	lastSatisfaction     float64
 	startTime            time.Time
-	bestFiles            map[string]string // files from the best-scoring iteration
-	patchActive          bool              // patch mode currently in effect (may disable on regression)
-	patchRegressionCount int               // consecutive regressions while patch mode active
+	bestFiles            map[string]string       // files from the best-scoring iteration
+	patchActive          bool                    // patch mode currently in effect (may disable on regression)
+	patchRegressionCount int                     // consecutive regressions while patch mode active
+	summarized           *specpkg.SummarizedSpec // nil if spec fits budget or budget is 0
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -188,8 +195,8 @@ func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger) 
 // spec is the specification content (never scenario content — holdout isolation).
 // validate is a closure provided by the CLI that runs scenarios and judges satisfaction.
 // Returns a RunResult for normal termination, or an error for unrecoverable failures.
-func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, validate ValidateFn) (*RunResult, error) {
-	if strings.TrimSpace(spec) == "" {
+func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, validate ValidateFn) (*RunResult, error) {
+	if strings.TrimSpace(rawSpec) == "" {
 		return nil, errEmptySpec
 	}
 
@@ -203,6 +210,13 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
 
+	// Conditionally summarize large specs for context budget management.
+	if opts.ContextBudget > 0 && specpkg.EstimateTokens(rawSpec) > opts.ContextBudget {
+		summarized, summarizeCost := a.trySummarize(ctx, rawSpec)
+		s.summarized = summarized
+		s.totalCost += summarizeCost
+	}
+
 	for iter := 1; iter <= opts.MaxIterations; iter++ {
 		a.logger.Info("iteration start", "run_id", s.runID, "iteration", iter, "cost_usd", s.totalCost, "best_satisfaction", s.bestSatisfaction)
 
@@ -211,7 +225,7 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 		}
 
 		costBefore := s.totalCost
-		result, err := a.iterate(ctx, spec, iter, s, validate)
+		result, err := a.iterate(ctx, rawSpec, iter, s, validate)
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +244,19 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 
 // iterate runs a single iteration of the attractor loop.
 // Returns (result, nil) for terminal conditions, (nil, nil) to continue, or (nil, err) for hard errors.
-func (a *Attractor) iterate(ctx context.Context, spec string, iter int, s *runState, validate ValidateFn) (*RunResult, error) {
+func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *runState, validate ValidateFn) (*RunResult, error) {
+	// Select spec content: use summarized view when available to respect context budget.
+	// SelectContent returns full spec if it fits the budget, so iteration 1 (no failures)
+	// still gets maximum detail. Iteration 2+ gets failure-relevant sections expanded.
+	specContent := rawSpec
+	if s.summarized != nil {
+		var failures []string
+		if iter > 1 {
+			failures = extractFailureStrings(s.history)
+		}
+		specContent = specpkg.SelectContent(s.summarized, s.opts.ContextBudget, failures)
+	}
+
 	// Build messages: patch mode sends previous best files + failures.
 	var messages []llm.Message
 	if s.patchActive && s.bestFiles != nil && iter > 1 {
@@ -241,7 +267,7 @@ func (a *Attractor) iterate(ctx context.Context, spec string, iter int, s *runSt
 
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(spec),
+		SystemPrompt: buildSystemPrompt(specContent),
 		Messages:     messages,
 		Model:        s.opts.Model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
@@ -529,6 +555,33 @@ func writeOneFile(absDir, path, content string) error {
 		return fmt.Errorf("attractor: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// trySummarize attempts to parse and summarize the spec.
+// Returns (nil, 0) on failure (non-fatal). Cost is returned even on partial success.
+func (a *Attractor) trySummarize(ctx context.Context, rawSpec string) (*specpkg.SummarizedSpec, float64) {
+	parsed, err := specpkg.Parse(strings.NewReader(rawSpec))
+	if err != nil {
+		a.logger.Warn("failed to parse spec for summarization", "error", err)
+		return nil, 0
+	}
+	result, err := specpkg.Summarize(ctx, &parsed, a.llm, summarizeModel)
+	if err != nil {
+		a.logger.Warn("failed to summarize spec, using full spec", "error", err)
+		return nil, 0
+	}
+	return result.Summary, result.CostUSD
+}
+
+// extractFailureStrings pulls failure messages from history for section matching.
+func extractFailureStrings(history []iterationFeedback) []string {
+	var failures []string
+	for _, fb := range history {
+		if fb.message != "" {
+			failures = append(failures, fb.message)
+		}
+	}
+	return failures
 }
 
 // formatValidationFeedback formats validation results into feedback text for the LLM.
