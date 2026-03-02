@@ -22,6 +22,12 @@ var pricingTable = map[string]ModelPricing{
 		CacheWritePerMillion: 1.00,
 		CacheReadPerMillion:  0.08,
 	},
+	"claude-haiku-4-5-20251001": {
+		InputPerMillion:      1.00,
+		OutputPerMillion:     5.00,
+		CacheWritePerMillion: 1.25,
+		CacheReadPerMillion:  0.10,
+	},
 	"claude-opus-4-5": {
 		InputPerMillion:      15.00,
 		OutputPerMillion:     75.00,
@@ -39,7 +45,8 @@ var fallbackPricing = ModelPricing{
 }
 
 // CalculateCost returns the estimated USD cost for a request given token counts.
-func CalculateCost(model string, regularInputTokens, cacheCreationTokens, cacheReadTokens, outputTokens int) float64 {
+// The bool return indicates whether fallback pricing was used (true = unknown model).
+func CalculateCost(model string, regularInputTokens, cacheCreationTokens, cacheReadTokens, outputTokens int) (float64, bool) {
 	pricing, ok := pricingTable[model]
 	if !ok {
 		pricing = fallbackPricing
@@ -50,5 +57,11 @@ func CalculateCost(model string, regularInputTokens, cacheCreationTokens, cacheR
 	cost += float64(cacheReadTokens) * pricing.CacheReadPerMillion / 1_000_000
 	cost += float64(outputTokens) * pricing.OutputPerMillion / 1_000_000
 
-	return cost
+	return cost, !ok
+}
+
+// HasModelPricing reports whether the given model has an entry in the pricing table.
+func HasModelPricing(model string) bool {
+	_, ok := pricingTable[model]
+	return ok
 }

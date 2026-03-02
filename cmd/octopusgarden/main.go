@@ -39,6 +39,11 @@ var (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
+	if !llm.HasModelPricing(judgeModel) {
+		logger.Error("judge model has no pricing entry", "model", judgeModel)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 

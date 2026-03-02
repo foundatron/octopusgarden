@@ -127,7 +127,7 @@ func TestAnthropicJudge(t *testing.T) {
 	resp, err := client.Judge(context.Background(), JudgeRequest{
 		SystemPrompt: "judge prompt",
 		UserPrompt:   "evaluate this",
-		Model:        "claude-haiku-3-5-20241022",
+		Model:        "claude-haiku-4-5-20251001",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -184,6 +184,7 @@ func TestCalculateCost(t *testing.T) {
 		cacheRead     int
 		output        int
 		wantUSD       float64
+		wantFallback  bool
 	}{
 		{
 			name:    "sonnet no cache",
@@ -201,18 +202,28 @@ func TestCalculateCost(t *testing.T) {
 			wantUSD:       0.30 + 1.875 + 0.12 + 0.75,
 		},
 		{
+			name:    "haiku 4.5 no cache",
+			model:   "claude-haiku-4-5-20251001",
+			regular: 1_000_000, output: 1_000_000,
+			wantUSD: 1.00 + 5.00,
+		},
+		{
 			name:    "unknown model uses fallback",
 			model:   "unknown-model",
 			regular: 1_000_000, output: 1_000_000,
-			wantUSD: 15.00 + 75.00,
+			wantUSD:      15.00 + 75.00,
+			wantFallback: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CalculateCost(tt.model, tt.regular, tt.cacheCreation, tt.cacheRead, tt.output)
+			got, fallback := CalculateCost(tt.model, tt.regular, tt.cacheCreation, tt.cacheRead, tt.output)
 			if math.Abs(got-tt.wantUSD) > 0.001 {
 				t.Errorf("CalculateCost() = %f, want %f", got, tt.wantUSD)
+			}
+			if fallback != tt.wantFallback {
+				t.Errorf("CalculateCost() fallback = %v, want %v", fallback, tt.wantFallback)
 			}
 		})
 	}

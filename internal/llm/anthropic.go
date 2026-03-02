@@ -90,7 +90,10 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 	regularInput := int(resp.Usage.InputTokens)
 	output := int(resp.Usage.OutputTokens)
 
-	cost := CalculateCost(req.Model, regularInput, cacheCreation, cacheRead, output)
+	cost, usingFallback := CalculateCost(req.Model, regularInput, cacheCreation, cacheRead, output)
+	if usingFallback {
+		c.logger.Warn("using fallback pricing for unknown model", "model", req.Model)
+	}
 
 	c.logger.Info("anthropic generate",
 		"model", req.Model,
@@ -151,7 +154,10 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 
 	regularInput := int(resp.Usage.InputTokens)
 	output := int(resp.Usage.OutputTokens)
-	cost := CalculateCost(req.Model, regularInput, 0, 0, output)
+	cost, usingFallback := CalculateCost(req.Model, regularInput, 0, 0, output)
+	if usingFallback {
+		c.logger.Warn("using fallback pricing for unknown model", "model", req.Model)
+	}
 
 	c.logger.Info("anthropic judge",
 		"model", req.Model,
