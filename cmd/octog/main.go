@@ -122,6 +122,10 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errSpecAndScenariosRequired
 	}
 
+	if *threshold < 0 || *threshold > 100 {
+		return errInvalidThreshold
+	}
+
 	// Parse spec.
 	parsedSpec, err := spec.ParseFile(*specFlag)
 	if err != nil {
@@ -149,13 +153,9 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	defer func() { _ = containerMgr.Close() }()
 
 	// Create store.
-	storePath, err := resolveStorePath()
+	st, err := openStore(ctx)
 	if err != nil {
 		return err
-	}
-	st, err := store.NewStore(ctx, storePath)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
 
@@ -309,6 +309,14 @@ func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 			r.StartedAt.Format("2006-01-02 15:04"))
 	}
 	return nil
+}
+
+func openStore(ctx context.Context) (*store.Store, error) {
+	path, err := resolveStorePath()
+	if err != nil {
+		return nil, err
+	}
+	return store.NewStore(ctx, path)
 }
 
 func resolveStorePath() (string, error) {
