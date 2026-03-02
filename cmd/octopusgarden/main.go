@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,10 +23,17 @@ import (
 
 const judgeModel = "claude-haiku-4-5-20251001"
 
+// stepPassThreshold is the per-step score below which a step is labeled FAIL
+// in validation output. This is purely cosmetic — the --threshold flag on
+// validateCmd controls the aggregate satisfaction gate.
+const stepPassThreshold = 80
+
 var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
 	errScenariosAndTargetRequired = errors.New("--scenarios and --target are required")
 	errMissingAPIKey              = errors.New("ANTHROPIC_API_KEY environment variable is required")
+	errBelowThreshold             = errors.New("satisfaction below threshold")
+	errInvalidThreshold           = errors.New("--threshold must be between 0 and 100")
 )
 
 func main() {
@@ -177,6 +185,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
 	target := fs.String("target", "", "target URL to validate against (required)")
+	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octopusgarden validate [flags]\n\nFlags:\n")
@@ -192,6 +201,10 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return errScenariosAndTargetRequired
 	}
 
+	if *threshold < 0 || *threshold > 100 {
+		return errInvalidThreshold
+	}
+
 	// Load scenarios.
 	scenarios, err := scenario.LoadDir(*scenariosFlag)
 	if err != nil {
@@ -205,19 +218,15 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	}
 	llmClient := llm.NewAnthropicClient(apiKey, logger)
 
-	validateFn := buildValidateFn(scenarios, llmClient, logger)
-	satisfaction, failures, cost, err := validateFn(ctx, *target)
+	agg, err := runAndScore(ctx, scenarios, *target, llmClient, logger)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
 
-	fmt.Printf("Satisfaction: %.1f/100\n", satisfaction)
-	fmt.Printf("Cost: $%.4f\n", cost)
-	if len(failures) > 0 {
-		fmt.Println("Failures:")
-		for _, f := range failures {
-			fmt.Printf("  - %s\n", f)
-		}
+	fprintValidationResult(os.Stdout, agg)
+
+	if *threshold > 0 && agg.Satisfaction < *threshold {
+		return fmt.Errorf("%w: %.1f < %.1f", errBelowThreshold, agg.Satisfaction, *threshold)
 	}
 	return nil
 }
@@ -275,39 +284,71 @@ func resolveStorePath() (string, error) {
 	return filepath.Join(dir, "runs.db"), nil
 }
 
-func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger) attractor.ValidateFn {
-	return func(ctx context.Context, url string) (float64, []string, float64, error) {
-		httpClient := &http.Client{Timeout: 30 * time.Second}
-		runner := scenario.NewRunner(url, httpClient, logger)
-		judge := scenario.NewJudge(llmClient, judgeModel, logger)
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger) (scenario.AggregateResult, error) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	runner := scenario.NewRunner(targetURL, httpClient, logger)
+	judge := scenario.NewJudge(llmClient, judgeModel, logger)
 
-		scored := make([]scenario.ScoredScenario, 0, len(scenarios))
-		for _, sc := range scenarios {
-			result, err := runner.Run(ctx, sc)
-			if err != nil {
-				// Setup failure: score as 0 satisfaction at the scenario's weight.
-				weight := 1.0
-				if sc.Weight != nil {
-					weight = *sc.Weight
-				}
-				logger.Warn("scenario setup failed", "scenario", sc.ID, "error", err)
-				scored = append(scored, scenario.ScoredScenario{
-					ScenarioID: sc.ID,
-					Weight:     weight,
-					Score:      0,
-				})
-				continue
+	scored := make([]scenario.ScoredScenario, 0, len(scenarios))
+	for _, sc := range scenarios {
+		result, err := runner.Run(ctx, sc)
+		if err != nil {
+			// Setup failure: score as 0 satisfaction at the scenario's weight.
+			weight := 1.0
+			if sc.Weight != nil {
+				weight = *sc.Weight
 			}
-
-			ss, err := judge.ScoreScenario(ctx, sc, result)
-			if err != nil {
-				return 0, nil, 0, fmt.Errorf("score scenario %s: %w", sc.ID, err)
-			}
-			scored = append(scored, ss)
+			logger.Warn("scenario setup failed", "scenario", sc.ID, "error", err)
+			scored = append(scored, scenario.ScoredScenario{
+				ScenarioID: sc.ID,
+				Weight:     weight,
+				Score:      0,
+			})
+			continue
 		}
 
-		agg := scenario.Aggregate(scored)
+		ss, err := judge.ScoreScenario(ctx, sc, result)
+		if err != nil {
+			return scenario.AggregateResult{}, fmt.Errorf("score scenario %s: %w", sc.ID, err)
+		}
+		scored = append(scored, ss)
+	}
+
+	return scenario.Aggregate(scored), nil
+}
+
+func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger) attractor.ValidateFn {
+	return func(ctx context.Context, url string) (float64, []string, float64, error) {
+		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger)
+		if err != nil {
+			return 0, nil, 0, err
+		}
 		return agg.Satisfaction, agg.Failures, agg.TotalCostUSD, nil
+	}
+}
+
+//nolint:gosec // G705 false positive: w is os.Stdout or test buffer, not an HTTP response
+func fprintValidationResult(w io.Writer, agg scenario.AggregateResult) {
+	_, _ = fmt.Fprintln(w, "Scenarios:")
+	for _, sc := range agg.Scenarios {
+		_, _ = fmt.Fprintf(w, "  %-30s %5.1f/100  (weight %.1f)\n", sc.ScenarioID, sc.Score, sc.Weight)
+		for _, step := range sc.Steps {
+			label := "PASS"
+			if step.StepScore.Score < stepPassThreshold {
+				label = "FAIL"
+			}
+			_, _ = fmt.Fprintf(w, "    [%s]  %3d  %s\n", label, step.StepScore.Score, step.StepResult.Description)
+		}
+	}
+
+	_, _ = fmt.Fprintf(w, "\nAggregate satisfaction: %.1f/100\n", agg.Satisfaction)
+	_, _ = fmt.Fprintf(w, "Cost: $%.4f\n", agg.TotalCostUSD)
+
+	if len(agg.Failures) > 0 {
+		_, _ = fmt.Fprintln(w, "Failures:")
+		for _, f := range agg.Failures {
+			_, _ = fmt.Fprintf(w, "  - %s\n", f)
+		}
 	}
 }
 
