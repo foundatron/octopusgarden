@@ -154,6 +154,17 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		Model:     *model,
 		BudgetUSD: *budget,
 		Threshold: *threshold,
+		Progress: func(p attractor.IterationProgress) {
+			if p.Outcome != attractor.OutcomeValidated {
+				fmt.Fprintf(os.Stderr, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+					p.Iteration, p.MaxIterations, p.Outcome,
+					p.TotalCostUSD, p.Elapsed.Truncate(time.Second))
+			} else {
+				fmt.Fprintf(os.Stderr, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+					p.Iteration, p.MaxIterations, p.Satisfaction, p.Threshold,
+					p.TotalCostUSD, p.Trend, p.Elapsed.Truncate(time.Second))
+			}
+		},
 	}
 
 	startedAt := time.Now()
@@ -162,6 +173,13 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return fmt.Errorf("attractor run: %w", err)
 	}
 	finishedAt := time.Now()
+
+	// Print final summary line.
+	if result.Status == attractor.StatusConverged {
+		fmt.Fprintf(os.Stderr, "\n✓ Converged after %d iterations ($%.2f total)\n", result.Iterations, result.CostUSD) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+	} else {
+		fmt.Fprintf(os.Stderr, "\n✗ %s after %d iterations ($%.2f total)\n", result.Status, result.Iterations, result.CostUSD) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+	}
 
 	// Record result in store.
 	run := store.Run{
