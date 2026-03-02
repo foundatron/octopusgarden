@@ -1,0 +1,106 @@
+id: expense-summary
+description: Per-category spending summary with date filtering
+type: functional
+satisfaction_criteria: Summary endpoint returns correct per-category totals, counts, and grand total
+weight: 2.0
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "summary_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create food category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Food"
+    capture:
+      - name: food_id
+        jsonpath: $.id
+  - description: Create transport category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Transport"
+    capture:
+      - name: transport_id
+        jsonpath: $.id
+  - description: Food expense 1
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 25.00
+        description: "Groceries"
+        date: "2025-01-10"
+        category_id: "{food_id}"
+  - description: Food expense 2
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 35.50
+        description: "Restaurant"
+        date: "2025-01-20"
+        category_id: "{food_id}"
+  - description: Transport expense
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 15.00
+        description: "Bus pass"
+        date: "2025-01-15"
+        category_id: "{transport_id}"
+  - description: Uncategorized expense
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 50.00
+        description: "Misc purchase"
+        date: "2025-02-01"
+
+steps:
+  - description: Full summary without date filter
+    request:
+      method: GET
+      path: /expenses/summary
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'categories' array and 'grand_total'. The grand_total should be 125.50. The categories array should have 3 entries: Food with total 60.50 and count 2, Transport with total 15.00 and count 1, and Uncategorized (category_id null) with total 50.00 and count 1."
+
+  - description: Summary filtered to January only
+    request:
+      method: GET
+      path: /expenses/summary?date_from=2025-01-01&date_to=2025-01-31
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'grand_total' equal to 75.50. The categories array should have 2 entries: Food with total 60.50 and count 2, Transport with total 15.00 and count 1. The uncategorized expense (Feb 01) should not be included."
+
+  - description: Summary filtered to narrow date range
+    request:
+      method: GET
+      path: /expenses/summary?date_from=2025-01-15&date_to=2025-01-31
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'grand_total' equal to 50.50. Should include Food with total 35.50 and count 1 (restaurant only), and Transport with total 15.00 and count 1."

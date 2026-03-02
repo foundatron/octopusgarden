@@ -1,0 +1,34 @@
+id: category-duplicate
+description: Duplicate category name returns 409
+type: functional
+satisfaction_criteria: Creating a category with an existing name returns 409
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "catdup_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create a category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Food"
+
+steps:
+  - description: Create duplicate category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Food"
+    expect: "Status 409. Response body contains 'error' field."

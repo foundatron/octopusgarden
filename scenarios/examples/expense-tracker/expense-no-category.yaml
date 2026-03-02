@@ -1,0 +1,39 @@
+id: expense-no-category
+description: Create and retrieve an expense without a category
+type: functional
+satisfaction_criteria: Expense without category_id has null category_id in response
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "nocat_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: Create expense without category
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 19.99
+        description: "Uncategorized purchase"
+        date: "2025-03-01"
+    capture:
+      - name: expense_id
+        jsonpath: $.id
+    expect: "Status 201. Response body contains 'id', 'amount' equal to 19.99, 'description' equal to 'Uncategorized purchase', 'date' equal to '2025-03-01', and 'category_id' that is null."
+
+  - description: Read expense and verify null category
+    request:
+      method: GET
+      path: /expenses/{expense_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'category_id' that is null and 'amount' equal to 19.99."

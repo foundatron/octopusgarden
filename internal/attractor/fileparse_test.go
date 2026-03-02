@@ -2,6 +2,7 @@ package attractor
 
 import (
 	"errors"
+	"maps"
 	"testing"
 )
 
@@ -127,6 +128,29 @@ content
 			wantFiles: 1,
 		},
 		{
+			name: "unchanged marker ignored",
+			input: `=== UNCHANGED: keep.go ===
+=== FILE: changed.go ===
+new content
+=== END FILE ===`,
+			want: map[string]string{
+				"changed.go": "new content\n",
+			},
+			wantFiles: 1,
+		},
+		{
+			name: "unchanged marker inside open block preserved as content",
+			input: `=== FILE: main.go ===
+package main
+=== UNCHANGED: other.go ===
+func main() {}
+=== END FILE ===`,
+			want: map[string]string{
+				"main.go": "package main\n=== UNCHANGED: other.go ===\nfunc main() {}\n",
+			},
+			wantFiles: 1,
+		},
+		{
 			name: "unclosed block replaced by new block",
 			input: `=== FILE: first.go ===
 first content
@@ -171,6 +195,78 @@ second content
 				if gotContent != wantContent {
 					t.Errorf("file %q:\n  got:  %q\n  want: %q", path, gotContent, wantContent)
 				}
+			}
+		})
+	}
+}
+
+func TestMergeFiles(t *testing.T) {
+	tests := []struct {
+		name      string
+		newFiles  map[string]string
+		prevFiles map[string]string
+		want      map[string]string
+	}{
+		{
+			name:      "new overrides prev",
+			newFiles:  map[string]string{"main.go": "v2\n"},
+			prevFiles: map[string]string{"main.go": "v1\n", "Dockerfile": "FROM scratch\n"},
+			want:      map[string]string{"main.go": "v2\n", "Dockerfile": "FROM scratch\n"},
+		},
+		{
+			name:      "carry forward unmodified",
+			newFiles:  map[string]string{"handler.go": "new handler\n"},
+			prevFiles: map[string]string{"main.go": "main\n", "go.mod": "module m\n"},
+			want:      map[string]string{"handler.go": "new handler\n", "main.go": "main\n", "go.mod": "module m\n"},
+		},
+		{
+			name:      "empty new carries all prev",
+			newFiles:  map[string]string{},
+			prevFiles: map[string]string{"main.go": "main\n"},
+			want:      map[string]string{"main.go": "main\n"},
+		},
+		{
+			name:      "empty prev returns new only",
+			newFiles:  map[string]string{"main.go": "main\n"},
+			prevFiles: map[string]string{},
+			want:      map[string]string{"main.go": "main\n"},
+		},
+		{
+			name:      "both empty",
+			newFiles:  map[string]string{},
+			prevFiles: map[string]string{},
+			want:      map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Snapshot inputs to verify no mutation.
+			origNew := maps.Clone(tt.newFiles)
+			origPrev := maps.Clone(tt.prevFiles)
+
+			got := MergeFiles(tt.newFiles, tt.prevFiles)
+
+			if len(got) != len(tt.want) {
+				t.Fatalf("expected %d files, got %d: %v", len(tt.want), len(got), got)
+			}
+			for path, wantContent := range tt.want {
+				gotContent, ok := got[path]
+				if !ok {
+					t.Errorf("missing file %q", path)
+					continue
+				}
+				if gotContent != wantContent {
+					t.Errorf("file %q: got %q, want %q", path, gotContent, wantContent)
+				}
+			}
+
+			// Verify inputs were not mutated.
+			if !maps.Equal(tt.newFiles, origNew) {
+				t.Error("newFiles was mutated")
+			}
+			if !maps.Equal(tt.prevFiles, origPrev) {
+				t.Error("prevFiles was mutated")
 			}
 		})
 	}

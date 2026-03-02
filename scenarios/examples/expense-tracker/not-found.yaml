@@ -1,0 +1,50 @@
+id: not-found
+description: Non-existent resources return 404
+type: functional
+satisfaction_criteria: GET, PUT, and DELETE on non-existent IDs return 404
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "notfound_exp_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: GET non-existent expense
+    request:
+      method: GET
+      path: /expenses/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 404."
+
+  - description: PUT non-existent expense
+    request:
+      method: PUT
+      path: /expenses/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 10.00
+    expect: "Status 404."
+
+  - description: DELETE non-existent expense
+    request:
+      method: DELETE
+      path: /expenses/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 404."
+
+  - description: DELETE non-existent category
+    request:
+      method: DELETE
+      path: /categories/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 404."

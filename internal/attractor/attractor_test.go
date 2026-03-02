@@ -561,6 +561,304 @@ func TestProgressCallbackBuildFailure(t *testing.T) {
 	}
 }
 
+func patchOpts(t *testing.T) RunOptions {
+	t.Helper()
+	opts := defaultOpts(t)
+	opts.PatchMode = true
+	return opts
+}
+
+// isPatchMessage checks if a user message looks like a patch mode message.
+func isPatchMessage(msg string) bool {
+	return strings.Contains(msg, "current best version scored")
+}
+
+func TestPatchModeUsedOnIteration2(t *testing.T) {
+	var capturedMessages []string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				capturedMessages = append(capturedMessages, req.Messages[0].Content)
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			return 60, []string{"missing endpoint"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+	if result.Iterations != 2 {
+		t.Errorf("expected 2 iterations, got %d", result.Iterations)
+	}
+	if len(capturedMessages) < 2 {
+		t.Fatalf("expected at least 2 captured messages, got %d", len(capturedMessages))
+	}
+	// Iteration 1 should use full generation.
+	if isPatchMessage(capturedMessages[0]) {
+		t.Error("iteration 1 should not use patch mode message")
+	}
+	// Iteration 2 should use patch mode (contains best files).
+	if !isPatchMessage(capturedMessages[1]) {
+		t.Error("iteration 2 should use patch mode message")
+	}
+	// Patch message should contain the files from iteration 1.
+	if !strings.Contains(capturedMessages[1], "package main") {
+		t.Error("patch message should contain previous best files content")
+	}
+}
+
+func TestPatchModeFallbackOnRegressions(t *testing.T) {
+	scores := []float64{70, 65, 60, 100}
+	var callCount atomic.Int32
+	var capturedMessages []string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				capturedMessages = append(capturedMessages, req.Messages[0].Content)
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		idx := int(n) - 1
+		if idx >= len(scores) {
+			return 100, nil, 0.005, nil
+		}
+		return scores[idx], []string{"needs work"}, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if len(capturedMessages) < 4 {
+		t.Fatalf("expected at least 4 messages, got %d", len(capturedMessages))
+	}
+	// Iter 1: full gen. Iter 2: patch (score 65 < 70, regression 1).
+	// Iter 3: patch (score 60 < 70, regression 2 → disable). Iter 4: full gen.
+	if isPatchMessage(capturedMessages[0]) {
+		t.Error("iteration 1 should use full gen")
+	}
+	if !isPatchMessage(capturedMessages[1]) {
+		t.Error("iteration 2 should use patch mode")
+	}
+	if !isPatchMessage(capturedMessages[2]) {
+		t.Error("iteration 3 should still use patch mode (disabled after this iteration)")
+	}
+	if isPatchMessage(capturedMessages[3]) {
+		t.Error("iteration 4 should use full gen after patch mode disabled")
+	}
+}
+
+func TestPatchModeRegressionResets(t *testing.T) {
+	scores := []float64{70, 65, 80, 75, 100}
+	var callCount atomic.Int32
+	var capturedMessages []string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				capturedMessages = append(capturedMessages, req.Messages[0].Content)
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		idx := int(n) - 1
+		if idx >= len(scores) {
+			return 100, nil, 0.005, nil
+		}
+		return scores[idx], []string{"needs work"}, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// Iter 1: 70 (full gen). Iter 2: 65 (patch, regression 1).
+	// Iter 3: 80 (patch, improvement → reset regression to 0).
+	// Iter 4: 75 (patch, regression 1 — not 2, so patch stays active).
+	// Iter 5: 100 (patch, converge).
+	// All iterations 2-5 should use patch mode since regression never hit 2.
+	for i := 1; i < len(capturedMessages); i++ {
+		if !isPatchMessage(capturedMessages[i]) {
+			t.Errorf("iteration %d should use patch mode", i+1)
+		}
+	}
+}
+
+func TestPatchModeDisabledByDefault(t *testing.T) {
+	var capturedMessages []string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				capturedMessages = append(capturedMessages, req.Messages[0].Content)
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			return 60, []string{"needs work"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// Without PatchMode, iteration 2 should NOT use patch message.
+	for i, msg := range capturedMessages {
+		if isPatchMessage(msg) {
+			t.Errorf("iteration %d should not use patch mode when PatchMode is false", i+1)
+		}
+	}
+}
+
+func TestPatchModeNotActiveWithoutBestFiles(t *testing.T) {
+	var buildCount atomic.Int32
+	var capturedMessages []string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				capturedMessages = append(capturedMessages, req.Messages[0].Content)
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, _, _ string) error {
+			n := buildCount.Add(1)
+			if n == 1 {
+				return fmt.Errorf("build failed")
+			}
+			return nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, mgr, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if len(capturedMessages) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d", len(capturedMessages))
+	}
+	// Iteration 1 build failed → no bestFiles. Iteration 2 should use full gen.
+	if isPatchMessage(capturedMessages[1]) {
+		t.Error("iteration 2 should use full gen when bestFiles is nil (iter 1 build failed)")
+	}
+}
+
+func TestPatchModeMergesFiles(t *testing.T) {
+	// Iteration 1 produces 2 files. Iteration 2 produces only 1 changed file.
+	// The merged result should contain both files.
+	twoFileOutput := `=== FILE: main.go ===
+package main
+
+func main() { serve() }
+=== END FILE ===
+=== FILE: Dockerfile ===
+FROM golang:1.22
+=== END FILE ===`
+
+	oneFileOutput := `=== FILE: main.go ===
+package main
+
+func main() { serveFixed() }
+=== END FILE ===`
+
+	var callCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			n := callCount.Add(1)
+			if n == 1 {
+				return llm.GenerateResponse{Content: twoFileOutput, CostUSD: 0.01}, nil
+			}
+			return llm.GenerateResponse{Content: oneFileOutput, CostUSD: 0.01}, nil
+		},
+	}
+
+	var builtDir string
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, dir, _ string) error {
+			builtDir = dir
+			return nil
+		},
+	}
+
+	var valCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := valCount.Add(1)
+		if n == 1 {
+			return 60, []string{"needs fix"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, mgr, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Fatalf("expected converged, got %q", result.Status)
+	}
+
+	// The directory built for iteration 2 should contain both files:
+	// main.go (updated) and Dockerfile (carried forward).
+	mainContent, err := os.ReadFile(filepath.Join(builtDir, "main.go"))
+	if err != nil {
+		t.Fatalf("failed to read main.go from build dir: %v", err)
+	}
+	if !strings.Contains(string(mainContent), "serveFixed") {
+		t.Error("main.go should contain updated content from iteration 2")
+	}
+
+	dockerContent, err := os.ReadFile(filepath.Join(builtDir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("failed to read Dockerfile from build dir: %v", err)
+	}
+	if !strings.Contains(string(dockerContent), "golang:1.22") {
+		t.Error("Dockerfile should be carried forward from iteration 1")
+	}
+}
+
 func TestValidateError(t *testing.T) {
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {

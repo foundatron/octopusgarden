@@ -1,0 +1,88 @@
+id: expense-validation
+description: Expense creation rejects invalid inputs
+type: functional
+satisfaction_criteria: Invalid amount, description, date, and category_id all return 400
+weight: 1.5
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "expval_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: Missing amount
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        description: "Test"
+        date: "2025-01-15"
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Zero amount
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 0
+        description: "Test"
+        date: "2025-01-15"
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Negative amount
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: -5.00
+        description: "Test"
+        date: "2025-01-15"
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Missing description
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 10.00
+        date: "2025-01-15"
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Invalid date format
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 10.00
+        description: "Test"
+        date: "01-15-2025"
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Non-existent category_id
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 10.00
+        description: "Test"
+        date: "2025-01-15"
+        category_id: "00000000-0000-0000-0000-000000000000"
+    expect: "Status 400. Response body contains 'error' field."

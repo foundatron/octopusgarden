@@ -1,0 +1,25 @@
+id: auth-invalid
+description: Invalid API key returns 401
+type: functional
+satisfaction_criteria: Invalid Bearer token returns 401
+
+steps:
+  - description: GET /categories with invalid token
+    request:
+      method: GET
+      path: /categories
+      headers:
+        Authorization: "Bearer invalid-key-12345"
+    expect: "Status 401."
+
+  - description: POST /expenses with invalid token
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer invalid-key-12345"
+      body:
+        amount: 10.00
+        description: "Test"
+        date: "2025-01-15"
+    expect: "Status 401."
