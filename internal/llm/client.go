@@ -36,6 +36,7 @@ type JudgeRequest struct {
 	SystemPrompt string
 	UserPrompt   string
 	Model        string
+	CacheControl *CacheControl
 }
 
 // JudgeResponse contains the result of a judge call.

@@ -13,8 +13,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
@@ -142,6 +146,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err != nil {
 		return fmt.Errorf("create container manager: %w", err)
 	}
+	defer func() { _ = containerMgr.Close() }()
 
 	// Create store.
 	storePath, err := resolveStorePath()
@@ -319,33 +324,69 @@ func resolveStorePath() (string, error) {
 }
 
 func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger) (scenario.AggregateResult, error) {
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	runner := scenario.NewRunner(targetURL, httpClient, logger)
-	judge := scenario.NewJudge(llmClient, judgeModel, logger)
+	type indexedResult struct {
+		index int
+		ss    scenario.ScoredScenario
+	}
 
-	scored := make([]scenario.ScoredScenario, 0, len(scenarios))
-	for _, sc := range scenarios {
-		result, err := runner.Run(ctx, sc)
-		if err != nil {
-			// Setup failure: score as 0 satisfaction at the scenario's weight.
-			weight := 1.0
-			if sc.Weight != nil {
-				weight = *sc.Weight
+	var (
+		mu      sync.Mutex
+		results = make([]indexedResult, 0, len(scenarios))
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(10)
+
+	for i, sc := range scenarios {
+		g.Go(func() error {
+			// Each goroutine gets its own Runner (independent variable capture state) and Judge.
+			httpClient := &http.Client{Timeout: 30 * time.Second}
+			runner := scenario.NewRunner(targetURL, httpClient, logger)
+			judge := scenario.NewJudge(llmClient, judgeModel, logger)
+
+			result, err := runner.Run(gctx, sc)
+			if err != nil {
+				// If the group context was canceled (another goroutine failed),
+				// propagate the cancellation rather than recording a phantom zero.
+				if gctx.Err() != nil {
+					return gctx.Err()
+				}
+				weight := 1.0
+				if sc.Weight != nil {
+					weight = *sc.Weight
+				}
+				logger.Warn("scenario setup failed", "scenario", sc.ID, "error", err)
+				mu.Lock()
+				results = append(results, indexedResult{index: i, ss: scenario.ScoredScenario{
+					ScenarioID: sc.ID,
+					Weight:     weight,
+					Score:      0,
+				}})
+				mu.Unlock()
+				return nil
 			}
-			logger.Warn("scenario setup failed", "scenario", sc.ID, "error", err)
-			scored = append(scored, scenario.ScoredScenario{
-				ScenarioID: sc.ID,
-				Weight:     weight,
-				Score:      0,
-			})
-			continue
-		}
 
-		ss, err := judge.ScoreScenario(ctx, sc, result)
-		if err != nil {
-			return scenario.AggregateResult{}, fmt.Errorf("score scenario %s: %w", sc.ID, err)
-		}
-		scored = append(scored, ss)
+			ss, err := judge.ScoreScenario(gctx, sc, result)
+			if err != nil {
+				return fmt.Errorf("score scenario %s: %w", sc.ID, err)
+			}
+
+			mu.Lock()
+			results = append(results, indexedResult{index: i, ss: ss})
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return scenario.AggregateResult{}, err
+	}
+
+	// Sort by original index for deterministic output.
+	slices.SortFunc(results, func(a, b indexedResult) int { return a.index - b.index })
+	scored := make([]scenario.ScoredScenario, len(results))
+	for i, r := range results {
+		scored[i] = r.ss
 	}
 
 	return scenario.Aggregate(scored), nil

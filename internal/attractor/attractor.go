@@ -432,7 +432,7 @@ func withDefaults(opts RunOptions) RunOptions {
 
 // generateRunID returns a short random hex string for use as a run identifier.
 func generateRunID() string {
-	b := make([]byte, 4)
+	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
 }

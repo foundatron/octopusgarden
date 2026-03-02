@@ -93,7 +93,7 @@ Check past run history:
 octog status
 ```
 
-Requires: Go 1.22+, Docker, an Anthropic API key.
+Requires: Go 1.24+, Docker, an Anthropic API key.
 
 ## CLI Reference
 
