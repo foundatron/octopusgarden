@@ -5,11 +5,6 @@ An open-source software dark factory. Write specs and scenarios — OctopusGarde
 > Each arm of an octopus has its own neural cluster and can operate semi-autonomously.
 > OctopusGarden's agents work the same way — independent arms coordinating toward a shared goal.
 
-## Status: Early Development
-
-OctopusGarden is pre-alpha. The core loop (spec -> generate -> validate -> converge) is being built.
-See [docs/sessions.md](docs/sessions.md) for the implementation roadmap.
-
 ## What Is This?
 
 OctopusGarden is an autonomous software development system. You describe what you want (specs) and
@@ -20,6 +15,20 @@ review.
 The key insight: scenarios are a **holdout set**. The coding agent never sees them during
 generation. An LLM judge scores satisfaction probabilistically (0-100), not with boolean pass/fail.
 This prevents reward hacking and produces genuinely correct software.
+
+## Prior Art
+
+OctopusGarden builds on ideas pioneered by others:
+
+- **[StrongDM's Software Factory](https://factory.strongdm.ai/)** — Production system validating
+  this exact pattern (holdout scenarios, LLM-as-judge, convergence loops). Demonstrated that
+  AI-generated code can pass rigorous QA without human review.
+- **[Dan Shapiro's Five Levels](https://www.danshapiro.com/blog/2026/01/the-five-levels-from-spicy-autocomplete-to-the-software-factory/)**
+  — Framework for AI coding maturity, from autocomplete to fully autonomous factories. OctopusGarden
+  targets Level 5.
+- **[Simon Willison's writeup](https://simonwillison.net/2026/Feb/7/software-factory/)** — "How
+  StrongDM's AI team build serious software without even looking at the code" — deep dive into the
+  software factory pattern and scenario-based validation.
 
 ## How It Works
 
@@ -49,22 +58,77 @@ Spec (markdown) ──→ Attractor Loop ──→ Generated Code ──→ Dock
 # Clone and build
 git clone https://github.com/foundatron/octopusgarden.git
 cd octopusgarden
-go build ./cmd/octopusgarden
+make build
+```
 
-# Run the factory on the hello-api example
-./octopusgarden run \
+Set your API key (either as an env var or in the config file):
+
+```bash
+export ANTHROPIC_API_KEY=sk-...
+# or
+mkdir -p ~/.octopusgarden && echo "ANTHROPIC_API_KEY=sk-..." > ~/.octopusgarden/config
+```
+
+Run the factory on the included example — an Items REST API:
+
+```bash
+octopusgarden run \
   --spec specs/examples/hello-api/spec.md \
   --scenarios scenarios/examples/hello-api/ \
   --model claude-sonnet-4-20250514 \
   --threshold 90
+```
 
-# Or run scenarios against any running service
-./octopusgarden validate \
+Validate a running service against scenarios independently:
+
+```bash
+octopusgarden validate \
   --scenarios scenarios/examples/hello-api/ \
   --target http://localhost:8080
 ```
 
-Requires: Go 1.22+, Docker, an Anthropic API key (`ANTHROPIC_API_KEY` env var).
+Check past run history:
+
+```bash
+octopusgarden status
+```
+
+Requires: Go 1.22+, Docker, an Anthropic API key.
+
+## CLI Reference
+
+```text
+octopusgarden <command> [flags]
+
+Commands:
+  run        Run the attractor loop to generate software from a spec
+  validate   Validate a running service against scenarios
+  status     Show recent runs, scores, and costs
+```
+
+### `run`
+
+| Flag               | Default                    | Description                                                    |
+| ------------------ | -------------------------- | -------------------------------------------------------------- |
+| `--spec`           | *(required)*               | Path to the spec markdown file                                 |
+| `--scenarios`      | *(required)*               | Path to the scenarios directory                                |
+| `--model`          | `claude-sonnet-4-20250514` | LLM model for code generation                                  |
+| `--budget`         | `5.00`                     | Maximum spend in USD                                           |
+| `--threshold`      | `95`                       | Satisfaction target (0-100)                                    |
+| `--patch`          | `false`                    | Incremental patch mode (iteration 2+ sends only changed files) |
+| `--context-budget` | `0`                        | Max estimated tokens for spec in system prompt; 0 = unlimited  |
+
+### `validate`
+
+| Flag          | Default      | Description                                                         |
+| ------------- | ------------ | ------------------------------------------------------------------- |
+| `--scenarios` | *(required)* | Path to the scenarios directory                                     |
+| `--target`    | *(required)* | URL of the running service to validate                              |
+| `--threshold` | `0`          | Minimum satisfaction score; non-zero enables exit code 1 on failure |
+
+### `status`
+
+No flags. Shows a table of recent runs with status, model, score, iterations, cost, and timestamp.
 
 ## Key Concepts
 
@@ -74,21 +138,11 @@ Requires: Go 1.22+, Docker, an Anthropic API key (`ANTHROPIC_API_KEY` env var).
 - **Attractor** — The convergence loop: generate -> test -> score -> feedback -> regenerate
 - **Satisfaction** — Probabilistic scoring (0-100) via LLM-as-judge, not boolean pass/fail
 
-## Prior Art
-
-- **[StrongDM's Software Factory](https://factory.strongdm.ai/)** — Production system validating
-  this exact pattern (holdout scenarios, LLM-as-judge, convergence loops). Demonstrated that
-  AI-generated code can pass rigorous QA without human review.
-- **[Dan Shapiro's Five Levels](https://www.danshapiro.com/blog/2026/01/the-five-levels-from-spicy-autocomplete-to-the-software-factory/)**
-  — Framework for AI coding maturity, from autocomplete to fully autonomous factories. OctopusGarden
-  targets Level 5.
-
 ## Documentation
 
 - [Architecture](docs/architecture.md) — System design, data structures, LLM interfaces, Docker
   strategy
-- [Implementation Sessions](docs/sessions.md) — Build roadmap with exact types, tests, and done
-  conditions
+- [Contributing](CONTRIBUTING.md) — Development setup, coding standards, and how to contribute
 
 ## License
 
