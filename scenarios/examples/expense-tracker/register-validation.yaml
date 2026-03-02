@@ -1,0 +1,28 @@
+id: register-validation
+description: Registration rejects invalid usernames
+type: functional
+satisfaction_criteria: Missing, empty, too-short, and too-long usernames all return 400
+
+steps:
+  - description: Empty username
+    request:
+      method: POST
+      path: /users
+      body:
+        username: ""
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Missing username field
+    request:
+      method: POST
+      path: /users
+      body: {}
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Username too short
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "ab"
+    expect: "Status 400. Response body contains 'error' field."

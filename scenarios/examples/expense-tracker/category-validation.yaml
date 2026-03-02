@@ -1,0 +1,35 @@
+id: category-validation
+description: Category creation rejects invalid names
+type: functional
+satisfaction_criteria: Missing and empty names return 400
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "catval_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: Empty category name
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: ""
+    expect: "Status 400. Response body contains 'error' field."
+
+  - description: Missing category name
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body: {}
+    expect: "Status 400. Response body contains 'error' field."

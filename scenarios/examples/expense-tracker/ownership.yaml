@@ -1,0 +1,85 @@
+id: ownership
+description: Users cannot access other users' categories or expenses
+type: functional
+satisfaction_criteria: Cross-user access returns 404 for categories and expenses
+weight: 1.5
+
+setup:
+  - description: Register user A
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "owner_a_exp"
+    capture:
+      - name: api_key_a
+        jsonpath: $.api_key
+  - description: Register user B
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "owner_b_exp"
+    capture:
+      - name: api_key_b
+        jsonpath: $.api_key
+  - description: User A creates a category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key_a}"
+      body:
+        name: "A's Category"
+    capture:
+      - name: cat_a_id
+        jsonpath: $.id
+  - description: User A creates an expense
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key_a}"
+      body:
+        amount: 100.00
+        description: "A's expense"
+        date: "2025-01-15"
+        category_id: "{cat_a_id}"
+    capture:
+      - name: expense_a_id
+        jsonpath: $.id
+
+steps:
+  - description: User B tries to GET user A's expense
+    request:
+      method: GET
+      path: /expenses/{expense_a_id}
+      headers:
+        Authorization: "Bearer {api_key_b}"
+    expect: "Status 404."
+
+  - description: User B tries to PUT user A's expense
+    request:
+      method: PUT
+      path: /expenses/{expense_a_id}
+      headers:
+        Authorization: "Bearer {api_key_b}"
+      body:
+        amount: 999.00
+    expect: "Status 404."
+
+  - description: User B tries to DELETE user A's expense
+    request:
+      method: DELETE
+      path: /expenses/{expense_a_id}
+      headers:
+        Authorization: "Bearer {api_key_b}"
+    expect: "Status 404."
+
+  - description: User B tries to DELETE user A's category
+    request:
+      method: DELETE
+      path: /categories/{cat_a_id}
+      headers:
+        Authorization: "Bearer {api_key_b}"
+    expect: "Status 404."

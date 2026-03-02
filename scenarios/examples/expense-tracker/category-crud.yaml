@@ -1,0 +1,63 @@
+id: category-crud
+description: Create, list, and delete categories
+type: functional
+satisfaction_criteria: CRUD operations on categories return correct status codes and response bodies
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "cat_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: Create a category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Food"
+    capture:
+      - name: cat_id
+        jsonpath: $.id
+    expect: "Status 201. Response body contains 'id' (UUID), 'user_id' (UUID), 'name' equal to 'Food', and 'created_at' (ISO 8601 timestamp)."
+
+  - description: Create a second category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Transport"
+    expect: "Status 201. Response body contains 'name' equal to 'Transport'."
+
+  - description: List categories
+    request:
+      method: GET
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'categories' array with exactly 2 items. One has name 'Food' and the other has name 'Transport'."
+
+  - description: Delete the first category
+    request:
+      method: DELETE
+      path: /categories/{cat_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 204. Response body should be empty or absent."
+
+  - description: List categories after deletion
+    request:
+      method: GET
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'categories' array with exactly 1 item with name 'Transport'."

@@ -1,0 +1,21 @@
+id: register-duplicate
+description: Duplicate username returns 409
+type: functional
+satisfaction_criteria: Second registration with same username returns 409 Conflict
+
+setup:
+  - description: Register first user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "dup_user"
+
+steps:
+  - description: Register duplicate username
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "dup_user"
+    expect: "Status 409. Response body contains 'error' field."

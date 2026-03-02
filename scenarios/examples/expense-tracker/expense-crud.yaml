@@ -1,0 +1,78 @@
+id: expense-crud
+description: Create, read, update, and delete an expense
+type: functional
+satisfaction_criteria: All CRUD operations on expenses return correct status codes and response bodies
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "exp_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create a category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Food"
+    capture:
+      - name: cat_id
+        jsonpath: $.id
+
+steps:
+  - description: Create an expense with category
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 42.50
+        description: "Weekly groceries"
+        date: "2025-01-15"
+        category_id: "{cat_id}"
+    capture:
+      - name: expense_id
+        jsonpath: $.id
+    expect: "Status 201. Response body contains 'id' (UUID), 'user_id' (UUID), 'amount' equal to 42.5 or 42.50, 'description' equal to 'Weekly groceries', 'date' equal to '2025-01-15', 'category_id' matching the category UUID, and 'created_at' (ISO 8601 timestamp)."
+
+  - description: Read the expense
+    request:
+      method: GET
+      path: /expenses/{expense_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'amount' equal to 42.5 or 42.50, 'description' equal to 'Weekly groceries', 'date' equal to '2025-01-15', and 'category_id' matching the category UUID."
+
+  - description: Update the expense
+    request:
+      method: PUT
+      path: /expenses/{expense_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 55.00
+        description: "Weekly groceries (organic)"
+    expect: "Status 200. Response body contains 'amount' equal to 55 or 55.00, 'description' equal to 'Weekly groceries (organic)'. The date should still be '2025-01-15' and category_id should be unchanged."
+
+  - description: Delete the expense
+    request:
+      method: DELETE
+      path: /expenses/{expense_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 204. Response body should be empty or absent."
+
+  - description: Verify delete
+    request:
+      method: GET
+      path: /expenses/{expense_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 404."

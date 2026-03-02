@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,6 +90,7 @@ type RunOptions struct {
 	WorkspaceDir  string        // default "./workspace"
 	HealthTimeout time.Duration // default 30s
 	Progress      ProgressFunc  // optional per-iteration callback
+	PatchMode     bool          // if true, iteration 2+ sends prev best files + failures
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -109,18 +112,21 @@ type iterationFeedback struct {
 
 // runState holds mutable state across iterations of the attractor loop.
 type runState struct {
-	runID            string
-	opts             RunOptions
-	baseDir          string
-	bestDir          string
-	totalCost        float64
-	bestSatisfaction float64
-	stallCount       int
-	history          []iterationFeedback
-	scoreHistory     []float64
-	lastOutcome      IterationOutcome
-	lastSatisfaction float64
-	startTime        time.Time
+	runID                string
+	opts                 RunOptions
+	baseDir              string
+	bestDir              string
+	totalCost            float64
+	bestSatisfaction     float64
+	stallCount           int
+	history              []iterationFeedback
+	scoreHistory         []float64
+	lastOutcome          IterationOutcome
+	lastSatisfaction     float64
+	startTime            time.Time
+	bestFiles            map[string]string // files from the best-scoring iteration
+	patchActive          bool              // patch mode currently in effect (may disable on regression)
+	patchRegressionCount int               // consecutive regressions while patch mode active
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -189,9 +195,10 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 
 	opts = withDefaults(opts)
 	s := &runState{
-		runID:     generateRunID(),
-		opts:      opts,
-		startTime: time.Now(),
+		runID:       generateRunID(),
+		opts:        opts,
+		startTime:   time.Now(),
+		patchActive: opts.PatchMode,
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -224,10 +231,18 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 // iterate runs a single iteration of the attractor loop.
 // Returns (result, nil) for terminal conditions, (nil, nil) to continue, or (nil, err) for hard errors.
 func (a *Attractor) iterate(ctx context.Context, spec string, iter int, s *runState, validate ValidateFn) (*RunResult, error) {
+	// Build messages: patch mode sends previous best files + failures.
+	var messages []llm.Message
+	if s.patchActive && s.bestFiles != nil && iter > 1 {
+		messages = buildPatchMessages(s.history, s.bestFiles, s.bestSatisfaction)
+	} else {
+		messages = buildMessages(iter, s.history)
+	}
+
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(spec),
-		Messages:     buildMessages(iter, s.history),
+		Messages:     messages,
 		Model:        s.opts.Model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
 	})
@@ -244,6 +259,11 @@ func (a *Attractor) iterate(ctx context.Context, spec string, iter int, s *runSt
 		s.lastSatisfaction = 0
 		s.recordStall(iter, "parse_error", fmt.Sprintf("Failed to parse generated files: %s", err))
 		return a.checkStalled(iter, s), nil
+	}
+
+	// In patch mode, merge new output over previous best to carry forward unchanged files.
+	if s.patchActive && s.bestFiles != nil && iter > 1 {
+		files = MergeFiles(files, s.bestFiles)
 	}
 
 	// Write files to iteration directory.
@@ -307,17 +327,21 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 			return nil, fmt.Errorf("attractor: write best files: %w", err)
 		}
 		s.bestSatisfaction = satisfaction
+		s.bestFiles = maps.Clone(files)
 		return s.result(iter, StatusConverged), nil
 	}
 
 	if satisfaction > s.bestSatisfaction {
 		s.bestSatisfaction = satisfaction
+		s.bestFiles = maps.Clone(files)
 		s.stallCount = 0
+		s.patchRegressionCount = 0
 		if err := writeFiles(s.bestDir, files); err != nil {
 			return nil, fmt.Errorf("attractor: write best files: %w", err)
 		}
 	} else {
 		s.stallCount++
+		a.trackPatchRegression(iter, satisfaction, s)
 	}
 
 	s.history = append(s.history, iterationFeedback{
@@ -335,6 +359,21 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 	}
 
 	return nil, nil
+}
+
+// trackPatchRegression increments the regression counter when patch mode is active
+// and satisfaction drops below the best. After 2 consecutive regressions, patch mode
+// is disabled for the remainder of the run.
+func (a *Attractor) trackPatchRegression(iter int, satisfaction float64, s *runState) {
+	if !s.patchActive || satisfaction >= s.bestSatisfaction {
+		return
+	}
+	s.patchRegressionCount++
+	if s.patchRegressionCount >= 2 {
+		a.logger.Info("patch mode disabled after consecutive regressions",
+			"iteration", iter, "regression_count", s.patchRegressionCount)
+		s.patchActive = false
+	}
 }
 
 // checkStalled returns a stalled result if the stall limit is reached, nil otherwise.
@@ -422,6 +461,34 @@ func buildMessages(iter int, history []iterationFeedback) []llm.Message {
 	}
 
 	b.WriteString("Please generate a corrected version of the application. Output ALL files using the === FILE: path === format.")
+
+	return []llm.Message{
+		{Role: "user", Content: b.String()},
+	}
+}
+
+// buildPatchMessages constructs the user message for patch mode iterations.
+// It includes the previous best files as context and the most recent failures,
+// asking the LLM to output only changed files.
+func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64) []llm.Message {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The current best version scored %.1f/100. Here are all current files:\n\n", bestScore)
+
+	paths := slices.Sorted(maps.Keys(bestFiles))
+	for _, p := range paths {
+		fmt.Fprintf(&b, "=== FILE: %s ===\n%s=== END FILE ===\n\n", p, bestFiles[p])
+	}
+
+	if len(history) > 0 {
+		b.WriteString("Failures to fix:\n\n")
+		start := max(len(history)-3, 0)
+		for _, fb := range history[start:] {
+			fmt.Fprintf(&b, "--- Iteration %d (%s) ---\n%s\n\n", fb.iteration, fb.kind, fb.message)
+		}
+	}
+
+	b.WriteString("Output ONLY the files that need to change using the === FILE: path === format. ")
+	b.WriteString("For files you are not changing, you may emit === UNCHANGED: path === as a comment, but this is optional.")
 
 	return []llm.Message{
 		{Role: "user", Content: b.String()},

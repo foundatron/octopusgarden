@@ -1,0 +1,70 @@
+id: expense-list
+description: List expenses with pagination
+type: functional
+satisfaction_criteria: GET /expenses returns correct items with total count and respects pagination
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "explist_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create expense 1
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 10.00
+        description: "Expense one"
+        date: "2025-01-01"
+  - description: Create expense 2
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 20.00
+        description: "Expense two"
+        date: "2025-01-02"
+  - description: Create expense 3
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 30.00
+        description: "Expense three"
+        date: "2025-01-03"
+
+steps:
+  - description: List all expenses
+    request:
+      method: GET
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'expenses' array with exactly 3 items and 'total' equal to 3."
+
+  - description: List with limit 2
+    request:
+      method: GET
+      path: /expenses?limit=2
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'expenses' array with exactly 2 items and 'total' equal to 3."
+
+  - description: List with offset 2
+    request:
+      method: GET
+      path: /expenses?limit=2&offset=2
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'expenses' array with exactly 1 item and 'total' equal to 3."

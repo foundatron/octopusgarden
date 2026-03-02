@@ -1,0 +1,106 @@
+id: expense-filter
+description: Filter expenses by category and date range
+type: functional
+satisfaction_criteria: Filtering by category_id, date_from, and date_to returns correct subsets
+weight: 1.5
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "expfilter_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create food category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Food"
+    capture:
+      - name: food_id
+        jsonpath: $.id
+  - description: Create transport category
+    request:
+      method: POST
+      path: /categories
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        name: "Transport"
+    capture:
+      - name: transport_id
+        jsonpath: $.id
+  - description: Food expense Jan 10
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 25.00
+        description: "Groceries"
+        date: "2025-01-10"
+        category_id: "{food_id}"
+  - description: Food expense Jan 20
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 30.00
+        description: "Restaurant"
+        date: "2025-01-20"
+        category_id: "{food_id}"
+  - description: Transport expense Jan 15
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 15.00
+        description: "Bus pass"
+        date: "2025-01-15"
+        category_id: "{transport_id}"
+  - description: Uncategorized expense Feb 01
+    request:
+      method: POST
+      path: /expenses
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        amount: 50.00
+        description: "Misc purchase"
+        date: "2025-02-01"
+
+steps:
+  - description: Filter by food category
+    request:
+      method: GET
+      path: /expenses?category_id={food_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'expenses' array with exactly 2 items and 'total' equal to 2. Both expenses should have category_id matching the food category."
+
+  - description: Filter by date range Jan 12 to Jan 25
+    request:
+      method: GET
+      path: /expenses?date_from=2025-01-12&date_to=2025-01-25
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'expenses' array with exactly 2 items and 'total' equal to 2. Should include the restaurant (Jan 20) and bus pass (Jan 15) but not groceries (Jan 10) or misc (Feb 01)."
+
+  - description: Filter by category and date range
+    request:
+      method: GET
+      path: /expenses?category_id={food_id}&date_from=2025-01-15&date_to=2025-01-31
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'expenses' array with exactly 1 item and 'total' equal to 1. The expense should be the restaurant (Jan 20, food category)."

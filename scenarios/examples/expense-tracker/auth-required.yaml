@@ -1,0 +1,41 @@
+id: auth-required
+description: Endpoints require authentication
+type: functional
+satisfaction_criteria: All protected endpoints return 401 without auth header
+
+steps:
+  - description: GET /categories without auth
+    request:
+      method: GET
+      path: /categories
+    expect: "Status 401."
+
+  - description: POST /categories without auth
+    request:
+      method: POST
+      path: /categories
+      body:
+        name: "Food"
+    expect: "Status 401."
+
+  - description: GET /expenses without auth
+    request:
+      method: GET
+      path: /expenses
+    expect: "Status 401."
+
+  - description: POST /expenses without auth
+    request:
+      method: POST
+      path: /expenses
+      body:
+        amount: 10.00
+        description: "Lunch"
+        date: "2025-01-15"
+    expect: "Status 401."
+
+  - description: GET /expenses/summary without auth
+    request:
+      method: GET
+      path: /expenses/summary
+    expect: "Status 401."
