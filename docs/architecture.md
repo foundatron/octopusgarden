@@ -25,7 +25,7 @@ octopusgarden/
 ├── go.mod
 ├── go.sum
 ├── cmd/
-│   └── octopusgarden/
+│   └── octog/
 │       └── main.go             # CLI entrypoint, subcommand routing
 ├── internal/
 │   ├── spec/
@@ -109,7 +109,7 @@ octopusgarden/
 ## Package Dependency DAG
 
 ```text
-cmd/octopusgarden
+cmd/octog
     ├── internal/attractor   (loop, convergence, fileparse)
     │       ├── internal/llm
     │       ├── internal/spec
@@ -124,8 +124,8 @@ cmd/octopusgarden
 
 Key constraint: `internal/attractor` never imports `internal/scenario`. The attractor receives spec
 content and failure feedback as strings. The validator (scenario runner + judge) is invoked by
-`cmd/octopusgarden`, not by the attractor. Store interaction is also owned by `cmd/octopusgarden` —
-the attractor returns a `RunResult` and the CLI records it post-hoc.
+`cmd/octog`, not by the attractor. Store interaction is also owned by `cmd/octog` — the attractor
+returns a `RunResult` and the CLI records it post-hoc.
 
 ## LLM Client Interface
 
@@ -696,9 +696,9 @@ After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to the c
 ## CLI Interface
 
 ```text
-octopusgarden run --spec <path> --scenarios <dir> [--model claude-sonnet-4-20250514] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0]
-octopusgarden validate --scenarios <dir> --target http://localhost:8080 [--threshold 0]
-octopusgarden status  # show recent runs, scores, costs
+octog run --spec <path> --scenarios <dir> [--model claude-sonnet-4-20250514] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0]
+octog validate --scenarios <dir> --target http://localhost:8080 [--threshold 0]
+octog status  # show recent runs, scores, costs
 ```
 
 MVP does not include `twin`, `dashboard`, or `transfuse` subcommands.

@@ -324,13 +324,8 @@ func TestValidateThreshold(t *testing.T) {
 }
 
 func TestLoadConfig(t *testing.T) {
-	// Create temp config file.
 	dir := t.TempDir()
-	configFile := filepath.Join(dir, "config")
 	content := "# comment\n\nANTHROPIC_API_KEY=sk-test-from-config\nOPENAI_API_KEY=sk-openai-test\n"
-	if err := os.WriteFile(configFile, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	// Override HOME so configPath() resolves to our temp dir.
 	ogHome := os.Getenv("HOME")

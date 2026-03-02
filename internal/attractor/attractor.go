@@ -21,7 +21,7 @@ import (
 var errEmptySpec = errors.New("attractor: spec content is empty")
 
 // summarizeModel is the cheap model used for spec summarization.
-// Same model as judgeModel in cmd/octopusgarden/main.go — both use Haiku for cost efficiency.
+// Same model as judgeModel in cmd/octog/main.go — both use Haiku for cost efficiency.
 const summarizeModel = "claude-haiku-4-5-20251001"
 
 // Status constants for RunResult.

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-BINARY := octopusgarden
+BINARY := octog
 
 .PHONY: all help build test lint fmt clean
 
@@ -11,7 +11,7 @@ help: ## Show available targets
 	  { printf "  %-10s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 build: ## Build the binary
-	go build -o $(BINARY) ./cmd/octopusgarden
+	go build -o $(BINARY) ./cmd/octog
 
 test: ## Run tests
 	go test ./...
