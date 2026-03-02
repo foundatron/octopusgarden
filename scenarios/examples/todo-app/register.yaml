@@ -1,0 +1,13 @@
+id: register
+description: User registration returns id, username, and api_key
+type: functional
+satisfaction_criteria: Registration returns 201 with all expected fields
+
+steps:
+  - description: Register a new user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "alice"
+    expect: "Status 201. Response body contains 'id' (UUID), 'username' equal to 'alice', and 'api_key' (UUID)."

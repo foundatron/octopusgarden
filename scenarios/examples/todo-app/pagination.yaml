@@ -1,0 +1,72 @@
+id: pagination
+description: Verify pagination with limit and offset
+type: functional
+satisfaction_criteria: Pagination returns correct subsets and total count
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "page_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create todo 1
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Page Item 1"
+  - description: Create todo 2
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Page Item 2"
+  - description: Create todo 3
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Page Item 3"
+  - description: Create todo 4
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Page Item 4"
+  - description: Create todo 5
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Page Item 5"
+
+steps:
+  - description: Get first page with limit 2
+    request:
+      method: GET
+      path: /todos?limit=2&offset=0
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response has 'todos' array with exactly 2 items. Response has 'total' field equal to 5."
+
+  - description: Get second page with offset
+    request:
+      method: GET
+      path: /todos?limit=2&offset=2
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response has 'todos' array with exactly 2 items. Response has 'total' field equal to 5."

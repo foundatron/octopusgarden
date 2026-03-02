@@ -1,0 +1,62 @@
+id: filter-completed
+description: Filter todos by completed status
+type: functional
+satisfaction_criteria: Filtering by completed status returns correct subsets and totals
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "filter_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create first todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Incomplete task"
+    capture:
+      - name: todo1_id
+        jsonpath: $.id
+  - description: Create second todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Completed task"
+    capture:
+      - name: todo2_id
+        jsonpath: $.id
+  - description: Mark second todo as completed
+    request:
+      method: PUT
+      path: /todos/{todo2_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        completed: true
+
+steps:
+  - description: Filter completed todos
+    request:
+      method: GET
+      path: /todos?completed=true
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response has 'todos' array with exactly 1 item that has 'completed' equal to true and title 'Completed task'. The 'total' field should be 1."
+
+  - description: Filter incomplete todos
+    request:
+      method: GET
+      path: /todos?completed=false
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response has 'todos' array with exactly 1 item that has 'completed' equal to false and title 'Incomplete task'. The 'total' field should be 1."

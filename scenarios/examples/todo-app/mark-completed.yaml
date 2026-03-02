@@ -1,0 +1,63 @@
+id: mark-completed
+description: Toggle todo completion status
+type: functional
+satisfaction_criteria: Todos can be marked completed and then unmarked
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "toggle_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+  - description: Create a todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Toggleable todo"
+    capture:
+      - name: todo_id
+        jsonpath: $.id
+
+steps:
+  - description: Mark todo as completed
+    request:
+      method: PUT
+      path: /todos/{todo_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        completed: true
+    expect: "Status 200. Response body contains 'completed' equal to true and 'title' equal to 'Toggleable todo'."
+
+  - description: Verify completed status persisted
+    request:
+      method: GET
+      path: /todos/{todo_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'completed' equal to true."
+
+  - description: Mark todo as incomplete again
+    request:
+      method: PUT
+      path: /todos/{todo_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        completed: false
+    expect: "Status 200. Response body contains 'completed' equal to false and 'title' equal to 'Toggleable todo'."
+
+  - description: Verify incomplete status persisted
+    request:
+      method: GET
+      path: /todos/{todo_id}
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 200. Response body contains 'completed' equal to false."

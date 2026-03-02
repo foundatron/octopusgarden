@@ -1,0 +1,42 @@
+id: not-found
+description: Verify 404 responses for nonexistent todos
+type: functional
+satisfaction_criteria: GET, PUT, and DELETE on nonexistent todo IDs return 404
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "notfound_user"
+    capture:
+      - name: api_key
+        jsonpath: $.api_key
+
+steps:
+  - description: GET nonexistent todo
+    request:
+      method: GET
+      path: /todos/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 404."
+
+  - description: PUT nonexistent todo
+    request:
+      method: PUT
+      path: /todos/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+      body:
+        title: "Ghost"
+    expect: "Status 404."
+
+  - description: DELETE nonexistent todo
+    request:
+      method: DELETE
+      path: /todos/00000000-0000-0000-0000-000000000000
+      headers:
+        Authorization: "Bearer {api_key}"
+    expect: "Status 404."

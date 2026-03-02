@@ -1,0 +1,73 @@
+id: ownership
+description: Users cannot access other users' todos
+type: functional
+satisfaction_criteria: Accessing another user's todo returns 404 for GET, PUT, and DELETE
+
+setup:
+  - description: Register user A
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "owner_a"
+    capture:
+      - name: api_key_a
+        jsonpath: $.api_key
+  - description: Register user B
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "owner_b"
+    capture:
+      - name: api_key_b
+        jsonpath: $.api_key
+  - description: User A creates a todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key_a}"
+      body:
+        title: "User A's private todo"
+    capture:
+      - name: todo_a_id
+        jsonpath: $.id
+  - description: User B creates a todo
+    request:
+      method: POST
+      path: /todos
+      headers:
+        Authorization: "Bearer {api_key_b}"
+      body:
+        title: "User B's private todo"
+    capture:
+      - name: todo_b_id
+        jsonpath: $.id
+
+steps:
+  - description: User A tries to GET user B's todo
+    request:
+      method: GET
+      path: /todos/{todo_b_id}
+      headers:
+        Authorization: "Bearer {api_key_a}"
+    expect: "Status 404."
+
+  - description: User A tries to PUT user B's todo
+    request:
+      method: PUT
+      path: /todos/{todo_b_id}
+      headers:
+        Authorization: "Bearer {api_key_a}"
+      body:
+        title: "Hacked"
+    expect: "Status 404."
+
+  - description: User A tries to DELETE user B's todo
+    request:
+      method: DELETE
+      path: /todos/{todo_b_id}
+      headers:
+        Authorization: "Bearer {api_key_a}"
+    expect: "Status 404."

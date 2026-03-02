@@ -1,0 +1,21 @@
+id: register-duplicate
+description: Duplicate username returns 409
+type: functional
+satisfaction_criteria: Registering an already-taken username returns 409 Conflict
+
+setup:
+  - description: Register a user
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "taken_name"
+
+steps:
+  - description: Register with same username again
+    request:
+      method: POST
+      path: /users
+      body:
+        username: "taken_name"
+    expect: "Status 409. Response body contains an 'error' field with a message about the username being taken or already existing."
