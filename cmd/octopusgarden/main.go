@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
@@ -31,13 +34,17 @@ const stepPassThreshold = 80
 var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
 	errScenariosAndTargetRequired = errors.New("--scenarios and --target are required")
-	errMissingAPIKey              = errors.New("ANTHROPIC_API_KEY environment variable is required")
+	errMissingAPIKey              = errors.New("ANTHROPIC_API_KEY not set (use env var or ~/.octopusgarden/config)")
 	errBelowThreshold             = errors.New("satisfaction below threshold")
 	errInvalidThreshold           = errors.New("--threshold must be between 0 and 100")
 )
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if err := loadConfig(logger); err != nil {
+		logger.Warn("failed to load config", "error", err)
+	}
 
 	if !llm.HasModelPricing(judgeModel) {
 		logger.Error("judge model has no pricing entry", "model", judgeModel)
@@ -373,6 +380,72 @@ func fprintValidationResult(w io.Writer, agg scenario.AggregateResult) {
 			_, _ = fmt.Fprintf(w, "  - %s\n", f)
 		}
 	}
+}
+
+// configAllowedKeys lists environment variable names that may be set via the config file.
+var configAllowedKeys = map[string]bool{
+	"ANTHROPIC_API_KEY": true,
+	"OPENAI_API_KEY":    true,
+}
+
+func configPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve config path: %w", err)
+	}
+	return filepath.Join(home, ".octopusgarden", "config"), nil
+}
+
+func loadConfig(logger *slog.Logger) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	info, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat config: %w", err)
+	}
+
+	// Warn if file is world-readable.
+	if perm := info.Mode().Perm(); perm&0o044 != 0 {
+		logger.Warn("config file has overly permissive permissions, recommend 0600",
+			"path", path, "mode", fmt.Sprintf("%04o", perm))
+	}
+
+	f, err := os.Open(path) //nolint:gosec // G304: path is derived from UserHomeDir, not user input
+	if err != nil {
+		return fmt.Errorf("open config: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if !configAllowedKeys[key] {
+			logger.Warn("ignoring unknown config key", "key", key)
+			continue
+		}
+		// Env vars take precedence — only set if not already present.
+		if os.Getenv(key) == "" {
+			if err := os.Setenv(key, value); err != nil {
+				return fmt.Errorf("setenv %s: %w", key, err)
+			}
+		}
+	}
+	return scanner.Err()
 }
 
 func printResult(result *attractor.RunResult) {
