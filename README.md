@@ -72,7 +72,7 @@ mkdir -p ~/.octopusgarden && echo "ANTHROPIC_API_KEY=sk-..." > ~/.octopusgarden/
 Run the factory on the included example — an Items REST API:
 
 ```bash
-octopusgarden run \
+octog run \
   --spec specs/examples/hello-api/spec.md \
   --scenarios scenarios/examples/hello-api/ \
   --model claude-sonnet-4-20250514 \
@@ -82,7 +82,7 @@ octopusgarden run \
 Validate a running service against scenarios independently:
 
 ```bash
-octopusgarden validate \
+octog validate \
   --scenarios scenarios/examples/hello-api/ \
   --target http://localhost:8080
 ```
@@ -90,7 +90,7 @@ octopusgarden validate \
 Check past run history:
 
 ```bash
-octopusgarden status
+octog status
 ```
 
 Requires: Go 1.22+, Docker, an Anthropic API key.
@@ -98,7 +98,7 @@ Requires: Go 1.22+, Docker, an Anthropic API key.
 ## CLI Reference
 
 ```text
-octopusgarden <command> [flags]
+octog <command> [flags]
 
 Commands:
   run        Run the attractor loop to generate software from a spec

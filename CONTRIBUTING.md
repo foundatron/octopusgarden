@@ -23,7 +23,7 @@ pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commi
 ## Build & Test
 
 ```bash
-make build   # compile octopusgarden binary
+make build   # compile octog binary
 make test    # run unit tests
 make lint    # golangci-lint
 make fmt     # gci + gofumpt
@@ -75,7 +75,7 @@ Minimize — stdlib first. See [CLAUDE.md](CLAUDE.md) for the list of allowed ex
 ## Project Structure
 
 ```text
-cmd/octopusgarden/    CLI entrypoint and subcommands
+cmd/octog/            CLI entrypoint and subcommands
 internal/
   spec/               Parse markdown specs
   scenario/           Load, run, and judge YAML scenarios

@@ -5,8 +5,8 @@ before:
     - go mod tidy
 
 builds:
-  - main: ./cmd/octopusgarden
-    binary: octopusgarden
+  - main: ./cmd/octog
+    binary: octog
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]

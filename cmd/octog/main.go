@@ -83,14 +83,14 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Usage: octopusgarden <command> [flags]
+	fmt.Fprintf(os.Stderr, `Usage: octog <command> [flags]
 
 Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
 
-Run 'octopusgarden <command> --help' for details.
+Run 'octog <command> --help' for details.
 `)
 }
 
@@ -105,7 +105,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octopusgarden run [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 
@@ -222,7 +222,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octopusgarden validate [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: octog validate [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 
@@ -269,7 +269,7 @@ func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octopusgarden status\n\nShow recent runs, scores, and costs.\n")
+		fmt.Fprintf(os.Stderr, "Usage: octog status\n\nShow recent runs, scores, and costs.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {

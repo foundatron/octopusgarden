@@ -6,7 +6,7 @@ scenarios → LLM judge scores satisfaction → failures feed back → converges
 ## Commands
 
 ```bash
-make build   # compile octopusgarden binary
+make build   # compile octog binary
 make test    # run unit tests
 make lint    # golangci-lint (enforced on pre-push)
 make fmt     # gci + gofumpt
@@ -21,7 +21,8 @@ commit-msg hook. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `tes
 
 ## Module & Packages
 
-`github.com/foundatron/octopusgarden` — Go 1.22+ — binary subcommands: `run`, `validate`, `status`
+`github.com/foundatron/octopusgarden` — Go 1.22+ — binary `octog` — subcommands: `run`, `validate`,
+`status`
 
 Internal packages: `spec` (parse markdown specs), `scenario` (load/run/judge YAML scenarios),
 `attractor` (convergence loop, file parsing), `container` (Docker build/run), `llm` (client

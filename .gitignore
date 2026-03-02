@@ -1,5 +1,5 @@
 # Compiled binary
-/octopusgarden
+/octog
 
 # Claude Code local state (keep .claude/skills/ if needed)
 .claude/settings.local.json
