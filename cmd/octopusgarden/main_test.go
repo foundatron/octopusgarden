@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -319,5 +320,106 @@ func TestValidateThreshold(t *testing.T) {
 				t.Errorf("unexpected error: %v", thresholdErr)
 			}
 		})
+	}
+}
+
+func TestLoadConfig(t *testing.T) {
+	// Create temp config file.
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config")
+	content := "# comment\n\nANTHROPIC_API_KEY=sk-test-from-config\nOPENAI_API_KEY=sk-openai-test\n"
+	if err := os.WriteFile(configFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override HOME so configPath() resolves to our temp dir.
+	ogHome := os.Getenv("HOME")
+	// Put config at dir/.octopusgarden/config
+	ogDir := filepath.Join(dir, ".octopusgarden")
+	if err := os.MkdirAll(ogDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ogConfig := filepath.Join(ogDir, "config")
+	if err := os.WriteFile(ogConfig, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", dir)
+	defer func() { _ = os.Setenv("HOME", ogHome) }()
+
+	// Ensure the env vars are unset before loading.
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	os.Unsetenv("ANTHROPIC_API_KEY")
+	os.Unsetenv("OPENAI_API_KEY")
+
+	logger := testLogger()
+	if err := loadConfig(logger); err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+
+	if got := os.Getenv("ANTHROPIC_API_KEY"); got != "sk-test-from-config" {
+		t.Errorf("ANTHROPIC_API_KEY = %q, want %q", got, "sk-test-from-config")
+	}
+	if got := os.Getenv("OPENAI_API_KEY"); got != "sk-openai-test" {
+		t.Errorf("OPENAI_API_KEY = %q, want %q", got, "sk-openai-test")
+	}
+}
+
+func TestLoadConfigEnvPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	ogDir := filepath.Join(dir, ".octopusgarden")
+	if err := os.MkdirAll(ogDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ogConfig := filepath.Join(ogDir, "config")
+	if err := os.WriteFile(ogConfig, []byte("ANTHROPIC_API_KEY=from-config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", dir)
+	t.Setenv("ANTHROPIC_API_KEY", "from-env")
+
+	logger := testLogger()
+	if err := loadConfig(logger); err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+
+	if got := os.Getenv("ANTHROPIC_API_KEY"); got != "from-env" {
+		t.Errorf("env precedence failed: ANTHROPIC_API_KEY = %q, want %q", got, "from-env")
+	}
+}
+
+func TestLoadConfigMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	logger := testLogger()
+	if err := loadConfig(logger); err != nil {
+		t.Fatalf("loadConfig should not error on missing file: %v", err)
+	}
+}
+
+func TestLoadConfigUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	ogDir := filepath.Join(dir, ".octopusgarden")
+	if err := os.MkdirAll(ogDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ogConfig := filepath.Join(ogDir, "config")
+	if err := os.WriteFile(ogConfig, []byte("UNKNOWN_KEY=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", dir)
+
+	// Should not error, just warn.
+	logger := testLogger()
+	if err := loadConfig(logger); err != nil {
+		t.Fatalf("loadConfig should not error on unknown key: %v", err)
+	}
+
+	// Unknown key should not be set.
+	if got := os.Getenv("UNKNOWN_KEY"); got == "value" {
+		t.Error("unknown key should not be set in environment")
 	}
 }

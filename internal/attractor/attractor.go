@@ -25,6 +25,40 @@ const (
 	StatusMaxIterations  = "max_iterations"
 )
 
+// IterationOutcome classifies how a single iteration ended.
+type IterationOutcome string
+
+// IterationOutcome constants for progress reporting.
+const (
+	OutcomeValidated  IterationOutcome = "validated"
+	OutcomeBuildFail  IterationOutcome = "build_fail"
+	OutcomeRunFail    IterationOutcome = "run_fail"
+	OutcomeHealthFail IterationOutcome = "health_fail"
+	OutcomeParseFail  IterationOutcome = "parse_fail"
+)
+
+// IterationProgress is passed to the progress callback after each iteration completes.
+type IterationProgress struct {
+	RunID            string
+	Iteration        int
+	MaxIterations    int
+	Outcome          IterationOutcome
+	Satisfaction     float64
+	BestSatisfaction float64
+	Threshold        float64
+	Trend            Trend
+	IterationCostUSD float64
+	TotalCostUSD     float64
+	BudgetUSD        float64
+	Elapsed          time.Duration
+	StallCount       int
+}
+
+// ProgressFunc is called synchronously after each iteration completes.
+// The attractor loop is single-goroutine — no mutex needed.
+// Implementations must return promptly.
+type ProgressFunc func(IterationProgress)
+
 // ContainerManager is the interface to Docker container operations.
 // *container.Manager satisfies this automatically.
 type ContainerManager interface {
@@ -53,6 +87,7 @@ type RunOptions struct {
 	StallLimit    int           // default 3
 	WorkspaceDir  string        // default "./workspace"
 	HealthTimeout time.Duration // default 30s
+	Progress      ProgressFunc  // optional per-iteration callback
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -82,6 +117,10 @@ type runState struct {
 	bestSatisfaction float64
 	stallCount       int
 	history          []iterationFeedback
+	scoreHistory     []float64
+	lastOutcome      IterationOutcome
+	lastSatisfaction float64
+	startTime        time.Time
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -92,6 +131,28 @@ func (s *runState) result(iter int, status string) *RunResult {
 		CostUSD:      s.totalCost,
 		OutputDir:    s.bestDir,
 		Status:       status,
+	}
+}
+
+// buildProgress snapshots current state into an IterationProgress value.
+// Trend is based on scoreHistory, which is only updated for validated iterations.
+// Non-validated iterations (build/run/health/parse failures) correctly reflect the
+// prior trend since no new score was produced.
+func (s *runState) buildProgress(iter int, costBefore float64) IterationProgress {
+	return IterationProgress{
+		RunID:            s.runID,
+		Iteration:        iter,
+		MaxIterations:    s.opts.MaxIterations,
+		Outcome:          s.lastOutcome,
+		Satisfaction:     s.lastSatisfaction,
+		BestSatisfaction: s.bestSatisfaction,
+		Threshold:        s.opts.Threshold,
+		Trend:            DetectTrend(s.scoreHistory, s.opts.Threshold, s.opts.StallLimit),
+		IterationCostUSD: s.totalCost - costBefore,
+		TotalCostUSD:     s.totalCost,
+		BudgetUSD:        s.opts.BudgetUSD,
+		Elapsed:          time.Since(s.startTime),
+		StallCount:       s.stallCount,
 	}
 }
 
@@ -128,8 +189,9 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 
 	opts = withDefaults(opts)
 	s := &runState{
-		runID: generateRunID(),
-		opts:  opts,
+		runID:     generateRunID(),
+		opts:      opts,
+		startTime: time.Now(),
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -141,10 +203,16 @@ func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, valid
 			return s.result(iter-1, StatusBudgetExceeded), nil
 		}
 
+		costBefore := s.totalCost
 		result, err := a.iterate(ctx, spec, iter, s, validate)
 		if err != nil {
 			return nil, err
 		}
+
+		if opts.Progress != nil {
+			opts.Progress(s.buildProgress(iter, costBefore))
+		}
+
 		if result != nil {
 			return result, nil
 		}
@@ -172,6 +240,8 @@ func (a *Attractor) iterate(ctx context.Context, spec string, iter int, s *runSt
 	files, err := ParseFiles(genResp.Content)
 	if err != nil {
 		a.logger.Warn("parse files failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeParseFail
+		s.lastSatisfaction = 0
 		s.recordStall(iter, "parse_error", fmt.Sprintf("Failed to parse generated files: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
@@ -191,6 +261,8 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	tag := fmt.Sprintf("og-%s-iter%d", s.runID, iter)
 	if err := a.containerMgr.Build(ctx, iterDir, tag); err != nil {
 		a.logger.Warn("build failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeBuildFail
+		s.lastSatisfaction = 0
 		s.recordStall(iter, "build_error", fmt.Sprintf("Docker build failed: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
@@ -198,6 +270,8 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	url, stop, err := a.containerMgr.Run(ctx, tag)
 	if err != nil {
 		a.logger.Warn("container run failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeRunFail
+		s.lastSatisfaction = 0
 		s.recordStall(iter, "run_error", fmt.Sprintf("Container failed to start: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
@@ -205,6 +279,8 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 
 	if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
 		a.logger.Warn("health check failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeHealthFail
+		s.lastSatisfaction = 0
 		s.recordStall(iter, "health_error", fmt.Sprintf("Health check failed: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
@@ -222,6 +298,10 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 
 // processValidation handles post-validation logic: convergence, stall detection, checkpoint.
 func (a *Attractor) processValidation(iter int, satisfaction float64, failures []string, files map[string]string, s *runState) (*RunResult, error) {
+	s.lastOutcome = OutcomeValidated
+	s.lastSatisfaction = satisfaction
+	s.scoreHistory = append(s.scoreHistory, satisfaction)
+
 	if satisfaction >= s.opts.Threshold {
 		if err := writeFiles(s.bestDir, files); err != nil {
 			return nil, fmt.Errorf("attractor: write best files: %w", err)

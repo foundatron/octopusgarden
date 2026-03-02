@@ -439,6 +439,128 @@ func TestContainerRunFailure(t *testing.T) {
 	}
 }
 
+func TestProgressCallback(t *testing.T) {
+	scores := []float64{60, 80, 100}
+	var callCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		return scores[int(n)-1], []string{"needs work"}, 0.005, nil
+	}
+
+	var progress []IterationProgress
+	opts := defaultOpts(t)
+	opts.Progress = func(p IterationProgress) {
+		progress = append(progress, p)
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", opts, validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Fatalf("expected converged, got %q", result.Status)
+	}
+
+	// Callback should fire once per iteration.
+	if len(progress) != 3 {
+		t.Fatalf("expected 3 progress callbacks, got %d", len(progress))
+	}
+
+	// Verify iteration numbers increment.
+	for i, p := range progress {
+		if p.Iteration != i+1 {
+			t.Errorf("progress[%d].Iteration = %d, want %d", i, p.Iteration, i+1)
+		}
+		if p.MaxIterations != opts.MaxIterations {
+			t.Errorf("progress[%d].MaxIterations = %d, want %d", i, p.MaxIterations, opts.MaxIterations)
+		}
+		if p.Outcome != OutcomeValidated {
+			t.Errorf("progress[%d].Outcome = %q, want %q", i, p.Outcome, OutcomeValidated)
+		}
+		if p.Satisfaction != scores[i] {
+			t.Errorf("progress[%d].Satisfaction = %.1f, want %.1f", i, p.Satisfaction, scores[i])
+		}
+		if p.Elapsed < 0 {
+			t.Errorf("progress[%d].Elapsed = %v, want non-negative", i, p.Elapsed)
+		}
+	}
+
+	// TotalCostUSD should increase monotonically.
+	for i := 1; i < len(progress); i++ {
+		if progress[i].TotalCostUSD <= progress[i-1].TotalCostUSD {
+			t.Errorf("TotalCostUSD not increasing: progress[%d]=%.4f, progress[%d]=%.4f",
+				i-1, progress[i-1].TotalCostUSD, i, progress[i].TotalCostUSD)
+		}
+	}
+
+	// Verify trend progression: first is plateau (only 1 score), then improving, then converged.
+	expectedTrends := []Trend{TrendPlateau, TrendImproving, TrendConverged}
+	for i, p := range progress {
+		if p.Trend != expectedTrends[i] {
+			t.Errorf("progress[%d].Trend = %q, want %q", i, p.Trend, expectedTrends[i])
+		}
+	}
+}
+
+func TestProgressCallbackBuildFailure(t *testing.T) {
+	var buildCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, _, _ string) error {
+			n := buildCount.Add(1)
+			if n == 1 {
+				return fmt.Errorf("build failed")
+			}
+			return nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	var progress []IterationProgress
+	opts := defaultOpts(t)
+	opts.Progress = func(p IterationProgress) {
+		progress = append(progress, p)
+	}
+
+	a := New(client, mgr, testLogger())
+	result, err := a.Run(context.Background(), "Build an app", opts, validate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Fatalf("expected converged, got %q", result.Status)
+	}
+
+	if len(progress) != 2 {
+		t.Fatalf("expected 2 progress callbacks, got %d", len(progress))
+	}
+
+	// First iteration should be build_fail with zero satisfaction.
+	if progress[0].Outcome != OutcomeBuildFail {
+		t.Errorf("progress[0].Outcome = %q, want %q", progress[0].Outcome, OutcomeBuildFail)
+	}
+	if progress[0].Satisfaction != 0 {
+		t.Errorf("progress[0].Satisfaction = %.1f, want 0", progress[0].Satisfaction)
+	}
+
+	// Second should be validated.
+	if progress[1].Outcome != OutcomeValidated {
+		t.Errorf("progress[1].Outcome = %q, want %q", progress[1].Outcome, OutcomeValidated)
+	}
+}
+
 func TestValidateError(t *testing.T) {
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
