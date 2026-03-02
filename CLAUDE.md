@@ -21,7 +21,7 @@ commit-msg hook. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `tes
 
 ## Module & Packages
 
-`github.com/foundatron/octopusgarden` — Go 1.22+ — binary `octog` — subcommands: `run`, `validate`,
+`github.com/foundatron/octopusgarden` — Go 1.24+ — binary `octog` — subcommands: `run`, `validate`,
 `status`
 
 Internal packages: `spec` (parse markdown specs), `scenario` (load/run/judge YAML scenarios),
@@ -35,7 +35,7 @@ Minimize — stdlib first. Allowed exceptions:
 - `github.com/anthropics/anthropic-sdk-go` — Anthropic API
 - `github.com/sashabaranov/go-openai` — OpenAI and Ollama only
 - `gopkg.in/yaml.v3` — scenario YAML
-- `github.com/mattn/go-sqlite3` — run history
+- `modernc.org/sqlite` — run history (pure-Go, no CGO)
 - `github.com/docker/docker/client` — container orchestration
 
 ## Design Invariants
@@ -71,5 +71,3 @@ Minimize — stdlib first. Allowed exceptions:
 
 - [docs/architecture.md](docs/architecture.md) — package structure, interfaces, loop pseudocode,
   scenario format, Docker strategy, SQLite schema, prompt templates
-- [docs/sessions.md](docs/sessions.md) — 10-session roadmap with types, test criteria, done
-  conditions

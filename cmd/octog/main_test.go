@@ -418,3 +418,25 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 		t.Error("unknown key should not be set in environment")
 	}
 }
+
+func TestRunCmdInvalidThreshold(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"above 100", []string{"--spec", "s.md", "--scenarios", "s/", "--threshold", "200"}},
+		{"negative", []string{"--spec", "s.md", "--scenarios", "s/", "--threshold", "-1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runCmd(ctx, logger, tt.args)
+			if !errors.Is(err, errInvalidThreshold) {
+				t.Errorf("runCmd(%v) = %v, want %v", tt.args, err, errInvalidThreshold)
+			}
+		})
+	}
+}

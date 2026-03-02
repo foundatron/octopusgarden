@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	_ "modernc.org/sqlite" // Pure-Go SQLite driver (no CGO required)
 )
 
 // ErrRunNotFound is returned when a run ID does not exist in the store.
@@ -21,7 +21,7 @@ type Store struct {
 
 // NewStore opens a SQLite database at path and creates tables if needed.
 func NewStore(ctx context.Context, path string) (*Store, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}

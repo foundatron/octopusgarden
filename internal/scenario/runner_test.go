@@ -330,3 +330,64 @@ func TestRunnerContextCancellation(t *testing.T) {
 		t.Error("expected transport error from canceled context")
 	}
 }
+
+func TestSubstituteVarsJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		vars map[string]string
+		want string
+	}{
+		{
+			name: "simple value",
+			s:    `{"name":"{val}"}`,
+			vars: map[string]string{"val": "hello"},
+			want: `{"name":"hello"}`,
+		},
+		{
+			name: "value with quotes",
+			s:    `{"name":"{val}"}`,
+			vars: map[string]string{"val": `say "hi"`},
+			want: `{"name":"say \"hi\""}`,
+		},
+		{
+			name: "value with newline",
+			s:    `{"name":"{val}"}`,
+			vars: map[string]string{"val": "line1\nline2"},
+			want: `{"name":"line1\nline2"}`,
+		},
+		{
+			name: "value with backslash",
+			s:    `{"path":"{val}"}`,
+			vars: map[string]string{"val": `C:\Users`},
+			want: `{"path":"C:\\Users"}`,
+		},
+		{
+			name: "no vars",
+			s:    `{"key":"value"}`,
+			vars: map[string]string{},
+			want: `{"key":"value"}`,
+		},
+		{
+			name: "multiple vars",
+			s:    `{"a":"{x}","b":"{y}"}`,
+			vars: map[string]string{"x": "1", "y": "2"},
+			want: `{"a":"1","b":"2"}`,
+		},
+		{
+			name: "unicode and special chars",
+			s:    `{"msg":"{val}"}`,
+			vars: map[string]string{"val": "tab\there & <angle>"},
+			want: `{"msg":"tab\there \u0026 \u003cangle\u003e"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := substituteVarsJSON(tt.s, tt.vars)
+			if got != tt.want {
+				t.Errorf("substituteVarsJSON(%q, %v)\n got %q\nwant %q", tt.s, tt.vars, got, tt.want)
+			}
+		})
+	}
+}

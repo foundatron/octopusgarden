@@ -43,6 +43,7 @@ func (j *Judge) Score(ctx context.Context, scenario Scenario, step Step, respons
 		SystemPrompt: llm.SatisfactionJudgeSystem,
 		UserPrompt:   userPrompt,
 		Model:        j.Model,
+		CacheControl: &llm.CacheControl{Type: "ephemeral"},
 	})
 	if err != nil {
 		return StepScore{}, fmt.Errorf("judge score: %w", err)

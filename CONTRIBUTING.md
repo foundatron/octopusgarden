@@ -9,7 +9,7 @@ cd octopusgarden
 
 Prerequisites:
 
-- Go 1.22+
+- Go 1.24+
 - Docker (for integration tests and running the factory)
 - [golangci-lint](https://golangci-lint.run/) v2
 - [pre-commit](https://pre-commit.com/)

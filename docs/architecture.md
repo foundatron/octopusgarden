@@ -41,7 +41,7 @@ octopusgarden/
 │   │   └── jsonpath.go         # Dot-notation JSONPath evaluator ($.field.sub)
 │   ├── attractor/
 │   │   ├── attractor.go        # Core attractor convergence loop
-│   │   ├── convergence.go      # Trend detection, checkpoint management
+│   │   ├── convergence.go      # Trend detection
 │   │   └── fileparse.go        # Parse LLM output into files, merge for patch mode
 │   ├── container/
 │   │   └── docker.go           # Build and run Docker containers
@@ -102,8 +102,7 @@ octopusgarden/
 │           ├── ownership.yaml
 │           └── not-found.yaml
 └── docs/
-    ├── architecture.md         # This file
-    └── sessions.md             # Implementation roadmap
+    └── architecture.md         # This file
 ```
 
 ## Package Dependency DAG
@@ -188,6 +187,9 @@ Uses `github.com/anthropics/anthropic-sdk-go`. Key features:
 
 Uses `github.com/sashabaranov/go-openai`. For GPT models and OpenAI-compatible endpoints (Ollama at
 `localhost:11434`).
+
+> **Note:** The OpenAI backend is currently a planned stub — it implements the `Client` interface
+> but is not yet wired into the CLI. Contributions welcome.
 
 ## Prompt Caching Strategy
 
@@ -478,8 +480,6 @@ Actual observed behavior:
 {observed}
 ```
 
-The combined `SatisfactionJudgePrompt` constant is deprecated.
-
 ### Scoring Guide
 
 - 100: Perfect match to expected behavior
@@ -638,16 +638,6 @@ new output on top.
 type Trend string // "improving", "plateau", "regressing", "converged"
 
 func DetectTrend(history []float64, threshold float64, stallLimit int) Trend
-
-type CheckpointMeta struct {
-    Iteration    int       `json:"iteration"`
-    Satisfaction float64   `json:"satisfaction"`
-    Trend        Trend     `json:"trend"`
-    Timestamp    time.Time `json:"timestamp"`
-}
-
-func SaveCheckpoint(dir string, files map[string]string, meta CheckpointMeta) error
-func LoadCheckpoint(dir string) (map[string]string, CheckpointMeta, error)
 ```
 
 `DetectTrend` classifies the score trajectory using a sliding window of size `stallLimit`:
@@ -656,8 +646,6 @@ func LoadCheckpoint(dir string) (map[string]string, CheckpointMeta, error)
 - `improving`: last score > baseline
 - `regressing`: last score < peak within window
 - `plateau`: all scores in window identical, or no movement
-
-Checkpoints save generated files alongside a `checkpoint.json` metadata file.
 
 ## Docker Container Strategy
 
@@ -747,9 +735,8 @@ Store as Go string constants in `internal/llm/prompt.go`.
 ### Code Generation Prompt
 
 The attractor builds the system prompt inline via `buildSystemPrompt()` in
-`internal/attractor/attractor.go`. The `CodeGenerationPrompt` constant in `prompt.go` exists as a
-reference template but is not directly used by the attractor — the attractor's version includes
-additional instructions about dependency management and port configuration.
+`internal/attractor/attractor.go`, which includes instructions about dependency management and port
+configuration.
 
 ### Satisfaction Judge Prompt
 
@@ -758,6 +745,3 @@ The judge uses split prompts for the `Judge` interface:
 - `SatisfactionJudgeSystem` — system prompt with scoring guide and JSON response format
 - `SatisfactionJudgeUser` — user prompt template with `{scenario_description}`,
   `{step_description}`, `{expected}`, and `{observed}` placeholders
-
-The combined `SatisfactionJudgePrompt` constant is deprecated — retained for backward compatibility
-but not used by the judge implementation.

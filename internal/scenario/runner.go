@@ -115,7 +115,7 @@ func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]str
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // cap at 10MB
 	if err != nil {
 		return req, HTTPResponse{}, dur, fmt.Errorf("read response body: %w", err)
 	}
@@ -162,13 +162,31 @@ func buildRequestBody(body any, vars map[string]string) ([]byte, error) {
 	case string:
 		return []byte(substituteVars(v, vars)), nil
 	default:
-		// map or slice from YAML — marshal to JSON, then substitute.
+		// map or slice from YAML — marshal to JSON, then substitute with JSON-safe escaping.
 		data, err := json.Marshal(v)
 		if err != nil {
 			return nil, fmt.Errorf("marshal body: %w", err)
 		}
-		return []byte(substituteVars(string(data), vars)), nil
+		return []byte(substituteVarsJSON(string(data), vars)), nil
 	}
+}
+
+// substituteVarsJSON replaces {name} placeholders in a JSON string with
+// JSON-escaped values. This prevents captured values containing quotes or
+// newlines from breaking the JSON structure.
+func substituteVarsJSON(s string, vars map[string]string) string {
+	for name, val := range vars {
+		escaped, err := json.Marshal(val)
+		if err != nil {
+			// Fallback to raw substitution if marshaling fails (shouldn't happen for strings).
+			s = strings.ReplaceAll(s, "{"+name+"}", val)
+			continue
+		}
+		// json.Marshal wraps the value in quotes — strip them for substitution
+		// since the placeholder is already inside a JSON string literal.
+		s = strings.ReplaceAll(s, "{"+name+"}", string(escaped[1:len(escaped)-1]))
+	}
+	return s
 }
 
 func applyCaptures(captures []Capture, responseBody string, vars map[string]string) error {

@@ -12,8 +12,6 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
-        env:
-          CGO_ENABLED: "1"
 
   lint:
     runs-on: ubuntu-latest

@@ -76,6 +76,14 @@ func newManager(docker dockerAPI, httpClient *http.Client, logger *slog.Logger) 
 	}
 }
 
+// Close closes the underlying Docker client if it implements io.Closer.
+func (m *Manager) Close() error {
+	if closer, ok := m.docker.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 // Build builds a Docker image from the given directory with the given tag.
 // The directory must contain a Dockerfile and all required build context files.
 func (m *Manager) Build(ctx context.Context, dir, tag string) error {

@@ -125,9 +125,15 @@ type judgeResult struct {
 func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeResponse, error) {
 	var system []anthropic.TextBlockParam
 	if req.SystemPrompt != "" {
-		system = append(system, anthropic.TextBlockParam{
+		block := anthropic.TextBlockParam{
 			Text: req.SystemPrompt,
-		})
+		}
+		if req.CacheControl != nil {
+			block.CacheControl = anthropic.CacheControlEphemeralParam{
+				TTL: anthropic.CacheControlEphemeralTTLTTL5m,
+			}
+		}
+		system = append(system, block)
 	}
 
 	messages := []anthropic.MessageParam{
@@ -152,9 +158,11 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 		content = text.Text
 	}
 
+	cacheCreation := int(resp.Usage.CacheCreationInputTokens)
+	cacheRead := int(resp.Usage.CacheReadInputTokens)
 	regularInput := int(resp.Usage.InputTokens)
 	output := int(resp.Usage.OutputTokens)
-	cost, usingFallback := CalculateCost(req.Model, regularInput, 0, 0, output)
+	cost, usingFallback := CalculateCost(req.Model, regularInput, cacheCreation, cacheRead, output)
 	if usingFallback {
 		c.logger.Warn("using fallback pricing for unknown model", "model", req.Model)
 	}
@@ -162,8 +170,11 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 	c.logger.Info("anthropic judge",
 		"model", req.Model,
 		"input_tokens", regularInput,
+		"cache_creation_tokens", cacheCreation,
+		"cache_read_tokens", cacheRead,
 		"output_tokens", output,
 		"cost_usd", cost,
+		"cache_hit", cacheRead > 0,
 	)
 
 	// Parse JSON response — strip markdown code fences if present.
