@@ -83,8 +83,6 @@ Requires: Go 1.22+, Docker, an Anthropic API key (`ANTHROPIC_API_KEY` env var).
   — Framework for AI coding maturity, from autocomplete to fully autonomous factories. OctopusGarden
   targets Level 5.
 
-No open-source project implements this pattern. OctopusGarden aims to fill that gap.
-
 ## Documentation
 
 - [Architecture](docs/architecture.md) — System design, data structures, LLM interfaces, Docker
