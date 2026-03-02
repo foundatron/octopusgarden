@@ -19,6 +19,12 @@ Commits must follow [Conventional Commits](https://www.conventionalcommits.org/)
 commit-msg hook. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`,
 `build`, `ci`, `revert`. Example: `feat(attractor): add stall detection`
 
+## API Key
+
+The Anthropic API key is stored in `~/.octopusgarden/config` (not an env var). Do not check for
+`ANTHROPIC_API_KEY` in the environment when running locally — the binary loads it from the config
+file automatically.
+
 ## Module & Packages
 
 `github.com/foundatron/octopusgarden` — Go 1.24+ — binary `octog` — subcommands: `run`, `validate`,

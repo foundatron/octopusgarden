@@ -10,6 +10,12 @@ type ModelPricing struct {
 
 // pricingTable maps model IDs to their pricing.
 var pricingTable = map[string]ModelPricing{
+	"claude-sonnet-4-6": {
+		InputPerMillion:      3.00,
+		OutputPerMillion:     15.00,
+		CacheWritePerMillion: 3.75,
+		CacheReadPerMillion:  0.30,
+	},
 	"claude-sonnet-4-20250514": {
 		InputPerMillion:      3.00,
 		OutputPerMillion:     15.00,
@@ -29,10 +35,10 @@ var pricingTable = map[string]ModelPricing{
 		CacheReadPerMillion:  0.10,
 	},
 	"claude-opus-4-5": {
-		InputPerMillion:      15.00,
-		OutputPerMillion:     75.00,
-		CacheWritePerMillion: 18.75,
-		CacheReadPerMillion:  1.50,
+		InputPerMillion:      5.00,
+		OutputPerMillion:     25.00,
+		CacheWritePerMillion: 6.25,
+		CacheReadPerMillion:  0.50,
 	},
 }
 
@@ -42,6 +48,24 @@ var fallbackPricing = ModelPricing{
 	OutputPerMillion:     75.00,
 	CacheWritePerMillion: 18.75,
 	CacheReadPerMillion:  1.50,
+}
+
+// modelAliases maps short names to full model IDs.
+var modelAliases = map[string]string{
+	"sonnet":        "claude-sonnet-4-6",
+	"claude-sonnet": "claude-sonnet-4-6",
+	"haiku":         "claude-haiku-4-5-20251001",
+	"claude-haiku":  "claude-haiku-4-5-20251001",
+	"opus":          "claude-opus-4-5",
+	"claude-opus":   "claude-opus-4-5",
+}
+
+// ResolveModel returns the full model ID for a given alias, or the input unchanged if not an alias.
+func ResolveModel(model string) string {
+	if full, ok := modelAliases[model]; ok {
+		return full
+	}
+	return model
 }
 
 // CalculateCost returns the estimated USD cost for a request given token counts.

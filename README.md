@@ -69,13 +69,19 @@ export ANTHROPIC_API_KEY=sk-...
 mkdir -p ~/.octopusgarden && echo "ANTHROPIC_API_KEY=sk-..." > ~/.octopusgarden/config
 ```
 
-Run the factory on the included example — an Items REST API:
+Run the factory on the included examples:
 
 ```bash
+# Simple Items REST API
 octog run \
   --spec specs/examples/hello-api/spec.md \
   --scenarios scenarios/examples/hello-api/ \
-  --model claude-sonnet-4-20250514 \
+  --threshold 90
+
+# Expense tracker with auth, categories, and summaries
+octog run \
+  --spec specs/examples/expense-tracker/spec.md \
+  --scenarios scenarios/examples/expense-tracker/ \
   --threshold 90
 ```
 
@@ -108,15 +114,15 @@ Commands:
 
 ### `run`
 
-| Flag               | Default                    | Description                                                    |
-| ------------------ | -------------------------- | -------------------------------------------------------------- |
-| `--spec`           | *(required)*               | Path to the spec markdown file                                 |
-| `--scenarios`      | *(required)*               | Path to the scenarios directory                                |
-| `--model`          | `claude-sonnet-4-20250514` | LLM model for code generation                                  |
-| `--budget`         | `5.00`                     | Maximum spend in USD                                           |
-| `--threshold`      | `95`                       | Satisfaction target (0-100)                                    |
-| `--patch`          | `false`                    | Incremental patch mode (iteration 2+ sends only changed files) |
-| `--context-budget` | `0`                        | Max estimated tokens for spec in system prompt; 0 = unlimited  |
+| Flag               | Default             | Description                                                    |
+| ------------------ | ------------------- | -------------------------------------------------------------- |
+| `--spec`           | *(required)*        | Path to the spec markdown file                                 |
+| `--scenarios`      | *(required)*        | Path to the scenarios directory                                |
+| `--model`          | `claude-sonnet-4-6` | LLM model for code generation                                  |
+| `--budget`         | `5.00`              | Maximum spend in USD                                           |
+| `--threshold`      | `95`                | Satisfaction target (0-100)                                    |
+| `--patch`          | `false`             | Incremental patch mode (iteration 2+ sends only changed files) |
+| `--context-budget` | `0`                 | Max estimated tokens for spec in system prompt; 0 = unlimited  |
 
 ### `validate`
 

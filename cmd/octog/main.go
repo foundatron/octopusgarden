@@ -126,6 +126,8 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errInvalidThreshold
 	}
 
+	*model = llm.ResolveModel(*model)
+
 	// Parse spec.
 	parsedSpec, err := spec.ParseFile(*specFlag)
 	if err != nil {
