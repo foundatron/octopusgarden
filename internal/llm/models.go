@@ -16,6 +16,12 @@ var pricingTable = map[string]ModelPricing{
 		CacheWritePerMillion: 3.75,
 		CacheReadPerMillion:  0.30,
 	},
+	"claude-sonnet-4-6": {
+		InputPerMillion:      3.00,
+		OutputPerMillion:     15.00,
+		CacheWritePerMillion: 3.75,
+		CacheReadPerMillion:  0.30,
+	},
 	"claude-haiku-3-5-20241022": {
 		InputPerMillion:      0.80,
 		OutputPerMillion:     4.00,
@@ -28,15 +34,22 @@ var pricingTable = map[string]ModelPricing{
 		CacheWritePerMillion: 1.25,
 		CacheReadPerMillion:  0.10,
 	},
+	"claude-haiku-4-5": {
+		InputPerMillion:      1.00,
+		OutputPerMillion:     5.00,
+		CacheWritePerMillion: 1.25,
+		CacheReadPerMillion:  0.10,
+	},
 	"claude-opus-4-5": {
-		InputPerMillion:      15.00,
-		OutputPerMillion:     75.00,
-		CacheWritePerMillion: 18.75,
-		CacheReadPerMillion:  1.50,
+		InputPerMillion:      5.00,
+		OutputPerMillion:     25.00,
+		CacheWritePerMillion: 6.25,
+		CacheReadPerMillion:  0.50,
 	},
 }
 
-// fallbackPricing is used for unknown models (conservative/expensive).
+// fallbackPricing is used for unknown models. Intentionally set to the most
+// expensive known model tier to avoid under-reporting costs.
 var fallbackPricing = ModelPricing{
 	InputPerMillion:      15.00,
 	OutputPerMillion:     75.00,

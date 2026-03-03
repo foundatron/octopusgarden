@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -112,6 +113,31 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		CacheHit:     cacheRead > 0,
 		CostUSD:      cost,
 	}, nil
+}
+
+// AvailableModel holds metadata about an available model.
+type AvailableModel struct {
+	ID          string
+	DisplayName string
+	CreatedAt   time.Time
+}
+
+// ListModels queries the Anthropic API for available models.
+func (c *AnthropicClient) ListModels(ctx context.Context) ([]AvailableModel, error) {
+	iter := c.client.Models.ListAutoPaging(ctx, anthropic.ModelListParams{})
+	var models []AvailableModel
+	for iter.Next() {
+		m := iter.Current()
+		models = append(models, AvailableModel{
+			ID:          m.ID,
+			DisplayName: m.DisplayName,
+			CreatedAt:   m.CreatedAt,
+		})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("anthropic list models: %w", err)
+	}
+	return models, nil
 }
 
 // judgeResult is the expected JSON structure from the judge LLM.

@@ -69,14 +69,28 @@ export ANTHROPIC_API_KEY=sk-...
 mkdir -p ~/.octopusgarden && echo "ANTHROPIC_API_KEY=sk-..." > ~/.octopusgarden/config
 ```
 
-Run the factory on the included example — an Items REST API:
+Run the factory on the included examples:
 
 ```bash
+# Items REST API (uses default model: claude-sonnet-4-6)
 octog run \
   --spec specs/examples/hello-api/spec.md \
   --scenarios scenarios/examples/hello-api/ \
-  --model claude-sonnet-4-20250514 \
   --threshold 90
+
+# Todo app with auth
+octog run \
+  --spec specs/examples/todo-app/spec.md \
+  --scenarios scenarios/examples/todo-app/ \
+  --model claude-sonnet-4-6 \
+  --judge-model claude-haiku-4-5
+
+# Expense tracker
+octog run \
+  --spec specs/examples/expense-tracker/spec.md \
+  --scenarios scenarios/examples/expense-tracker/ \
+  --model claude-sonnet-4-6 \
+  --judge-model claude-haiku-4-5
 ```
 
 Validate a running service against scenarios independently:
@@ -87,9 +101,10 @@ octog validate \
   --target http://localhost:8080
 ```
 
-Check past run history:
+List available models and check past runs:
 
 ```bash
+octog models
 octog status
 ```
 
@@ -104,27 +119,32 @@ Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
+  models     List available models
 ```
+
+Run `octog models` to list available models.
 
 ### `run`
 
-| Flag               | Default                    | Description                                                    |
-| ------------------ | -------------------------- | -------------------------------------------------------------- |
-| `--spec`           | *(required)*               | Path to the spec markdown file                                 |
-| `--scenarios`      | *(required)*               | Path to the scenarios directory                                |
-| `--model`          | `claude-sonnet-4-20250514` | LLM model for code generation                                  |
-| `--budget`         | `5.00`                     | Maximum spend in USD                                           |
-| `--threshold`      | `95`                       | Satisfaction target (0-100)                                    |
-| `--patch`          | `false`                    | Incremental patch mode (iteration 2+ sends only changed files) |
-| `--context-budget` | `0`                        | Max estimated tokens for spec in system prompt; 0 = unlimited  |
+| Flag               | Default             | Description                                                    |
+| ------------------ | ------------------- | -------------------------------------------------------------- |
+| `--spec`           | *(required)*        | Path to the spec markdown file                                 |
+| `--scenarios`      | *(required)*        | Path to the scenarios directory                                |
+| `--model`          | `claude-sonnet-4-6` | LLM model for code generation                                  |
+| `--judge-model`    | `claude-haiku-4-5`  | LLM model for satisfaction judging                             |
+| `--budget`         | `5.00`              | Maximum spend in USD                                           |
+| `--threshold`      | `95`                | Satisfaction target (0-100)                                    |
+| `--patch`          | `false`             | Incremental patch mode (iteration 2+ sends only changed files) |
+| `--context-budget` | `0`                 | Max estimated tokens for spec in system prompt; 0 = unlimited  |
 
 ### `validate`
 
-| Flag          | Default      | Description                                                         |
-| ------------- | ------------ | ------------------------------------------------------------------- |
-| `--scenarios` | *(required)* | Path to the scenarios directory                                     |
-| `--target`    | *(required)* | URL of the running service to validate                              |
-| `--threshold` | `0`          | Minimum satisfaction score; non-zero enables exit code 1 on failure |
+| Flag            | Default            | Description                                                         |
+| --------------- | ------------------ | ------------------------------------------------------------------- |
+| `--scenarios`   | *(required)*       | Path to the scenarios directory                                     |
+| `--target`      | *(required)*       | URL of the running service to validate                              |
+| `--judge-model` | `claude-haiku-4-5` | LLM model for satisfaction judging                                  |
+| `--threshold`   | `0`                | Minimum satisfaction score; non-zero enables exit code 1 on failure |
 
 ### `status`
 
