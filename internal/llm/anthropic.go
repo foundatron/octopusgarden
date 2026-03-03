@@ -15,6 +15,10 @@ import (
 // Compile-time check that AnthropicClient implements Client.
 var _ Client = (*AnthropicClient)(nil)
 
+// maxRetries is set higher than the SDK default (2) to handle sustained
+// bursts of 529 Overloaded responses during parallel judge calls.
+const maxRetries = 5
+
 // AnthropicClient implements Client using the Anthropic API with prompt caching.
 type AnthropicClient struct {
 	client anthropic.Client
@@ -24,8 +28,8 @@ type AnthropicClient struct {
 // NewAnthropicClient creates a new Anthropic client. The variadic opts enable
 // test injection via option.WithBaseURL(server.URL).
 func NewAnthropicClient(apiKey string, logger *slog.Logger, opts ...option.RequestOption) *AnthropicClient {
-	allOpts := make([]option.RequestOption, 0, 1+len(opts))
-	allOpts = append(allOpts, option.WithAPIKey(apiKey))
+	allOpts := make([]option.RequestOption, 0, 2+len(opts))
+	allOpts = append(allOpts, option.WithAPIKey(apiKey), option.WithMaxRetries(maxRetries))
 	allOpts = append(allOpts, opts...)
 	return &AnthropicClient{
 		client: anthropic.NewClient(allOpts...),
