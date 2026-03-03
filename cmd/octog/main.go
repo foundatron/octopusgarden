@@ -22,6 +22,7 @@ import (
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
+	"github.com/foundatron/octopusgarden/internal/lint"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/spec"
@@ -65,6 +66,8 @@ func main() {
 		err = validateCmd(ctx, logger, os.Args[2:])
 	case "status":
 		err = statusCmd(ctx, logger, os.Args[2:])
+	case "lint":
+		err = lintCmd(ctx, logger, os.Args[2:])
 	case "models":
 		err = modelsCmd(ctx, logger, os.Args[2:])
 	default:
@@ -89,6 +92,7 @@ Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
+  lint       Check spec and scenario files for errors
   models     List available models
 
 Run 'octog <command> --help' for details.
@@ -345,6 +349,65 @@ func modelsCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fmt.Printf("%-40s %-30s %s\n", "ID", "NAME", "CREATED")
 	for _, m := range models {
 		fmt.Printf("%-40s %-30s %s\n", m.ID, m.DisplayName, m.CreatedAt.Format(time.DateOnly))
+	}
+	return nil
+}
+
+var (
+	errLintSpecOrScenarios = errors.New("at least one of --spec or --scenarios is required")
+	errLintFailed          = errors.New("lint found errors")
+)
+
+func lintCmd(_ context.Context, _ *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("lint", flag.ContinueOnError)
+	specFlag := fs.String("spec", "", "path to spec file to lint")
+	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory to lint")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: octog lint [flags]\n\nCheck spec and scenario files for errors.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *specFlag == "" && *scenariosFlag == "" {
+		fs.Usage()
+		return errLintSpecOrScenarios
+	}
+
+	var allDiags []lint.Diagnostic
+
+	if *specFlag != "" {
+		diags, err := lint.CheckSpec(*specFlag)
+		if err != nil {
+			return fmt.Errorf("lint spec: %w", err)
+		}
+		allDiags = append(allDiags, diags...)
+	}
+
+	if *scenariosFlag != "" {
+		diags, err := lint.CheckScenarioDir(*scenariosFlag)
+		if err != nil {
+			return fmt.Errorf("lint scenarios: %w", err)
+		}
+		allDiags = append(allDiags, diags...)
+	}
+
+	for _, d := range allDiags {
+		fmt.Fprintln(os.Stderr, d.String()) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+	}
+
+	errs, warns := lint.CountByLevel(allDiags)
+	if errs == 0 && warns == 0 {
+		fmt.Fprintln(os.Stderr, "No issues found.")
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "\n%d error(s), %d warning(s)\n", errs, warns) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+	if errs > 0 {
+		return errLintFailed
 	}
 	return nil
 }

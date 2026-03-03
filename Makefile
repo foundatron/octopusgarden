@@ -2,7 +2,7 @@
 
 BINARY := octog
 
-.PHONY: all help build test lint fmt clean
+.PHONY: all help build test lint fmt generate clean
 
 all: build
 
@@ -18,6 +18,9 @@ test: ## Run tests
 
 lint: ## Run golangci-lint (full module)
 	golangci-lint run ./...
+
+generate: ## Run go generate
+	go generate ./...
 
 fmt: ## Format with gci + gofumpt
 	golangci-lint fmt ./...
