@@ -1,0 +1,244 @@
+package lint
+
+//go:generate go run ./gen
+
+// Rule describes a single lint rule for documentation and sync-testing.
+type Rule struct {
+	ID          string // e.g. "S001", "SC001"
+	Level       Level  // Error or Warning
+	Summary     string // one-line description for docs
+	Detail      string // optional longer explanation
+	MsgContains string // substring that the diagnostic message must contain (for sync tests)
+}
+
+// SpecRules enumerates every diagnostic that CheckSpec can produce.
+var SpecRules = []Rule{
+	{
+		ID:          "S001",
+		Level:       Error,
+		Summary:     "spec file must not be empty",
+		MsgContains: "spec file is empty",
+	},
+	{
+		ID:          "S002",
+		Level:       Error,
+		Summary:     "spec must have a level-1 heading (title)",
+		MsgContains: "no level-1 heading found",
+	},
+	{
+		ID:          "S003",
+		Level:       Warning,
+		Summary:     "title should have description text after it",
+		MsgContains: "no description text after title heading",
+	},
+	{
+		ID:          "S004",
+		Level:       Warning,
+		Summary:     "sections should not be empty",
+		MsgContains: "has no content",
+	},
+	{
+		ID:          "S005",
+		Level:       Warning,
+		Summary:     "headings at the same level should be unique",
+		MsgContains: "duplicate heading",
+	},
+	{
+		ID:          "S006",
+		Level:       Warning,
+		Summary:     "fenced code blocks should be closed",
+		MsgContains: "unclosed fenced code block",
+	},
+}
+
+// ScenarioRules enumerates every diagnostic that CheckScenario/CheckScenarioDir can produce.
+var ScenarioRules = []Rule{
+	{
+		ID:          "SC001",
+		Level:       Error,
+		Summary:     "scenario file must not be empty",
+		MsgContains: "scenario file is empty",
+	},
+	{
+		ID:          "SC002",
+		Level:       Error,
+		Summary:     "file must be valid YAML",
+		MsgContains: "invalid YAML",
+	},
+	// SC003 reserved — the "empty YAML document" guard in lintScenarioContent is
+	// defense-in-depth; yaml.Unmarshal always produces a content node.
+	{
+		ID:          "SC004",
+		Level:       Error,
+		Summary:     "scenario root must be a YAML mapping",
+		MsgContains: "scenario must be a YAML mapping",
+	},
+	{
+		ID:          "SC005",
+		Level:       Error,
+		Summary:     "id field is required",
+		MsgContains: "missing required field: id",
+	},
+	{
+		ID:          "SC006",
+		Level:       Error,
+		Summary:     "id must not be empty",
+		MsgContains: "id must not be empty",
+	},
+	{
+		ID:          "SC007",
+		Level:       Error,
+		Summary:     "id must be lowercase alphanumeric with hyphens/underscores",
+		Detail:      "Must match ^[a-z0-9][a-z0-9_-]*$.",
+		MsgContains: "must match pattern ^[a-z0-9]",
+	},
+	{
+		ID:          "SC008",
+		Level:       Warning,
+		Summary:     "type should be one of the recognized values",
+		Detail:      "Recognized types: functional, api.",
+		MsgContains: "not one of: functional",
+	},
+	{
+		ID:          "SC009",
+		Level:       Warning,
+		Summary:     "weight must be a number",
+		MsgContains: "weight must be a number",
+	},
+	{
+		ID:          "SC010",
+		Level:       Warning,
+		Summary:     "weight must be positive",
+		MsgContains: "weight must be positive",
+	},
+	{
+		ID:          "SC011",
+		Level:       Error,
+		Summary:     "steps field is required",
+		MsgContains: "missing required field: steps",
+	},
+	{
+		ID:          "SC012",
+		Level:       Error,
+		Summary:     "steps must be a non-empty array",
+		MsgContains: "steps must be a non-empty array",
+	},
+	{
+		ID:          "SC013",
+		Level:       Error,
+		Summary:     "setup must be an array",
+		MsgContains: "setup must be an array",
+	},
+	{
+		ID:          "SC014",
+		Level:       Error,
+		Summary:     "each step must be a YAML mapping",
+		MsgContains: "step must be a mapping",
+	},
+	{
+		ID:          "SC015",
+		Level:       Error,
+		Summary:     "step must have a request field",
+		MsgContains: "step missing required field: request",
+	},
+	{
+		ID:          "SC016",
+		Level:       Warning,
+		Summary:     "judged steps should have an expect field",
+		MsgContains: "step missing expect field",
+	},
+	{
+		ID:          "SC017",
+		Level:       Warning,
+		Summary:     "judged steps should have a description",
+		MsgContains: "step missing description field",
+	},
+	{
+		ID:          "SC018",
+		Level:       Error,
+		Summary:     "request must be a YAML mapping",
+		MsgContains: "request must be a mapping",
+	},
+	{
+		ID:          "SC019",
+		Level:       Error,
+		Summary:     "request must have a method",
+		MsgContains: "request missing required field: method",
+	},
+	{
+		ID:          "SC020",
+		Level:       Error,
+		Summary:     "HTTP method must be valid",
+		Detail:      "Allowed: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.",
+		MsgContains: "invalid HTTP method",
+	},
+	{
+		ID:          "SC021",
+		Level:       Error,
+		Summary:     "request must have a path",
+		MsgContains: "request missing required field: path",
+	},
+	{
+		ID:          "SC022",
+		Level:       Error,
+		Summary:     "capture must be an array",
+		MsgContains: "capture must be an array",
+	},
+	{
+		ID:          "SC023",
+		Level:       Error,
+		Summary:     "capture entries must be YAML mappings",
+		MsgContains: "capture entry must be a mapping",
+	},
+	{
+		ID:          "SC024",
+		Level:       Error,
+		Summary:     "capture must have a name field",
+		MsgContains: "capture missing required field: name",
+	},
+	{
+		ID:          "SC025",
+		Level:       Error,
+		Summary:     "capture name must not be empty",
+		MsgContains: "capture name must not be empty",
+	},
+	{
+		ID:          "SC026",
+		Level:       Error,
+		Summary:     "capture name must be a valid identifier",
+		Detail:      "Must match ^[a-zA-Z_][a-zA-Z0-9_]*$.",
+		MsgContains: "must match pattern ^[a-zA-Z_]",
+	},
+	{
+		ID:          "SC027",
+		Level:       Warning,
+		Summary:     "capture name shadows an earlier capture",
+		MsgContains: "shadows earlier capture",
+	},
+	{
+		ID:          "SC028",
+		Level:       Error,
+		Summary:     "capture must have a jsonpath field",
+		MsgContains: "capture missing required field: jsonpath",
+	},
+	{
+		ID:          "SC029",
+		Level:       Error,
+		Summary:     "jsonpath must use valid $.field.sub syntax",
+		Detail:      "Must start with $. followed by dot-separated field names.",
+		MsgContains: "invalid jsonpath",
+	},
+	{
+		ID:          "SC030",
+		Level:       Warning,
+		Summary:     "variable reference has no matching capture",
+		Detail:      "Variables use {name} syntax and must be captured in a prior step.",
+		MsgContains: "referenced but never captured",
+	},
+	{
+		ID:          "SC031",
+		Level:       Error,
+		Summary:     "scenario ids must be unique across a directory",
+		MsgContains: "duplicate scenario id",
+	},
+}

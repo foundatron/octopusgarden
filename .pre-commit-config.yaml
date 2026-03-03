@@ -39,11 +39,13 @@ repos:
         additional_dependencies:
           - mdformat-gfm
         args: [--wrap, "100"]
+        exclude: ^schemas/(spec|scenario)-format\.md$
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.21.0
     hooks:
       - id: markdownlint-cli2
+        exclude: ^schemas/(spec|scenario)-format\.md$
 
   # ── Shell scripts (future-proof, dormant until .sh files appear) ────────────
   - repo: https://github.com/shellcheck-py/shellcheck-py
@@ -68,6 +70,15 @@ repos:
     rev: v0.3.2
     hooks:
       - id: checkmake
+
+  # ── Go: generated docs must be up to date ──────────────────────────────────
+  - repo: local
+    hooks:
+      - id: go-generate-check
+        name: go generate (stale check)
+        language: system
+        entry: bash -c 'go generate ./... && git diff --exit-code -- schemas/spec-format.md schemas/scenario-format.md'
+        pass_filenames: false
 
   # ── Go: format + incremental lint on commit ─────────────────────────────────
   - repo: https://github.com/golangci/golangci-lint

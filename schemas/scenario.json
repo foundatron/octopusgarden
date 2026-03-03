@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/foundatron/octopusgarden/schemas/scenario.json",
+  "title": "OctopusGarden Scenario",
+  "description": "Holdout validation scenario for OctopusGarden. See docs/architecture.md for full specification.",
+  "type": "object",
+  "required": ["id", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "description": "Unique scenario identifier (lowercase alphanumeric, hyphens, underscores)."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what this scenario validates."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["functional", "api"],
+      "description": "Scenario type. Currently 'api' only for MVP; 'functional' also accepted."
+    },
+    "weight": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Relative weight for aggregate satisfaction scoring. Defaults to 1.0."
+    },
+    "satisfaction_criteria": {
+      "type": "string",
+      "description": "Overall criteria the LLM judge uses to evaluate this scenario."
+    },
+    "setup": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/step" },
+      "description": "Setup steps executed before judged steps. Failures are fatal."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" },
+      "description": "Judged steps. Each is scored by the LLM judge."
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["request"],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What this step does."
+        },
+        "request": { "$ref": "#/$defs/request" },
+        "expect": {
+          "type": "string",
+          "description": "Natural-language expectation judged by the LLM."
+        },
+        "capture": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capture" },
+          "description": "Variables to extract from the response for use in later steps."
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["method", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+          "description": "HTTP method."
+        },
+        "path": {
+          "type": "string",
+          "description": "Request path (may contain {variable} references)."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "HTTP headers as key-value pairs."
+        },
+        "body": {
+          "description": "Request body. Objects/arrays are JSON-serialized; strings sent as-is."
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "required": ["name", "jsonpath"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "description": "Variable name for substitution in later steps via {name}."
+        },
+        "jsonpath": {
+          "type": "string",
+          "pattern": "^\\$\\.",
+          "description": "Dot-notation JSONPath (e.g. $.id, $.data.name). Only scalar values supported."
+        }
+      }
+    }
+  }
+}
