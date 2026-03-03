@@ -339,6 +339,9 @@ func TestListModels(t *testing.T) {
 	}
 }
 
+// TestJudgeRetries529 verifies that the SDK retries Anthropic's non-standard
+// 529 "Overloaded" responses. With 48+ parallel judge calls during attractor
+// runs, we routinely hit this under burst traffic.
 func TestJudgeRetries529(t *testing.T) {
 	var attempts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
