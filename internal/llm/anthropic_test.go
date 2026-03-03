@@ -338,3 +338,40 @@ func TestListModels(t *testing.T) {
 		t.Errorf("models[1].DisplayName = %q, want %q", models[1].DisplayName, "Claude Haiku 4.5")
 	}
 }
+
+func TestJudgeRetries529(t *testing.T) {
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(529)
+			w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		judgeJSON := `{"score": 90, "reasoning": "good", "failures": []}`
+		w.Write([]byte(anthropicResponse(judgeJSON, 50, 0, 0, 30)))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(),
+		option.WithBaseURL(server.URL),
+	)
+
+	resp, err := client.Judge(context.Background(), JudgeRequest{
+		SystemPrompt: "judge prompt",
+		UserPrompt:   "evaluate this",
+		Model:        "claude-haiku-4-5-20251001",
+	})
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got error: %v", err)
+	}
+
+	if resp.Score != 90 {
+		t.Errorf("score = %d, want 90", resp.Score)
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", attempts)
+	}
+}

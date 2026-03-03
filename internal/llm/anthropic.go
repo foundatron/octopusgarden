@@ -24,8 +24,8 @@ type AnthropicClient struct {
 // NewAnthropicClient creates a new Anthropic client. The variadic opts enable
 // test injection via option.WithBaseURL(server.URL).
 func NewAnthropicClient(apiKey string, logger *slog.Logger, opts ...option.RequestOption) *AnthropicClient {
-	allOpts := make([]option.RequestOption, 0, 1+len(opts))
-	allOpts = append(allOpts, option.WithAPIKey(apiKey))
+	allOpts := make([]option.RequestOption, 0, 2+len(opts))
+	allOpts = append(allOpts, option.WithAPIKey(apiKey), option.WithMaxRetries(5))
 	allOpts = append(allOpts, opts...)
 	return &AnthropicClient{
 		client: anthropic.NewClient(allOpts...),
