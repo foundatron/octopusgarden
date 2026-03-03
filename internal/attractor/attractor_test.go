@@ -252,8 +252,8 @@ func TestBuildFailureFeedback(t *testing.T) {
 	if result.Status != StatusConverged {
 		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
 	}
-	if !strings.Contains(lastUserMsg, "build_error") {
-		t.Errorf("expected build error feedback in prompt, got: %s", lastUserMsg)
+	if !strings.Contains(lastUserMsg, "BUILD FAILURE") {
+		t.Errorf("expected build failure header in prompt, got: %s", lastUserMsg)
 	}
 }
 
@@ -1012,9 +1012,9 @@ func TestContextBudgetSummarizeFailureNonFatal(t *testing.T) {
 
 func TestExtractFailureStrings(t *testing.T) {
 	history := []iterationFeedback{
-		{iteration: 1, kind: "validation", message: "Satisfaction score: 60.0/100\nFailures:\n- missing endpoint"},
-		{iteration: 2, kind: "build_error", message: "Docker build failed: syntax error"},
-		{iteration: 3, kind: "validation", message: ""},
+		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 60.0/100\nFailures:\n- missing endpoint"},
+		{iteration: 2, kind: feedbackBuildError, message: "Docker build failed: syntax error"},
+		{iteration: 3, kind: feedbackValidation, message: ""},
 	}
 
 	failures := extractFailureStrings(history)

@@ -9,7 +9,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -107,13 +106,6 @@ type RunResult struct {
 	CostUSD      float64
 	OutputDir    string
 	Status       string
-}
-
-// iterationFeedback captures what happened in one iteration for building the next prompt.
-type iterationFeedback struct {
-	iteration int
-	kind      string // "validation", "build_error", "health_error", "parse_error"
-	message   string
 }
 
 // runState holds mutable state across iterations of the attractor loop.
@@ -283,7 +275,7 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 		a.logger.Warn("parse files failed", "iteration", iter, "error", err)
 		s.lastOutcome = OutcomeParseFail
 		s.lastSatisfaction = 0
-		s.recordStall(iter, "parse_error", fmt.Sprintf("Failed to parse generated files: %s", err))
+		s.recordStall(iter, feedbackParseError, fmt.Sprintf("Failed to parse generated files: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
 
@@ -309,7 +301,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		a.logger.Warn("build failed", "iteration", iter, "error", err)
 		s.lastOutcome = OutcomeBuildFail
 		s.lastSatisfaction = 0
-		s.recordStall(iter, "build_error", fmt.Sprintf("Docker build failed: %s", err))
+		s.recordStall(iter, feedbackBuildError, fmt.Sprintf("Docker build failed: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
 
@@ -318,7 +310,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		a.logger.Warn("container run failed", "iteration", iter, "error", err)
 		s.lastOutcome = OutcomeRunFail
 		s.lastSatisfaction = 0
-		s.recordStall(iter, "run_error", fmt.Sprintf("Container failed to start: %s", err))
+		s.recordStall(iter, feedbackRunError, fmt.Sprintf("Container failed to start: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
 	defer stop()
@@ -327,7 +319,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		a.logger.Warn("health check failed", "iteration", iter, "error", err)
 		s.lastOutcome = OutcomeHealthFail
 		s.lastSatisfaction = 0
-		s.recordStall(iter, "health_error", fmt.Sprintf("Health check failed: %s", err))
+		s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
 		return a.checkStalled(iter, s), nil
 	}
 
@@ -372,7 +364,7 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 
 	s.history = append(s.history, iterationFeedback{
 		iteration: iter,
-		kind:      "validation",
+		kind:      feedbackValidation,
 		message:   formatValidationFeedback(satisfaction, failures),
 	})
 
@@ -437,90 +429,6 @@ func generateRunID() string {
 	return fmt.Sprintf("%x", b)
 }
 
-// buildSystemPrompt creates the system prompt containing the spec.
-// This prompt is cached across iterations via CacheControl: ephemeral.
-func buildSystemPrompt(spec string) string {
-	return fmt.Sprintf(`You are a code generation agent. Your task is to generate a complete, working application based on the following specification.
-
-SPECIFICATION:
-%s
-
-INSTRUCTIONS:
-- Generate ALL files needed for a working application
-- Include a Dockerfile that builds and runs the application on port 8080
-- Output each file in this exact format:
-
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
-
-- Generate ONLY the file blocks, minimize explanatory text
-- The application MUST listen on port 8080
-- Include all dependencies and configuration files
-
-DEPENDENCY RULES:
-- ALWAYS prefer standard library over third-party dependencies. For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid), etc.
-- NEVER generate lock files or checksum files (go.sum, package-lock.json, yarn.lock, etc.) — you cannot compute valid hashes; the build will fail
-- For Go: generate only go.mod with no "require" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run "go mod tidy" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build
-- For Node.js: generate only package.json; use "npm install" in the Dockerfile
-- For Python: generate only requirements.txt; use "pip install" in the Dockerfile
-- Let the package manager resolve and verify dependencies at build time`, spec)
-}
-
-// buildMessages constructs the user message for the current iteration.
-// Iteration 1 gets a simple "Generate" prompt; subsequent iterations include
-// the last 3 failure summaries for context.
-func buildMessages(iter int, history []iterationFeedback) []llm.Message {
-	if iter == 1 || len(history) == 0 {
-		return []llm.Message{
-			{Role: "user", Content: "Generate the application according to the specification. Output all files using the === FILE: path === format."},
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString("The previous attempt did not fully satisfy the specification. Here is the feedback:\n\n")
-
-	// Include last 3 feedback entries.
-	start := max(len(history)-3, 0)
-	for _, fb := range history[start:] {
-		fmt.Fprintf(&b, "--- Iteration %d (%s) ---\n%s\n\n", fb.iteration, fb.kind, fb.message)
-	}
-
-	b.WriteString("Please generate a corrected version of the application. Output ALL files using the === FILE: path === format.")
-
-	return []llm.Message{
-		{Role: "user", Content: b.String()},
-	}
-}
-
-// buildPatchMessages constructs the user message for patch mode iterations.
-// It includes the previous best files as context and the most recent failures,
-// asking the LLM to output only changed files.
-func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64) []llm.Message {
-	var b strings.Builder
-	fmt.Fprintf(&b, "The current best version scored %.1f/100. Here are all current files:\n\n", bestScore)
-
-	paths := slices.Sorted(maps.Keys(bestFiles))
-	for _, p := range paths {
-		fmt.Fprintf(&b, "=== FILE: %s ===\n%s=== END FILE ===\n\n", p, bestFiles[p])
-	}
-
-	if len(history) > 0 {
-		b.WriteString("Failures to fix:\n\n")
-		start := max(len(history)-3, 0)
-		for _, fb := range history[start:] {
-			fmt.Fprintf(&b, "--- Iteration %d (%s) ---\n%s\n\n", fb.iteration, fb.kind, fb.message)
-		}
-	}
-
-	b.WriteString("Output ONLY the files that need to change using the === FILE: path === format. ")
-	b.WriteString("For files you are not changing, you may emit === UNCHANGED: path === as a comment, but this is optional.")
-
-	return []llm.Message{
-		{Role: "user", Content: b.String()},
-	}
-}
-
 // writeFiles writes the parsed file map to the given directory.
 // Validates that all paths resolve within the directory to prevent path traversal.
 func writeFiles(dir string, files map[string]string) error {
@@ -571,28 +479,4 @@ func (a *Attractor) trySummarize(ctx context.Context, rawSpec string) (*specpkg.
 		return nil, 0
 	}
 	return result.Summary, result.CostUSD
-}
-
-// extractFailureStrings pulls failure messages from history for section matching.
-func extractFailureStrings(history []iterationFeedback) []string {
-	var failures []string
-	for _, fb := range history {
-		if fb.message != "" {
-			failures = append(failures, fb.message)
-		}
-	}
-	return failures
-}
-
-// formatValidationFeedback formats validation results into feedback text for the LLM.
-func formatValidationFeedback(satisfaction float64, failures []string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Satisfaction score: %.1f/100\n", satisfaction)
-	if len(failures) > 0 {
-		b.WriteString("Failures:\n")
-		for _, f := range failures {
-			fmt.Fprintf(&b, "- %s\n", f)
-		}
-	}
-	return b.String()
 }
