@@ -447,6 +447,26 @@ func TestValidateJudgeFlags(t *testing.T) {
 	}
 }
 
+func TestValidateCmdInvalidFormat(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := validateCmd(ctx, logger, []string{
+		"--scenarios", "s/", "--target", "http://localhost:1", "--format", "xml",
+	})
+	if !errors.Is(err, errInvalidFormat) {
+		t.Errorf("validateCmd(--format xml) = %v, want %v", err, errInvalidFormat)
+	}
+}
+
+func TestStatusCmdInvalidFormat(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := statusCmd(ctx, logger, []string{"--format", "yaml"})
+	if !errors.Is(err, errInvalidFormat) {
+		t.Errorf("statusCmd(--format yaml) = %v, want %v", err, errInvalidFormat)
+	}
+}
+
 func TestRunCmdInvalidThreshold(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()

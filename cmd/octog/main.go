@@ -27,6 +27,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/spec"
 	"github.com/foundatron/octopusgarden/internal/store"
+	"github.com/foundatron/octopusgarden/internal/view"
 )
 
 // stepPassThreshold is the per-step score below which a step is labeled FAIL
@@ -41,6 +42,7 @@ var (
 	errBelowThreshold             = errors.New("satisfaction below threshold")
 	errInvalidThreshold           = errors.New("--threshold must be between 0 and 100")
 	errNoJudgeModelPricing        = errors.New("judge model has no pricing entry")
+	errInvalidFormat              = errors.New("--format must be \"text\" or \"json\"")
 )
 
 func main() {
@@ -228,6 +230,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	target := fs.String("target", "", "target URL to validate against (required)")
 	judgeModel := fs.String("judge-model", "claude-haiku-4-5", "LLM model for satisfaction judging")
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
+	format := fs.String("format", "text", "output format: text or json")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog validate [flags]\n\nFlags:\n")
@@ -236,6 +239,10 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *format != "text" && *format != "json" {
+		return errInvalidFormat
 	}
 
 	if *scenariosFlag == "" || *target == "" {
@@ -265,7 +272,15 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return fmt.Errorf("validate: %w", err)
 	}
 
-	fprintValidationResult(os.Stdout, agg)
+	switch *format {
+	case "json":
+		out := view.NewValidateOutput(agg, *target, *threshold, stepPassThreshold)
+		if err := view.WriteJSON(os.Stdout, out); err != nil {
+			return fmt.Errorf("write json: %w", err)
+		}
+	default:
+		fprintValidationResult(os.Stdout, agg)
+	}
 
 	if *threshold > 0 && agg.Satisfaction < *threshold {
 		return fmt.Errorf("%w: %.1f < %.1f", errBelowThreshold, agg.Satisfaction, *threshold)
@@ -275,13 +290,19 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 
 func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	format := fs.String("format", "text", "output format: text or json")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog status\n\nShow recent runs, scores, and costs.\n")
+		fmt.Fprintf(os.Stderr, "Usage: octog status [flags]\n\nShow recent runs, scores, and costs.\n\nFlags:\n")
+		fs.PrintDefaults()
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *format != "text" && *format != "json" {
+		return errInvalidFormat
 	}
 
 	storePath, err := resolveStorePath()
@@ -297,6 +318,11 @@ func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 	runs, err := st.ListRuns(ctx)
 	if err != nil {
 		return fmt.Errorf("list runs: %w", err)
+	}
+
+	if *format == "json" {
+		out := view.NewStatusOutput(runs)
+		return view.WriteJSON(os.Stdout, out)
 	}
 
 	if len(runs) == 0 {
