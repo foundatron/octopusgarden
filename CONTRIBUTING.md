@@ -83,8 +83,7 @@ internal/
   container/          Docker build and run
   llm/                LLM client interface (Anthropic + OpenAI backends)
   store/              SQLite run history
-specs/examples/       Example specs
-scenarios/examples/   Example scenarios (holdout sets)
+examples/             Example specs and scenarios (holdout sets)
 ```
 
 ## Design Invariants

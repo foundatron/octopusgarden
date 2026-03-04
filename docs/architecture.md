@@ -44,8 +44,10 @@ octopusgarden/
 │   │   └── prompt.go             # Prompt templates
 │   ├── lint/                     # Spec and scenario linting
 │   └── store/                    # SQLite run history (db.go, types.go)
-├── specs/examples/               # Example spec files
-├── scenarios/examples/           # Example scenario YAML files
+├── examples/                     # Example specs and scenarios
+│   └── <name>/
+│       ├── spec.md               # Spec file
+│       └── scenarios/            # Scenario YAML files
 └── docs/architecture.md          # This file
 ```
 

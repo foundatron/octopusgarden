@@ -580,7 +580,7 @@ steps:
 
 func TestCheckScenarioDir(t *testing.T) {
 	// Test with the actual example scenarios.
-	diags, err := CheckScenarioDir("../../scenarios/examples/hello-api")
+	diags, err := CheckScenarioDir("../../examples/hello-api/scenarios")
 	if err != nil {
 		t.Fatalf("CheckScenarioDir: %v", err)
 	}
