@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -77,6 +78,8 @@ func main() {
 		err = lintCmd(ctx, logger, os.Args[2:])
 	case "models":
 		err = modelsCmd(ctx, logger, os.Args[2:])
+	case "configure":
+		err = configureCmd(ctx, logger, os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1]) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 		printUsage()
@@ -101,6 +104,7 @@ Commands:
   status     Show recent runs, scores, and costs
   lint       Check spec and scenario files for errors
   models     List available models
+  configure  Interactively configure API keys
 
 Run 'octog <command> --help' for details.
 `)
@@ -661,7 +665,14 @@ func fprintValidationResult(w io.Writer, agg scenario.AggregateResult) {
 var configAllowedKeys = map[string]bool{
 	"ANTHROPIC_API_KEY": true,
 	"OPENAI_API_KEY":    true,
+	"OPENAI_BASE_URL":   true,
 }
+
+// configKeys defines the prompt order for `octog configure`.
+var configKeys = []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"}
+
+// configClearValue is the sentinel input that clears an existing config value.
+const configClearValue = "-"
 
 func configPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -686,7 +697,7 @@ func loadConfig(logger *slog.Logger) error {
 	}
 
 	// Warn if file is world-readable.
-	if perm := info.Mode().Perm(); perm&0o044 != 0 {
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		logger.Warn("config file has overly permissive permissions, recommend 0600",
 			"path", path, "mode", fmt.Sprintf("%04o", perm))
 	}
@@ -805,4 +816,180 @@ func printResult(result *attractor.RunResult) {
 	fmt.Printf("  Satisfaction: %.1f%%\n", result.Satisfaction)
 	fmt.Printf("  Cost:         $%.4f\n", result.CostUSD)
 	fmt.Printf("  Output:       %s\n", result.OutputDir)
+}
+
+func configureCmd(_ context.Context, _ *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: octog configure\n\nInteractively configure API keys and settings.\n")
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfgPath, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	return configureInteractive(os.Stdin, os.Stdout, cfgPath)
+}
+
+func configureInteractive(r io.Reader, w io.Writer, cfgPath string) error {
+	values, originalLines, err := readConfigFile(cfgPath)
+	if err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintf(w, "\nOctopusGarden Configuration\nConfig file: %s\n\n", cfgPath)
+
+	scanner := bufio.NewScanner(r)
+	newValues := make(map[string]string, len(configKeys))
+	maps.Copy(newValues, values)
+
+	for _, key := range configKeys {
+		current := values[key]
+		prompt := "not set"
+		if current != "" {
+			prompt = maskValue(current)
+		}
+		_, _ = fmt.Fprintf(w, "%s [%s]: ", key, prompt)
+		if !scanner.Scan() {
+			// EOF — keep all remaining values as-is.
+			break
+		}
+		input := strings.TrimSpace(scanner.Text())
+		switch {
+		case input == configClearValue:
+			delete(newValues, key)
+		case input != "":
+			newValues[key] = input
+		}
+		// Empty input (Enter) keeps the existing value.
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read input: %w", err)
+	}
+
+	_, _ = fmt.Fprintln(w)
+
+	// Warn if no API key is configured.
+	if newValues["ANTHROPIC_API_KEY"] == "" && newValues["OPENAI_API_KEY"] == "" {
+		_, _ = fmt.Fprintln(w, "Warning: no API key configured. Run 'octog configure' to add one.")
+		_, _ = fmt.Fprintln(w)
+	}
+
+	if err := writeConfigFile(cfgPath, newValues, originalLines); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintf(w, "Configuration saved to %s\n", cfgPath)
+	return nil
+}
+
+// maskValue masks a config value for display. Values 16+ chars show first4...last4,
+// shorter values show ****.
+func maskValue(value string) string {
+	if len(value) >= 16 {
+		return value[:4] + "..." + value[len(value)-4:]
+	}
+	return "****"
+}
+
+// readConfigFile reads a config file and returns a map of known key-value pairs
+// plus the original lines (for comment/ordering preservation). Returns an empty
+// map and nil lines if the file does not exist.
+func readConfigFile(path string) (map[string]string, []string, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: path derives from configPath()/UserHomeDir
+	if errors.Is(err, fs.ErrNotExist) {
+		return make(map[string]string), nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("open config: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	values := make(map[string]string)
+	var lines []string
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		lines = append(lines, line)
+
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		values[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read config: %w", err)
+	}
+	return values, lines, nil
+}
+
+// writeConfigFile writes config values to the given path, preserving comments and
+// unknown keys from originalLines. Known keys are updated in-place; new keys are
+// appended at the end in configKeys order. Creates the parent directory (0700) if needed.
+// Note: existing key lines are normalized to KEY=VALUE format (whitespace around = is removed).
+func writeConfigFile(path string, values map[string]string, originalLines []string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	// Track which keys we've written so we can append new ones.
+	written := make(map[string]bool)
+
+	var out []string
+	for _, line := range originalLines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			out = append(out, line)
+			continue
+		}
+		key, _, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			out = append(out, line)
+			continue
+		}
+		key = strings.TrimSpace(key)
+
+		if v, exists := values[key]; exists {
+			out = append(out, key+"="+v)
+			written[key] = true
+		} else {
+			// Key was cleared or is unknown-but-absent — only drop known keys.
+			if configAllowedKeys[key] {
+				// Cleared — omit the line.
+				written[key] = true
+			} else {
+				// Unknown key — pass through.
+				out = append(out, line)
+			}
+		}
+	}
+
+	// Append new keys that weren't in the original file, in configKeys order.
+	for _, key := range configKeys {
+		if written[key] {
+			continue
+		}
+		if v, exists := values[key]; exists {
+			out = append(out, key+"="+v)
+		}
+	}
+
+	content := strings.Join(out, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }

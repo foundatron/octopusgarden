@@ -61,11 +61,16 @@ cd octopusgarden
 make build
 ```
 
-Set your API key (either as an env var or in the config file):
+Configure your API key:
 
 ```bash
+# Interactive setup (recommended)
+octog configure
+
+# Or set an env var
 export ANTHROPIC_API_KEY=sk-...
-# or
+
+# Or write the config file directly
 mkdir -p ~/.octopusgarden && echo "ANTHROPIC_API_KEY=sk-..." > ~/.octopusgarden/config
 ```
 
@@ -120,6 +125,7 @@ Commands:
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
   models     List available models
+  configure  Interactively configure API keys
 ```
 
 Run `octog models` to list available models.
