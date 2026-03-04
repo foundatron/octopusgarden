@@ -48,7 +48,8 @@
       "additionalProperties": false,
       "oneOf": [
         { "required": ["request"] },
-        { "required": ["exec"] }
+        { "required": ["exec"] },
+        { "required": ["browser"] }
       ],
       "properties": {
         "description": {
@@ -57,6 +58,7 @@
         },
         "request": { "$ref": "#/$defs/request" },
         "exec": { "$ref": "#/$defs/exec_request" },
+        "browser": { "$ref": "#/$defs/browser_request" },
         "expect": {
           "type": "string",
           "description": "Natural-language expectation judged by the LLM."
@@ -138,8 +140,49 @@
         },
         "source": {
           "type": "string",
-          "enum": ["stdout", "stderr", "exitcode"],
-          "description": "Capture source for exec steps. Can be combined with jsonpath."
+          "enum": ["stdout", "stderr", "exitcode", "text", "html", "count", "location"],
+          "description": "Capture source for exec or browser steps. Can be combined with jsonpath."
+        }
+      }
+    },
+    "browser_request": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["navigate", "click", "fill", "assert"],
+          "description": "Browser action to perform."
+        },
+        "url": {
+          "type": "string",
+          "description": "URL path for navigate action (relative to base URL). May contain {variable} references."
+        },
+        "selector": {
+          "type": "string",
+          "description": "CSS selector for click, fill, and assert actions. May contain {variable} references."
+        },
+        "value": {
+          "type": "string",
+          "description": "Text to type for fill action. May contain {variable} references."
+        },
+        "text": {
+          "type": "string",
+          "description": "Assert: element must contain this text."
+        },
+        "text_absent": {
+          "type": "string",
+          "description": "Assert: element must NOT contain this text."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Assert: expected number of matching elements."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Wait timeout as a Go duration (e.g. '10s', '30s'). Default: 10s."
         }
       }
     }

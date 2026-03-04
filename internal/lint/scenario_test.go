@@ -87,7 +87,7 @@ steps:
     expect: "ok"
 `,
 			wantErrors: 1,
-			wantMsg:    "exactly one of request or exec is required",
+			wantMsg:    "exactly one of request, exec, or browser is required",
 		},
 		{
 			name: "missing method",
@@ -373,7 +373,7 @@ steps:
     expect: "ok"
 `,
 			wantErrors: 1,
-			wantMsg:    "both request and exec",
+			wantMsg:    "multiple step types",
 		},
 		{
 			name: "exec with variable reference",
@@ -549,6 +549,258 @@ steps:
 			wantWarns:  1,
 			wantMsg:    "never captured",
 		},
+		{
+			name: "valid browser navigate step",
+			yaml: `id: test
+steps:
+  - description: Open homepage
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "valid browser click step",
+			yaml: `id: test
+steps:
+  - description: Click button
+    browser:
+      action: click
+      selector: "#submit-btn"
+    expect: "Button clicked"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "valid browser fill step",
+			yaml: `id: test
+steps:
+  - description: Fill form
+    browser:
+      action: fill
+      selector: "#name-input"
+      value: "Test User"
+    expect: "Input filled"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "valid browser assert step",
+			yaml: `id: test
+steps:
+  - description: Check heading
+    browser:
+      action: assert
+      selector: h1
+      text: Welcome
+    expect: "Heading present"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "browser missing action",
+			yaml: `id: test
+steps:
+  - description: Bad step
+    browser: {}
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "browser missing required field: action",
+		},
+		{
+			name: "browser invalid action",
+			yaml: `id: test
+steps:
+  - description: Bad action
+    browser:
+      action: hover
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "invalid browser action",
+		},
+		{
+			name: "browser navigate missing url",
+			yaml: `id: test
+steps:
+  - description: Navigate nowhere
+    browser:
+      action: navigate
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "navigate action requires url",
+		},
+		{
+			name: "browser click missing selector",
+			yaml: `id: test
+steps:
+  - description: Click nothing
+    browser:
+      action: click
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "click action requires selector",
+		},
+		{
+			name: "browser fill missing selector",
+			yaml: `id: test
+steps:
+  - description: Fill nothing
+    browser:
+      action: fill
+      value: test
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "fill action requires selector",
+		},
+		{
+			name: "browser fill missing value",
+			yaml: `id: test
+steps:
+  - description: Fill no value
+    browser:
+      action: fill
+      selector: "#input"
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "fill action requires value",
+		},
+		{
+			name: "browser assert missing selector",
+			yaml: `id: test
+steps:
+  - description: Assert nothing
+    browser:
+      action: assert
+      text: Hello
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "assert action requires selector",
+		},
+		{
+			name: "browser assert no assertion fields warning",
+			yaml: `id: test
+steps:
+  - description: Assert nothing specific
+    browser:
+      action: assert
+      selector: h1
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "no assertion fields",
+		},
+		{
+			name: "browser invalid timeout",
+			yaml: `id: test
+steps:
+  - description: Bad timeout
+    browser:
+      action: navigate
+      url: /
+      timeout: notaduration
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "browser timeout: invalid duration",
+		},
+		{
+			name: "browser with variable substitution",
+			yaml: `id: test
+setup:
+  - description: Create item
+    request:
+      method: POST
+      path: /items
+    capture:
+      - name: item_id
+        jsonpath: $.id
+steps:
+  - description: View item
+    browser:
+      action: navigate
+      url: "/items/{item_id}"
+    expect: "Shows item"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "browser capture with valid source",
+			yaml: `id: test
+steps:
+  - description: Get text
+    browser:
+      action: navigate
+      url: /
+    expect: "ok"
+    capture:
+      - name: page_text
+        source: text
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "browser capture with invalid source",
+			yaml: `id: test
+steps:
+  - description: Bad source
+    browser:
+      action: navigate
+      url: /
+    expect: "ok"
+    capture:
+      - name: output
+        source: stdout
+`,
+			wantErrors: 1,
+			wantMsg:    "invalid source",
+		},
+		{
+			name: "browser and request on same step",
+			yaml: `id: test
+steps:
+  - description: Ambiguous
+    browser:
+      action: navigate
+      url: /
+    request:
+      method: GET
+      path: /
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "multiple step types",
+		},
+		{
+			name: "browser and exec on same step",
+			yaml: `id: test
+steps:
+  - description: Ambiguous
+    browser:
+      action: navigate
+      url: /
+    exec:
+      command: echo hello
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "multiple step types",
+		},
 	}
 
 	for _, tt := range tests {
@@ -681,5 +933,25 @@ func TestValidCaptureSourcesSyncWithScenario(t *testing.T) {
 	// method. Verify the lint map has no "request" entry to keep this invariant.
 	if _, ok := validCaptureSources["request"]; ok {
 		t.Error("validCaptureSources should not have a 'request' entry; HTTP steps do not support source captures")
+	}
+
+	// Browser sources: compare lint's validCaptureSources["browser"] with BrowserExecutor.ValidCaptureSources().
+	browserExecutor := &scenario.BrowserExecutor{}
+	browserSources := browserExecutor.ValidCaptureSources()
+	slices.Sort(browserSources)
+
+	browserLintSources := make([]string, 0, len(validCaptureSources["browser"]))
+	for k := range validCaptureSources["browser"] {
+		browserLintSources = append(browserLintSources, k)
+	}
+	slices.Sort(browserLintSources)
+
+	if len(browserSources) != len(browserLintSources) {
+		t.Fatalf("browser source count mismatch: scenario.BrowserExecutor has %v, lint has %v", browserSources, browserLintSources)
+	}
+	for i := range browserSources {
+		if browserSources[i] != browserLintSources[i] {
+			t.Errorf("browser source mismatch at index %d: scenario.BrowserExecutor has %q, lint has %q", i, browserSources[i], browserLintSources[i])
+		}
 	}
 }

@@ -447,6 +447,46 @@ func TestContainerRunFailure(t *testing.T) {
 	}
 }
 
+func TestNeedsBrowserTriggersHTTPContainer(t *testing.T) {
+	var runCalled, waitHealthyCalled bool
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runFn: func(_ context.Context, _ string) (string, container.StopFunc, error) {
+			runCalled = true
+			return "http://127.0.0.1:9999", func() {}, nil
+		},
+		waitHealthyFn: func(_ context.Context, _ string, _ time.Duration) error {
+			waitHealthyCalled = true
+			return nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Capabilities = ScenarioCapabilities{NeedsBrowser: true}
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build a web app", opts, validate, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !runCalled {
+		t.Error("expected container Run to be called when NeedsBrowser is true")
+	}
+	if !waitHealthyCalled {
+		t.Error("expected WaitHealthy to be called when NeedsBrowser is true")
+	}
+}
+
 func TestProgressCallback(t *testing.T) {
 	scores := []float64{60, 80, 100}
 	var callCount atomic.Int32

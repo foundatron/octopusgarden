@@ -21,7 +21,7 @@ Violations prevent the scenario from being loaded.
 | SC012 | steps must be a non-empty array |
 | SC013 | setup must be an array |
 | SC014 | each step must be a YAML mapping |
-| SC015 | step must have exactly one step type (request or exec) |
+| SC015 | step must have exactly one step type (request, exec, or browser) |
 | SC018 | request must be a YAML mapping |
 | SC019 | request must have a method |
 | SC020 | HTTP method must be valid — Allowed: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. |
@@ -34,7 +34,7 @@ Violations prevent the scenario from being loaded.
 | SC028 | capture must have jsonpath or source |
 | SC029 | jsonpath must use valid $.field.sub syntax — Must start with $. followed by dot-separated field names. |
 | SC031 | scenario ids must be unique across a directory |
-| SC032 | step must not have both request and exec |
+| SC032 | step must not have multiple step types |
 | SC033 | exec must be a YAML mapping |
 | SC034 | exec must have a command field |
 | SC035 | exec command must not be empty |
@@ -42,6 +42,15 @@ Violations prevent the scenario from being loaded.
 | SC037 | exec timeout must be a valid Go duration |
 | SC038 | capture source invalid for step type |
 | SC039 | source not supported on this step type |
+| SC040 | browser must be a YAML mapping |
+| SC041 | browser must have an action field |
+| SC042 | browser action must be navigate, click, fill, or assert |
+| SC043 | browser navigate requires url |
+| SC044 | browser click requires selector |
+| SC045 | browser fill requires selector |
+| SC046 | browser fill requires value |
+| SC047 | browser assert requires selector |
+| SC049 | browser timeout must be a valid Go duration — Uses same format as exec timeout (e.g. 10s, 30s). |
 
 ## SHOULD (Warnings)
 
@@ -56,6 +65,7 @@ Violations are reported but do not block loading.
 | SC017 | judged steps should have a description |
 | SC027 | capture name shadows an earlier capture |
 | SC030 | variable reference has no matching capture — Variables use {name} syntax and must be captured in a prior step. |
+| SC048 | browser assert should have assertion fields |
 
 ## Notes
 

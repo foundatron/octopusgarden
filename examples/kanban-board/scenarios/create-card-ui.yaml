@@ -1,0 +1,31 @@
+id: create-card-ui
+description: Create a card via the UI form and verify it appears in To Do
+type: functional
+satisfaction_criteria: Filling the input and clicking add creates a card visible in the To Do column
+
+steps:
+  - description: Navigate to the board
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads with the Kanban board."
+
+  - description: Fill in a new card title
+    browser:
+      action: fill
+      selector: "[data-testid='new-card-input']"
+      value: "Write unit tests"
+    expect: "The input field is filled with the text 'Write unit tests'."
+
+  - description: Click the add card button
+    browser:
+      action: click
+      selector: "[data-testid='add-card-button']"
+    expect: "The form is submitted and the page refreshes."
+
+  - description: Verify card appears in To Do column
+    browser:
+      action: assert
+      selector: "[data-column='todo']"
+      text: "Write unit tests"
+    expect: "The To Do column contains a card with title 'Write unit tests'."

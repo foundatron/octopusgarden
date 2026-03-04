@@ -72,8 +72,9 @@ type ProgressFunc func(IterationProgress)
 
 // ScenarioCapabilities describes what the loaded scenarios need from the container.
 type ScenarioCapabilities struct {
-	NeedsHTTP bool // any scenario has request steps
-	NeedsExec bool // any scenario has exec steps
+	NeedsHTTP    bool // any scenario has request steps
+	NeedsExec    bool // any scenario has exec steps
+	NeedsBrowser bool // any scenario has browser steps
 }
 
 // ContainerManager is the interface to Docker container operations.
@@ -398,7 +399,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		defer s.sessionProvider(nil) // clear session after validation
 	}
 
-	if caps.NeedsHTTP || !caps.NeedsExec {
+	if caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec {
 		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
 		var stop container.StopFunc
 		var err error

@@ -1,0 +1,30 @@
+id: api-reflects-ui
+description: Cards created via UI are visible through the API
+type: functional
+satisfaction_criteria: A card created through the browser form appears in GET /api/cards
+
+steps:
+  - description: Navigate to the board
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads with the Kanban board."
+
+  - description: Fill in a card title
+    browser:
+      action: fill
+      selector: "[data-testid='new-card-input']"
+      value: "Sync test card"
+    expect: "Input filled with 'Sync test card'."
+
+  - description: Submit the form
+    browser:
+      action: click
+      selector: "[data-testid='add-card-button']"
+    expect: "Form submitted and page refreshes."
+
+  - description: Verify card exists in the API
+    request:
+      method: GET
+      path: /api/cards
+    expect: "Status 200. Response array contains at least one card with 'title' equal to 'Sync test card' and 'column' equal to 'todo'."

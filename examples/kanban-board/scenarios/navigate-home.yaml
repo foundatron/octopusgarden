@@ -1,0 +1,32 @@
+id: navigate-home
+description: Home page renders the Kanban board with three columns
+type: functional
+satisfaction_criteria: The home page loads and displays three columns with correct headings
+
+steps:
+  - description: Navigate to the home page
+    browser:
+      action: navigate
+      url: /
+    expect: "Page contains an h1 with 'Kanban Board' and three columns labeled 'To Do', 'In Progress', and 'Done'."
+
+  - description: Verify the To Do column exists
+    browser:
+      action: assert
+      selector: "[data-column='todo']"
+      text: "To Do"
+    expect: "The To Do column element exists and contains the text 'To Do'."
+
+  - description: Verify the In Progress column exists
+    browser:
+      action: assert
+      selector: "[data-column='in-progress']"
+      text: "In Progress"
+    expect: "The In Progress column element exists and contains the text 'In Progress'."
+
+  - description: Verify the Done column exists
+    browser:
+      action: assert
+      selector: "[data-column='done']"
+      text: "Done"
+    expect: "The Done column element exists and contains the text 'Done'."

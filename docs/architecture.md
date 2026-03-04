@@ -135,7 +135,7 @@ import (
 )
 
 var (
-	errUnknownStepType = errors.New("step has no recognized step type (need request or exec)")
+	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, or browser)")
 	errNoCapture       = errors.New("capture has neither source nor jsonpath")
 )
 
@@ -144,6 +144,14 @@ const (
 	ExecSourceStdout   = "stdout"
 	ExecSourceStderr   = "stderr"
 	ExecSourceExitCode = "exitcode"
+)
+
+// Browser capture source constants.
+const (
+	BrowserSourceText     = "text"
+	BrowserSourceHTML     = "html"
+	BrowserSourceCount    = "count"
+	BrowserSourceLocation = "location"
 )
 
 // StepExecutor executes a single scenario step and returns its output.
@@ -171,20 +179,24 @@ type Scenario struct {
 
 // Step represents a single action within a scenario.
 type Step struct {
-	Description string       `yaml:"description"`
-	Request     *Request     `yaml:"request"`
-	Exec        *ExecRequest `yaml:"exec"`
-	Expect      string       `yaml:"expect"` // natural language, judged by LLM
-	Capture     []Capture    `yaml:"capture"`
+	Description string          `yaml:"description"`
+	Request     *Request        `yaml:"request"`
+	Exec        *ExecRequest    `yaml:"exec"`
+	Browser     *BrowserRequest `yaml:"browser"`
+	Expect      string          `yaml:"expect"` // natural language, judged by LLM
+	Capture     []Capture       `yaml:"capture"`
 }
 
-// StepType returns the step type key: "request", "exec", or "" if unknown.
+// StepType returns the step type key: "request", "exec", "browser", or "" if unknown.
 func (s Step) StepType() string {
 	if s.Request != nil {
 		return "request"
 	}
 	if s.Exec != nil {
 		return "exec"
+	}
+	if s.Browser != nil {
+		return "browser"
 	}
 	return ""
 }
@@ -203,6 +215,18 @@ type ExecRequest struct {
 	Stdin   string            `yaml:"stdin"`
 	Env     map[string]string `yaml:"env"`
 	Timeout string            `yaml:"timeout"`
+}
+
+// BrowserRequest describes a browser automation action.
+type BrowserRequest struct {
+	Action     string `yaml:"action"`      // navigate, click, fill, assert
+	URL        string `yaml:"url"`         // for navigate: path relative to BaseURL
+	Selector   string `yaml:"selector"`    // CSS selector for click, fill, assert
+	Value      string `yaml:"value"`       // for fill: text to type
+	Text       string `yaml:"text"`        // assert: element contains text
+	TextAbsent string `yaml:"text_absent"` // assert: element does NOT contain text
+	Count      *int   `yaml:"count"`       // assert: number of matching elements
+	Timeout    string `yaml:"timeout"`     // wait timeout (default: 10s)
 }
 
 // Capture defines a variable to extract from a response.

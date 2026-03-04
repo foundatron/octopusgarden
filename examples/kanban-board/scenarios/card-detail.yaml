@@ -1,0 +1,36 @@
+id: card-detail
+description: Card detail shows data-card-id attribute and delete button
+type: functional
+satisfaction_criteria: Cards rendered in the UI have correct data attributes and action buttons
+
+setup:
+  - description: Create a card via the API
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: "Review PR"
+    capture:
+      - name: card_id
+        jsonpath: $.id
+
+steps:
+  - description: Navigate to the board
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads showing the card 'Review PR'."
+
+  - description: Verify card has data-card-id attribute
+    browser:
+      action: assert
+      selector: "[data-card-id='{card_id}']"
+      text: "Review PR"
+    expect: "An element with data-card-id matching the card id exists and contains 'Review PR'."
+
+  - description: Verify card has a delete button
+    browser:
+      action: assert
+      selector: "[data-card-id='{card_id}'] [data-testid='delete-card']"
+      count: 1
+    expect: "The card element contains exactly one delete button."

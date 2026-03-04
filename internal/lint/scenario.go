@@ -270,29 +270,34 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 	var diags []Diagnostic
 	fields := nodeFields(node)
 
-	// Check step type — exactly one of request or exec must be present.
+	// Check step type — exactly one of request, exec, or browser must be present.
 	reqFE, hasReq := fields["request"]
 	execFE, hasExec := fields["exec"]
+	browserFE, hasBrowser := fields["browser"]
+
+	typeCount := countTrue(hasReq, hasExec, hasBrowser)
 
 	switch {
-	case hasReq && hasExec:
+	case typeCount > 1:
 		diags = append(diags, Diagnostic{
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step has both request and exec; exactly one step type is required",
+			Message: "step has multiple step types; exactly one of request, exec, or browser is required",
 		})
-	case !hasReq && !hasExec:
+	case typeCount == 0:
 		diags = append(diags, Diagnostic{
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step missing step type: exactly one of request or exec is required",
+			Message: "step missing step type: exactly one of request, exec, or browser is required",
 		})
 	case hasReq:
 		diags = append(diags, lintRequest(path, reqFE.value, cs)...)
 	case hasExec:
 		diags = append(diags, lintExec(path, execFE.value, cs)...)
+	case hasBrowser:
+		diags = append(diags, lintBrowser(path, browserFE.value, cs)...)
 	}
 
 	// Check expect (warning only, not required for setup).
@@ -321,6 +326,8 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 		stepType = "request"
 	} else if hasExec {
 		stepType = "exec"
+	} else if hasBrowser {
+		stepType = "browser"
 	}
 
 	// Check captures.
@@ -477,9 +484,118 @@ func lintRequest(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 	return diags
 }
 
+var validBrowserActions = map[string]bool{
+	"navigate": true, "click": true, "fill": true, "assert": true,
+}
+
+func lintBrowser(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+	if node.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "browser must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	// Check action (required).
+	actionFE, hasAction := fields["action"]
+	if !hasAction {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "browser missing required field: action",
+		})
+		return diags
+	}
+
+	action := actionFE.value.Value
+	if !validBrowserActions[action] {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    actionFE.value.Line,
+			Level:   Error,
+			Message: fmt.Sprintf("invalid browser action %q; valid actions: navigate, click, fill, assert", action),
+		})
+		return diags
+	}
+
+	// Action-specific required fields.
+	diags = append(diags, lintBrowserAction(path, action, node, fields, cs)...)
+
+	// Check variable references in text and text_absent.
+	if textFE, ok := fields["text"]; ok {
+		diags = append(diags, checkVarRefs(extractVarRefs(textFE.value.Value), cs, path, textFE.value.Line)...)
+	}
+	if taFE, ok := fields["text_absent"]; ok {
+		diags = append(diags, checkVarRefs(extractVarRefs(taFE.value.Value), cs, path, taFE.value.Line)...)
+	}
+
+	// Check timeout.
+	if timeoutFE, ok := fields["timeout"]; ok {
+		if timeoutFE.value.Value != "" {
+			if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+				diags = append(diags, Diagnostic{
+					File:    path,
+					Line:    timeoutFE.value.Line,
+					Level:   Error,
+					Message: fmt.Sprintf("browser timeout: invalid duration %q", timeoutFE.value.Value),
+				})
+			}
+		}
+	}
+
+	return diags
+}
+
+func lintBrowserAction(path, action string, node *yaml.Node, fields map[string]*fieldEntry, cs *captureSet) []Diagnostic {
+	var diags []Diagnostic
+	switch action {
+	case "navigate":
+		diags = append(diags, requireBrowserField(path, node, fields, cs, "url", "navigate")...)
+	case "click":
+		diags = append(diags, requireBrowserField(path, node, fields, cs, "selector", "click")...)
+	case "fill":
+		diags = append(diags, requireBrowserField(path, node, fields, cs, "selector", "fill")...)
+		diags = append(diags, requireBrowserField(path, node, fields, cs, "value", "fill")...)
+	case "assert":
+		diags = append(diags, requireBrowserField(path, node, fields, cs, "selector", "assert")...)
+		_, hasText := fields["text"]
+		_, hasTextAbsent := fields["text_absent"]
+		_, hasCount := fields["count"]
+		if !hasText && !hasTextAbsent && !hasCount {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    node.Line,
+				Level:   Warning,
+				Message: "browser assert has no assertion fields (text, text_absent, or count)",
+			})
+		}
+	}
+	return diags
+}
+
+func requireBrowserField(path string, node *yaml.Node, fields map[string]*fieldEntry, cs *captureSet, field, action string) []Diagnostic {
+	fe, ok := fields[field]
+	if !ok || fe.value.Value == "" {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: fmt.Sprintf("browser %s action requires %s", action, field),
+		}}
+	}
+	return checkVarRefs(extractVarRefs(fe.value.Value), cs, path, fe.value.Line)
+}
+
 // validCaptureSources defines valid source values per step type.
 var validCaptureSources = map[string]map[string]bool{
-	"exec": {"stdout": true, "stderr": true, "exitcode": true},
+	"exec":    {"stdout": true, "stderr": true, "exitcode": true},
+	"browser": {"text": true, "html": true, "count": true, "location": true},
 }
 
 func lintCaptures(path string, node *yaml.Node, cs *captureSet, stepType string) []Diagnostic {
@@ -660,4 +776,14 @@ func getFieldNode(fields map[string]*fieldEntry, name string) (*yaml.Node, int) 
 		return nil, 0
 	}
 	return fe.value, fe.key.Line
+}
+
+func countTrue(vals ...bool) int {
+	n := 0
+	for _, v := range vals {
+		if v {
+			n++
+		}
+	}
+	return n
 }

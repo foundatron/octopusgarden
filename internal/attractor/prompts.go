@@ -171,8 +171,9 @@ func buildSystemPrompt(spec string, caps ScenarioCapabilities) string {
 }
 
 func selectPromptSuffix(caps ScenarioCapabilities) string {
+	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
 	switch {
-	case caps.NeedsHTTP && caps.NeedsExec:
+	case needsHTTP && caps.NeedsExec:
 		return systemPromptSuffixBoth
 	case caps.NeedsExec:
 		return systemPromptSuffixCLI

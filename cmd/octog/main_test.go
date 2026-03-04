@@ -83,7 +83,7 @@ func TestRunAndScore(t *testing.T) {
 		},
 	}
 
-	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil })
+	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil }, false)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 
 	mock := &mockLLMClient{}
 	// Use unreachable address to deterministically cause connection errors.
-	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil })
+	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil }, false)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestValidateThreshold(t *testing.T) {
 				},
 			}
 
-			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil })
+			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil }, false)
 			if err != nil {
 				t.Fatalf("runAndScore: %v", err)
 			}
@@ -418,10 +418,11 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 
 func TestDetectCapabilities(t *testing.T) {
 	tests := []struct {
-		name      string
-		scenarios []scenario.Scenario
-		wantHTTP  bool
-		wantExec  bool
+		name        string
+		scenarios   []scenario.Scenario
+		wantHTTP    bool
+		wantExec    bool
+		wantBrowser bool
 	}{
 		{
 			name:      "empty scenarios",
@@ -504,6 +505,48 @@ func TestDetectCapabilities(t *testing.T) {
 			wantHTTP: true,
 			wantExec: true,
 		},
+		{
+			name: "browser only in steps",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "browser-only",
+					Steps: []scenario.Step{
+						{Browser: &scenario.BrowserRequest{Action: "navigate", URL: "/"}},
+					},
+				},
+			},
+			wantBrowser: true,
+		},
+		{
+			name: "browser and request",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "mixed",
+					Steps: []scenario.Step{
+						{Request: &scenario.Request{Method: "GET", Path: "/api/items"}},
+						{Browser: &scenario.BrowserRequest{Action: "navigate", URL: "/"}},
+					},
+				},
+			},
+			wantHTTP:    true,
+			wantBrowser: true,
+		},
+		{
+			name: "browser in setup",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "browser-setup",
+					Setup: []scenario.Step{
+						{Browser: &scenario.BrowserRequest{Action: "navigate", URL: "/"}},
+					},
+					Steps: []scenario.Step{
+						{Request: &scenario.Request{Method: "GET", Path: "/api/items"}},
+					},
+				},
+			},
+			wantHTTP:    true,
+			wantBrowser: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -514,6 +557,9 @@ func TestDetectCapabilities(t *testing.T) {
 			}
 			if caps.NeedsExec != tt.wantExec {
 				t.Errorf("NeedsExec = %v, want %v", caps.NeedsExec, tt.wantExec)
+			}
+			if caps.NeedsBrowser != tt.wantBrowser {
+				t.Errorf("NeedsBrowser = %v, want %v", caps.NeedsBrowser, tt.wantBrowser)
 			}
 		})
 	}
