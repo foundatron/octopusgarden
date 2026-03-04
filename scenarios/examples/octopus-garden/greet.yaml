@@ -1,0 +1,26 @@
+id: greet
+description: Greet command prints personalized octopus garden greeting
+type: functional
+satisfaction_criteria: Greet command produces personalized greetings and handles missing arguments correctly
+
+steps:
+  - description: Greet with a name
+    exec:
+      command: octopus-garden greet Alice
+    expect: "Exit code 0. Output contains the name 'Alice' and mentions 'garden' somewhere in the text."
+    capture:
+      - name: greet_exit
+        source: exitcode
+
+  - description: Greet with a different name
+    exec:
+      command: octopus-garden greet Bob
+    expect: "Exit code 0. Output contains the name 'Bob' and mentions 'garden' somewhere in the text."
+
+  - description: Greet with no name
+    exec:
+      command: octopus-garden greet
+    expect: "Exit code 1. Stderr contains a usage or error message."
+    capture:
+      - name: no_name_exit
+        source: exitcode

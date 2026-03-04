@@ -51,7 +51,7 @@ func TestSystemPromptContainsOnlySpec(t *testing.T) {
 	}
 
 	a := New(client, &mockContainerMgr{}, testLogger())
-	_, err := a.Run(context.Background(), specContent, defaultOpts(t), validate)
+	_, err := a.Run(context.Background(), specContent, defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestSystemPromptContainsOnlySpec(t *testing.T) {
 		t.Fatal("expected at least one LLM request to be captured")
 	}
 
-	expectedPrompt := buildSystemPrompt(specContent)
+	expectedPrompt := buildSystemPrompt(specContent, ScenarioCapabilities{})
 	for i, req := range captured {
 		if req.SystemPrompt != expectedPrompt {
 			t.Errorf("request %d: system prompt does not match buildSystemPrompt(spec)\ngot:  %s\nwant: %s", i, req.SystemPrompt, expectedPrompt)
@@ -109,7 +109,7 @@ func TestScenarioContentNeverInSystemPrompt(t *testing.T) {
 	opts.StallLimit = 100 // prevent stall exit
 
 	a := New(client, &mockContainerMgr{}, testLogger())
-	result, err := a.Run(context.Background(), specContent, opts, validate)
+	result, err := a.Run(context.Background(), specContent, opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

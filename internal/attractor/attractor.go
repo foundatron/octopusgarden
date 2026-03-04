@@ -65,12 +65,19 @@ type IterationProgress struct {
 // Implementations must return promptly.
 type ProgressFunc func(IterationProgress)
 
+// ScenarioCapabilities describes what the loaded scenarios need from the container.
+type ScenarioCapabilities struct {
+	NeedsHTTP bool // any scenario has request steps
+	NeedsExec bool // any scenario has exec steps
+}
+
 // ContainerManager is the interface to Docker container operations.
 // *container.Manager satisfies this automatically.
 type ContainerManager interface {
 	Build(ctx context.Context, dir, tag string) error
 	Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
 	WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
+	StartSession(ctx context.Context, tag string) (session *container.Session, stop container.StopFunc, err error)
 }
 
 // ValidateFn runs holdout scenarios against a running container and returns results.
@@ -87,15 +94,16 @@ type Attractor struct {
 // RunOptions configures the attractor loop.
 type RunOptions struct {
 	Model         string
-	BudgetUSD     float64       // 0 = unlimited
-	Threshold     float64       // default 95
-	MaxIterations int           // default 10
-	StallLimit    int           // default 3
-	WorkspaceDir  string        // default "./workspace"
-	HealthTimeout time.Duration // default 30s
-	Progress      ProgressFunc  // optional per-iteration callback
-	PatchMode     bool          // if true, iteration 2+ sends prev best files + failures
-	ContextBudget int           // max estimated tokens for spec in system prompt; 0 = unlimited
+	BudgetUSD     float64              // 0 = unlimited
+	Threshold     float64              // default 95
+	MaxIterations int                  // default 10
+	StallLimit    int                  // default 3
+	WorkspaceDir  string               // default "./workspace"
+	HealthTimeout time.Duration        // default 30s
+	Progress      ProgressFunc         // optional per-iteration callback
+	PatchMode     bool                 // if true, iteration 2+ sends prev best files + failures
+	ContextBudget int                  // max estimated tokens for spec in system prompt; 0 = unlimited
+	Capabilities  ScenarioCapabilities // detected from loaded scenarios
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -107,6 +115,10 @@ type RunResult struct {
 	OutputDir    string
 	Status       string
 }
+
+// SessionProviderFn is called by the attractor to set the current container session.
+// The CLI captures this and passes it to the ExecExecutor.
+type SessionProviderFn func(session *container.Session)
 
 // runState holds mutable state across iterations of the attractor loop.
 type runState struct {
@@ -126,6 +138,7 @@ type runState struct {
 	patchActive          bool                    // patch mode currently in effect (may disable on regression)
 	patchRegressionCount int                     // consecutive regressions while patch mode active
 	summarized           *specpkg.SummarizedSpec // nil if spec fits budget or budget is 0
+	sessionProvider      SessionProviderFn       // callback to set the current session
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -186,18 +199,24 @@ func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger) 
 // Run executes the attractor convergence loop.
 // spec is the specification content (never scenario content — holdout isolation).
 // validate is a closure provided by the CLI that runs scenarios and judges satisfaction.
+// sessionProvider is an optional callback called before validation to set the container session.
 // Returns a RunResult for normal termination, or an error for unrecoverable failures.
-func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, validate ValidateFn) (*RunResult, error) {
+func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, validate ValidateFn, sessionProvider SessionProviderFn) (*RunResult, error) {
 	if strings.TrimSpace(rawSpec) == "" {
 		return nil, errEmptySpec
 	}
 
+	if sessionProvider == nil {
+		sessionProvider = func(_ *container.Session) {} // no-op
+	}
+
 	opts = withDefaults(opts)
 	s := &runState{
-		runID:       generateRunID(),
-		opts:        opts,
-		startTime:   time.Now(),
-		patchActive: opts.PatchMode,
+		runID:           generateRunID(),
+		opts:            opts,
+		startTime:       time.Now(),
+		patchActive:     opts.PatchMode,
+		sessionProvider: sessionProvider,
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -259,7 +278,7 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(specContent),
+		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities),
 		Messages:     messages,
 		Model:        s.opts.Model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
@@ -294,7 +313,11 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 	return a.buildRunValidate(ctx, iter, iterDir, files, s, validate)
 }
 
-// buildRunValidate handles the Docker build → run → health check → validate pipeline.
+// buildRunValidate handles the Docker build → container setup → validate pipeline.
+// Capabilities drive the container strategy:
+//   - Always: build image, start session container
+//   - NeedsHTTP: also Run (expose port 8080), WaitHealthy
+//   - NeedsExec: pass session to validate via sessionProvider
 func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir string, files map[string]string, s *runState, validate ValidateFn) (*RunResult, error) {
 	tag := fmt.Sprintf("og-%s-iter%d", s.runID, iter)
 	if err := a.containerMgr.Build(ctx, iterDir, tag); err != nil {
@@ -305,22 +328,44 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		return a.checkStalled(iter, s), nil
 	}
 
-	url, stop, err := a.containerMgr.Run(ctx, tag)
-	if err != nil {
-		a.logger.Warn("container run failed", "iteration", iter, "error", err)
-		s.lastOutcome = OutcomeRunFail
-		s.lastSatisfaction = 0
-		s.recordStall(iter, feedbackRunError, fmt.Sprintf("Container failed to start: %s", err))
-		return a.checkStalled(iter, s), nil
-	}
-	defer stop()
+	caps := s.opts.Capabilities
+	var url string
 
-	if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
-		a.logger.Warn("health check failed", "iteration", iter, "error", err)
-		s.lastOutcome = OutcomeHealthFail
-		s.lastSatisfaction = 0
-		s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
-		return a.checkStalled(iter, s), nil
+	if caps.NeedsExec {
+		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
+		if err != nil {
+			a.logger.Warn("session start failed", "iteration", iter, "error", err)
+			s.lastOutcome = OutcomeRunFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackRunError, fmt.Sprintf("Session container failed to start: %s", err))
+			return a.checkStalled(iter, s), nil
+		}
+		defer stopSession()
+		s.sessionProvider(session)
+		defer s.sessionProvider(nil) // clear session after validation
+	}
+
+	if caps.NeedsHTTP || !caps.NeedsExec {
+		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
+		var stop container.StopFunc
+		var err error
+		url, stop, err = a.containerMgr.Run(ctx, tag)
+		if err != nil {
+			a.logger.Warn("container run failed", "iteration", iter, "error", err)
+			s.lastOutcome = OutcomeRunFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackRunError, fmt.Sprintf("Container failed to start: %s", err))
+			return a.checkStalled(iter, s), nil
+		}
+		defer stop()
+
+		if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
+			a.logger.Warn("health check failed", "iteration", iter, "error", err)
+			s.lastOutcome = OutcomeHealthFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
+			return a.checkStalled(iter, s), nil
+		}
 	}
 
 	satisfaction, failures, valCost, err := validate(ctx, url)

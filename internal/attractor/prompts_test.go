@@ -8,14 +8,14 @@ import (
 
 func TestBuildSystemPromptContainsSpec(t *testing.T) {
 	spec := "Build a REST API for managing widgets"
-	prompt := buildSystemPrompt(spec)
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{})
 	if !strings.Contains(prompt, spec) {
 		t.Error("system prompt should contain the spec")
 	}
 }
 
 func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
-	prompt := buildSystemPrompt("some spec")
+	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{})
 
 	checks := []string{
 		"EXAMPLE",
@@ -32,8 +32,8 @@ func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
 
 func TestBuildSystemPromptDeterministic(t *testing.T) {
 	spec := "Build a hello world app"
-	a := buildSystemPrompt(spec)
-	b := buildSystemPrompt(spec)
+	a := buildSystemPrompt(spec, ScenarioCapabilities{})
+	b := buildSystemPrompt(spec, ScenarioCapabilities{})
 	if a != b {
 		t.Error("buildSystemPrompt should produce identical output for the same spec")
 	}

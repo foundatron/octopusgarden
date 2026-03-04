@@ -218,8 +218,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC028",
 		Level:       Error,
-		Summary:     "capture must have a jsonpath field",
-		MsgContains: "capture missing required field: jsonpath",
+		Summary:     "capture must have jsonpath or source",
+		MsgContains: "capture requires at least one of jsonpath or source",
 	},
 	{
 		ID:          "SC029",
@@ -264,5 +264,29 @@ var ScenarioRules = []Rule{
 		Level:       Error,
 		Summary:     "exec command must not be empty",
 		MsgContains: "exec command must not be empty",
+	},
+	{
+		ID:          "SC036",
+		Level:       Error,
+		Summary:     "exec env must be a YAML mapping",
+		MsgContains: "exec env must be a mapping",
+	},
+	{
+		ID:          "SC037",
+		Level:       Error,
+		Summary:     "exec timeout must be a valid Go duration",
+		MsgContains: "not a valid duration",
+	},
+	{
+		ID:          "SC038",
+		Level:       Error,
+		Summary:     "capture source invalid for step type",
+		MsgContains: "invalid source",
+	},
+	{
+		ID:          "SC039",
+		Level:       Error,
+		Summary:     "source not supported on this step type",
+		MsgContains: "source is not supported on",
 	},
 }

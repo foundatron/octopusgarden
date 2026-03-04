@@ -1,0 +1,21 @@
+id: errors
+description: Error handling for unknown commands and flags
+type: functional
+satisfaction_criteria: Unknown commands and flags produce stderr output and exit code 1
+
+steps:
+  - description: Unknown command
+    exec:
+      command: octopus-garden unknown
+    expect: "Exit code 1. Stderr contains an error message about the unknown command."
+    capture:
+      - name: unknown_cmd_exit
+        source: exitcode
+
+  - description: Unknown flag on draw
+    exec:
+      command: octopus-garden draw --invalid
+    expect: "Exit code 1. Stderr contains an error message about the unknown flag."
+    capture:
+      - name: unknown_flag_exit
+        source: exitcode

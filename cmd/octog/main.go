@@ -174,7 +174,17 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	}
 	defer func() { _ = st.Close() }()
 
-	validateFn := buildValidateFn(scenarios, llmClient, logger, judgeModel)
+	caps := detectCapabilities(scenarios)
+
+	// Session provider pattern: the attractor sets the current session before
+	// calling validate, and the validate closure reads it to create ExecExecutors.
+	var currentSession *container.Session
+	sessionProvider := attractor.SessionProviderFn(func(session *container.Session) {
+		currentSession = session
+	})
+	sessionGetter := func() *container.Session { return currentSession }
+
+	validateFn := buildValidateFn(scenarios, llmClient, logger, judgeModel, sessionGetter)
 
 	att := attractor.New(llmClient, containerMgr, logger)
 	opts := attractor.RunOptions{
@@ -184,10 +194,11 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		PatchMode:     patchMode,
 		ContextBudget: contextBudget,
 		Progress:      progressFn(),
+		Capabilities:  caps,
 	}
 
 	startedAt := time.Now()
-	result, err := att.Run(ctx, parsedSpec.RawContent, opts, validateFn)
+	result, err := att.Run(ctx, parsedSpec.RawContent, opts, validateFn, sessionProvider)
 	if err != nil {
 		return fmt.Errorf("attractor run: %w", err)
 	}
@@ -197,6 +208,30 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	recordRun(ctx, logger, st, result, specPath, model, threshold, budget, startedAt, finishedAt)
 	printResult(result)
 	return nil
+}
+
+// detectCapabilities inspects loaded scenarios to determine what the container needs.
+func detectCapabilities(scenarios []scenario.Scenario) attractor.ScenarioCapabilities {
+	var caps attractor.ScenarioCapabilities
+	for _, sc := range scenarios {
+		for _, step := range sc.Setup {
+			if step.Request != nil {
+				caps.NeedsHTTP = true
+			}
+			if step.Exec != nil {
+				caps.NeedsExec = true
+			}
+		}
+		for _, step := range sc.Steps {
+			if step.Request != nil {
+				caps.NeedsHTTP = true
+			}
+			if step.Exec != nil {
+				caps.NeedsExec = true
+			}
+		}
+	}
+	return caps
 }
 
 func progressFn() func(attractor.IterationProgress) {
@@ -295,7 +330,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return fmt.Errorf("load scenarios: %w", err)
 	}
 
-	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel)
+	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil })
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -501,7 +536,7 @@ func resolveStorePath() (string, error) {
 	return filepath.Join(dir, "runs.db"), nil
 }
 
-func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string) (scenario.AggregateResult, error) {
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session) (scenario.AggregateResult, error) {
 	type indexedResult struct {
 		index int
 		ss    scenario.ScoredScenario
@@ -522,7 +557,7 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 			runner := scenario.NewRunner(
 				map[string]scenario.StepExecutor{
 					"request": &scenario.HTTPExecutor{Client: httpClient, BaseURL: targetURL},
-					"exec":    &scenario.ExecExecutor{},
+					"exec":    &scenario.ExecExecutor{Session: sessionGetter()},
 				},
 				logger,
 			)
@@ -576,9 +611,9 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 	return scenario.Aggregate(scored), nil
 }
 
-func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string) attractor.ValidateFn {
+func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session) attractor.ValidateFn {
 	return func(ctx context.Context, url string) (float64, []string, float64, error) {
-		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel)
+		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel, sessionGetter)
 		if err != nil {
 			return 0, nil, 0, err
 		}

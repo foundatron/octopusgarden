@@ -5,7 +5,17 @@ import (
 	"errors"
 )
 
-var errUnknownStepType = errors.New("step has no recognized step type (need request or exec)")
+var (
+	errUnknownStepType = errors.New("step has no recognized step type (need request or exec)")
+	errNoCapture       = errors.New("capture has neither source nor jsonpath")
+)
+
+// Exec capture source constants.
+const (
+	ExecSourceStdout   = "stdout"
+	ExecSourceStderr   = "stderr"
+	ExecSourceExitCode = "exitcode"
+)
 
 // StepExecutor executes a single scenario step and returns its output.
 type StepExecutor interface {
@@ -14,8 +24,9 @@ type StepExecutor interface {
 
 // StepOutput is the result of executing a step, independent of step type.
 type StepOutput struct {
-	Observed    string // formatted description for the judge
-	CaptureBody string // raw body for JSONPath capture extraction
+	Observed       string            // formatted description for the judge
+	CaptureBody    string            // raw body for JSONPath capture extraction
+	CaptureSources map[string]string // source-based capture data (e.g. "stdout", "stderr", "exitcode")
 }
 
 // Scenario represents a holdout validation scenario loaded from YAML.
@@ -59,11 +70,15 @@ type Request struct {
 
 // ExecRequest describes a CLI command to execute.
 type ExecRequest struct {
-	Command string `yaml:"command"`
+	Command string            `yaml:"command"`
+	Stdin   string            `yaml:"stdin"`
+	Env     map[string]string `yaml:"env"`
+	Timeout string            `yaml:"timeout"`
 }
 
 // Capture defines a variable to extract from a response.
 type Capture struct {
 	Name     string `yaml:"name"`     // variable name
 	JSONPath string `yaml:"jsonpath"` // path into response body
+	Source   string `yaml:"source"`   // capture source (e.g. "stdout", "stderr", "exitcode")
 }

@@ -57,7 +57,7 @@ const systemPromptPrefix = `You are a code generation agent. Your task is to gen
 SPECIFICATION:
 `
 
-const systemPromptSuffix = `
+const systemPromptSuffixHTTP = `
 
 INSTRUCTIONS:
 - Generate ALL files needed for a working application
@@ -91,7 +91,68 @@ CMD ["./server"]
 
 - Generate ONLY the file blocks, minimize explanatory text
 - The application MUST listen on port 8080
-- Include all dependencies and configuration files
+- Include all dependencies and configuration files`
+
+const systemPromptSuffixCLI = `
+
+INSTRUCTIONS:
+- Generate ALL files needed for a working command-line application
+- Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
+- Do NOT start a server or listen on any port. The application is a CLI tool invoked via command-line arguments.
+- Output each file in this exact format:
+
+=== FILE: path/to/file ===
+file content here
+=== END FILE ===
+
+EXAMPLE (showing correct format with two files):
+
+=== FILE: main.go ===
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: myapp <command>")
+		os.Exit(1)
+	}
+	fmt.Println("Hello from", os.Args[1])
+}
+=== END FILE ===
+=== FILE: Dockerfile ===
+FROM golang:1.22-alpine
+WORKDIR /app
+COPY go.mod ./
+COPY . .
+RUN go mod tidy
+RUN go build -o /usr/local/bin/myapp .
+=== END FILE ===
+
+- Generate ONLY the file blocks, minimize explanatory text
+- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)
+- Include all dependencies and configuration files`
+
+const systemPromptSuffixBoth = `
+
+INSTRUCTIONS:
+- Generate ALL files needed for a working application that serves both as an HTTP server AND a command-line tool
+- Include a Dockerfile that builds the application and installs it in PATH
+- The application MUST listen on port 8080 for HTTP requests
+- The application must also support command-line invocation for CLI operations
+- Output each file in this exact format:
+
+=== FILE: path/to/file ===
+file content here
+=== END FILE ===
+
+- Generate ONLY the file blocks, minimize explanatory text
+- Include all dependencies and configuration files`
+
+const dependencyRules = `
 
 DEPENDENCY RULES:
 - ALWAYS prefer standard library over third-party dependencies. For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid), etc.
@@ -103,9 +164,21 @@ DEPENDENCY RULES:
 
 // buildSystemPrompt creates the system prompt containing the spec.
 // This prompt is cached across iterations via CacheControl: ephemeral.
-// The prefix and suffix are constants to ensure cache key stability.
-func buildSystemPrompt(spec string) string {
-	return systemPromptPrefix + spec + systemPromptSuffix
+// The suffix is selected based on scenario capabilities.
+func buildSystemPrompt(spec string, caps ScenarioCapabilities) string {
+	suffix := selectPromptSuffix(caps)
+	return systemPromptPrefix + spec + suffix + dependencyRules
+}
+
+func selectPromptSuffix(caps ScenarioCapabilities) string {
+	switch {
+	case caps.NeedsHTTP && caps.NeedsExec:
+		return systemPromptSuffixBoth
+	case caps.NeedsExec:
+		return systemPromptSuffixCLI
+	default:
+		return systemPromptSuffixHTTP
+	}
 }
 
 // buildMessages constructs the user message for the current iteration.

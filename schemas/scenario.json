@@ -100,13 +100,31 @@
         "command": {
           "type": "string",
           "description": "Shell command to execute (run via sh -c). May contain {variable} references."
+        },
+        "stdin": {
+          "type": "string",
+          "description": "Input to send to the command's stdin. May contain {variable} references."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Environment variables to set. Values may contain {variable} references."
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
+          "description": "Command timeout as a Go duration (e.g. '30s', '5m', '100ms'). Default: 30s."
         }
       }
     },
     "capture": {
       "type": "object",
-      "required": ["name", "jsonpath"],
+      "required": ["name"],
       "additionalProperties": false,
+      "anyOf": [
+        { "required": ["jsonpath"] },
+        { "required": ["source"] }
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -117,6 +135,11 @@
           "type": "string",
           "pattern": "^\\$\\.",
           "description": "Dot-notation JSONPath (e.g. $.id, $.data.name). Only scalar values supported."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["stdout", "stderr", "exitcode"],
+          "description": "Capture source for exec steps. Can be combined with jsonpath."
         }
       }
     }

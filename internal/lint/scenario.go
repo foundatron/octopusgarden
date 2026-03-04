@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -313,10 +314,18 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 		}
 	}
 
+	// Determine step type for capture source validation.
+	var stepType string
+	if hasReq {
+		stepType = "request"
+	} else if hasExec {
+		stepType = "exec"
+	}
+
 	// Check captures.
 	capFE, hasCap := fields["capture"]
 	if hasCap {
-		diags = append(diags, lintCaptures(path, capFE.value, cs)...)
+		diags = append(diags, lintCaptures(path, capFE.value, cs, stepType)...)
 	}
 
 	return diags
@@ -355,6 +364,44 @@ func lintExec(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 		// Check variable references in command string.
 		refs := extractVarRefs(cmdFE.value.Value)
 		diags = append(diags, checkVarRefs(refs, cs, path, cmdFE.value.Line)...)
+	}
+
+	// Check variable references in stdin.
+	if stdinFE, ok := fields["stdin"]; ok {
+		refs := extractVarRefs(stdinFE.value.Value)
+		diags = append(diags, checkVarRefs(refs, cs, path, stdinFE.value.Line)...)
+	}
+
+	// Check env: must be a mapping with string values; check var refs in values.
+	if envFE, ok := fields["env"]; ok {
+		if envFE.value.Kind != yaml.MappingNode {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    envFE.value.Line,
+				Level:   Error,
+				Message: "exec env must be a mapping",
+			})
+		} else {
+			for i := 1; i < len(envFE.value.Content); i += 2 {
+				valNode := envFE.value.Content[i]
+				refs := extractVarRefs(valNode.Value)
+				diags = append(diags, checkVarRefs(refs, cs, path, valNode.Line)...)
+			}
+		}
+	}
+
+	// Check timeout: must be a valid Go duration.
+	if timeoutFE, ok := fields["timeout"]; ok {
+		if timeoutFE.value.Value != "" {
+			if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+				diags = append(diags, Diagnostic{
+					File:    path,
+					Line:    timeoutFE.value.Line,
+					Level:   Error,
+					Message: fmt.Sprintf("exec timeout %q is not a valid duration", timeoutFE.value.Value),
+				})
+			}
+		}
 	}
 
 	return diags
@@ -429,7 +476,12 @@ func lintRequest(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 	return diags
 }
 
-func lintCaptures(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+// validCaptureSources defines valid source values per step type.
+var validCaptureSources = map[string]map[string]bool{
+	"exec": {"stdout": true, "stderr": true, "exitcode": true},
+}
+
+func lintCaptures(path string, node *yaml.Node, cs *captureSet, stepType string) []Diagnostic {
 	if node.Kind != yaml.SequenceNode {
 		return []Diagnostic{{
 			File:    path,
@@ -456,16 +508,20 @@ func lintCaptures(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 		// Check name.
 		diags = append(diags, lintCaptureName(path, fields, capNode, cs)...)
 
-		// Check jsonpath.
+		// Check source and jsonpath — at least one must be present.
 		jpFE, hasJP := fields["jsonpath"]
-		if !hasJP {
+		srcFE, hasSrc := fields["source"]
+
+		if !hasJP && !hasSrc {
 			diags = append(diags, Diagnostic{
 				File:    path,
 				Line:    capNode.Line,
 				Level:   Error,
-				Message: "capture missing required field: jsonpath",
+				Message: "capture requires at least one of jsonpath or source",
 			})
-		} else {
+		}
+
+		if hasJP {
 			jp := jpFE.value.Value
 			if err := validateJSONPathSyntax(jp); err != nil {
 				diags = append(diags, Diagnostic{
@@ -476,9 +532,39 @@ func lintCaptures(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 				})
 			}
 		}
+
+		if hasSrc {
+			diags = append(diags, lintCaptureSource(path, srcFE.value, stepType)...)
+		}
 	}
 
 	return diags
+}
+
+func lintCaptureSource(path string, node *yaml.Node, stepType string) []Diagnostic {
+	src := node.Value
+	allowed := validCaptureSources[stepType]
+	if allowed == nil {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: fmt.Sprintf("source is not supported on %s steps", stepType),
+		}}
+	}
+	if !allowed[src] {
+		valid := make([]string, 0, len(allowed))
+		for k := range allowed {
+			valid = append(valid, k)
+		}
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: fmt.Sprintf("invalid source %q; valid sources for %s: %s", src, stepType, strings.Join(valid, ", ")),
+		}}
+	}
+	return nil
 }
 
 func lintCaptureName(path string, fields map[string]*fieldEntry, capNode *yaml.Node, cs *captureSet) []Diagnostic {
