@@ -12,6 +12,9 @@ import (
 	"github.com/foundatron/octopusgarden/internal/container"
 )
 
+// Compile-time interface satisfaction check.
+var _ attractor.ContainerManager = (*TracingContainerManager)(nil)
+
 // TracingContainerManager wraps an attractor.ContainerManager with OpenTelemetry spans.
 type TracingContainerManager struct {
 	inner  attractor.ContainerManager

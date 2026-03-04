@@ -10,6 +10,9 @@ import (
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
 
+// Compile-time interface satisfaction check.
+var _ llm.Client = (*TracingLLMClient)(nil)
+
 // TracingLLMClient wraps an llm.Client with OpenTelemetry spans.
 type TracingLLMClient struct {
 	inner  llm.Client

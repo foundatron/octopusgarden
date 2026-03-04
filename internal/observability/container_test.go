@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-
 	"github.com/foundatron/octopusgarden/internal/container"
 )
 
@@ -199,14 +197,4 @@ func TestTracingContainerSession(t *testing.T) {
 			}
 		})
 	}
-}
-
-func assertHasAttr(t *testing.T, attrs []attribute.KeyValue, key string) {
-	t.Helper()
-	for _, a := range attrs {
-		if string(a.Key) == key {
-			return
-		}
-	}
-	t.Errorf("expected attribute %q not found", key)
 }

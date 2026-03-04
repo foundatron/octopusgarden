@@ -20,6 +20,8 @@ func InitTracer(ctx context.Context, endpoint string) (trace.TracerProvider, fun
 		return noop.NewTracerProvider(), func(context.Context) error { return nil }, nil
 	}
 
+	// WithInsecure disables TLS for the OTLP exporter. Production deployments
+	// using HTTPS endpoints should remove this option or use WithTLSCredentials.
 	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithInsecure())
 	if err != nil {
 		return nil, nil, fmt.Errorf("init tracer: create exporter: %w", err)

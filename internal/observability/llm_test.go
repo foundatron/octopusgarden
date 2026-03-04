@@ -93,6 +93,18 @@ func TestTracingLLMClientGenerate(t *testing.T) {
 				if spans[0].Status.Code != codes.Error {
 					t.Error("expected error status on span")
 				}
+			} else {
+				for _, key := range tt.wantAttrs {
+					assertHasAttr(t, spans[0].Attributes, key)
+				}
+
+				// Verify actual attribute values match mock response.
+				assertAttrString(t, spans[0].Attributes, "llm.model", "test-model")
+				assertAttrInt(t, spans[0].Attributes, "llm.input_tokens", tt.resp.InputTokens)
+				assertAttrInt(t, spans[0].Attributes, "llm.output_tokens", tt.resp.OutputTokens)
+				assertAttrBool(t, spans[0].Attributes, "llm.cache_hit", tt.resp.CacheHit)
+				assertAttrFloat64(t, spans[0].Attributes, "llm.cost_usd", tt.resp.CostUSD)
+				assertAttrString(t, spans[0].Attributes, "llm.finish_reason", tt.resp.FinishReason)
 			}
 		})
 	}
@@ -100,14 +112,16 @@ func TestTracingLLMClientGenerate(t *testing.T) {
 
 func TestTracingLLMClientJudge(t *testing.T) {
 	tests := []struct {
-		name    string
-		resp    llm.JudgeResponse
-		err     error
-		wantErr bool
+		name      string
+		resp      llm.JudgeResponse
+		err       error
+		wantErr   bool
+		wantAttrs []string
 	}{
 		{
-			name: "success",
-			resp: llm.JudgeResponse{Score: 85, CostUSD: 0.005, Failures: []string{"minor"}},
+			name:      "success",
+			resp:      llm.JudgeResponse{Score: 85, CostUSD: 0.005, Failures: []string{"minor"}},
+			wantAttrs: []string{"llm.model", "llm.score", "llm.cost_usd", "llm.failure_count"},
 		},
 		{
 			name:    "error",
@@ -141,6 +155,22 @@ func TestTracingLLMClientJudge(t *testing.T) {
 			}
 			if spans[0].Name != "llm.judge" {
 				t.Errorf("expected span name llm.judge, got %q", spans[0].Name)
+			}
+
+			if tt.wantErr {
+				if spans[0].Status.Code != codes.Error {
+					t.Error("expected error status on span")
+				}
+			} else {
+				for _, key := range tt.wantAttrs {
+					assertHasAttr(t, spans[0].Attributes, key)
+				}
+
+				// Verify actual attribute values match mock response.
+				assertAttrString(t, spans[0].Attributes, "llm.model", "judge-model")
+				assertAttrInt(t, spans[0].Attributes, "llm.score", tt.resp.Score)
+				assertAttrFloat64(t, spans[0].Attributes, "llm.cost_usd", tt.resp.CostUSD)
+				assertAttrInt(t, spans[0].Attributes, "llm.failure_count", len(tt.resp.Failures))
 			}
 		})
 	}
