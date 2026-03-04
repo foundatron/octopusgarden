@@ -67,6 +67,19 @@ Minimize — stdlib first. Allowed exceptions:
   (repeated per attractor iteration — ~90% cost reduction on cache reads)
 - Linting: `make lint`; config in `.golangci.yaml`; gochecknoglobals disabled (pricing tables OK)
 
+## Configuration
+
+API keys go in `~/.octopusgarden/config` (preferred) or environment variables. Config file uses
+`KEY=VALUE` format, one per line. Env vars take precedence over config values.
+
+```ini
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+```
+
+Provider is auto-detected from which key is present. Use `--provider openai|anthropic` to
+disambiguate when both are set. `OPENAI_BASE_URL` overrides the OpenAI endpoint (for Ollama etc.).
+
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md) — package structure, interfaces, loop pseudocode,
