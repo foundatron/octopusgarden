@@ -457,9 +457,10 @@ octog validate  --scenarios <dir> --target <url> [--judge-model claude-haiku-4-5
 octog status    [--format text|json]
 octog lint      --spec <path> --scenarios <dir>
 octog models    [--provider anthropic|openai]
+octog configure
 ```
 
-Subcommands: `run`, `validate`, `status`, `lint`, `models`.
+Subcommands: `run`, `validate`, `status`, `lint`, `models`, `configure`.
 
 Provider is auto-detected from which API key is set. Use `--provider` to disambiguate when both are
 present. Config file (`~/.octopusgarden/config`) supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`;

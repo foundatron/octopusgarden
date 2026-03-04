@@ -329,8 +329,6 @@ func TestLoadConfig(t *testing.T) {
 	content := "# comment\n\nANTHROPIC_API_KEY=sk-test-from-config\nOPENAI_API_KEY=sk-openai-test\n"
 
 	// Override HOME so configPath() resolves to our temp dir.
-	ogHome := os.Getenv("HOME")
-	// Put config at dir/.octopusgarden/config
 	ogDir := filepath.Join(dir, ".octopusgarden")
 	if err := os.MkdirAll(ogDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -340,13 +338,11 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", dir)
-	defer func() { _ = os.Setenv("HOME", ogHome) }()
 
 	// Ensure the env vars are unset before loading.
+	// t.Setenv("", "") makes os.Getenv return "" which loadConfig treats as unset.
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	os.Unsetenv("ANTHROPIC_API_KEY")
-	os.Unsetenv("OPENAI_API_KEY")
 
 	logger := testLogger()
 	if err := loadConfig(logger); err != nil {
@@ -568,6 +564,332 @@ func TestStatusCmdInvalidFormat(t *testing.T) {
 	err := statusCmd(ctx, logger, []string{"--format", "yaml"})
 	if !errors.Is(err, errInvalidFormat) {
 		t.Errorf("statusCmd(--format yaml) = %v, want %v", err, errInvalidFormat)
+	}
+}
+
+func TestMaskValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", "****"},
+		{"short", "abc", "****"},
+		{"exactly 15", "123456789012345", "****"},
+		{"exactly 16", "1234567890123456", "1234...3456"},
+		{"long API key", "sk-ant-api03-abcdefg-hijklmnop", "sk-a...mnop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := maskValue(tt.input)
+			if got != tt.want {
+				t.Errorf("maskValue(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigureInteractiveNewConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".octopusgarden", "config")
+
+	input := "sk-ant-test-key-1234\n\nhttp://localhost:11434\n"
+	var out bytes.Buffer
+
+	if err := configureInteractive(strings.NewReader(input), &out, cfgPath); err != nil {
+		t.Fatalf("configureInteractive: %v", err)
+	}
+
+	// Verify file was created.
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	got := string(content)
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=sk-ant-test-key-1234") {
+		t.Errorf("config missing ANTHROPIC_API_KEY, got:\n%s", got)
+	}
+	if !strings.Contains(got, "OPENAI_BASE_URL=http://localhost:11434") {
+		t.Errorf("config missing OPENAI_BASE_URL, got:\n%s", got)
+	}
+	// OPENAI_API_KEY was skipped (empty input) and never set — should not appear.
+	if strings.Contains(got, "OPENAI_API_KEY=") {
+		t.Errorf("config should not contain empty OPENAI_API_KEY, got:\n%s", got)
+	}
+
+	// Verify directory permissions.
+	dirInfo, err := os.Stat(filepath.Dir(cfgPath))
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf("dir perm = %04o, want 0700", perm)
+	}
+
+	// Verify file permissions.
+	fileInfo, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if perm := fileInfo.Mode().Perm(); perm != 0o600 {
+		t.Errorf("file perm = %04o, want 0600", perm)
+	}
+
+	// Verify output mentions "saved".
+	if !strings.Contains(out.String(), "Configuration saved") {
+		t.Errorf("output missing 'Configuration saved', got:\n%s", out.String())
+	}
+}
+
+func TestConfigureInteractiveUpdateExisting(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".octopusgarden")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "config")
+
+	existing := "# My settings\nANTHROPIC_API_KEY=sk-ant-existing-key-5678\nOPENAI_API_KEY=sk-openai-old\n"
+	if err := os.WriteFile(cfgPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep ANTHROPIC (empty enter), update OPENAI, skip BASE_URL.
+	input := "\nsk-openai-new\n\n"
+	var out bytes.Buffer
+
+	if err := configureInteractive(strings.NewReader(input), &out, cfgPath); err != nil {
+		t.Fatalf("configureInteractive: %v", err)
+	}
+
+	// Output should show masked existing values.
+	output := out.String()
+	// sk-ant-existing-key-5678 (24 chars, >=16) → first4...last4 = sk-a...5678
+	if !strings.Contains(output, "sk-a...5678") {
+		t.Errorf("output should show masked ANTHROPIC key, got:\n%s", output)
+	}
+	// sk-openai-old (13 chars, <16) → ****
+	if !strings.Contains(output, "OPENAI_API_KEY [****]") {
+		t.Errorf("output should show masked OPENAI key, got:\n%s", output)
+	}
+
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+
+	// Comment preserved.
+	if !strings.Contains(got, "# My settings") {
+		t.Errorf("comment not preserved, got:\n%s", got)
+	}
+	// ANTHROPIC unchanged.
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=sk-ant-existing-key-5678") {
+		t.Errorf("ANTHROPIC_API_KEY should be unchanged, got:\n%s", got)
+	}
+	// OPENAI updated.
+	if !strings.Contains(got, "OPENAI_API_KEY=sk-openai-new") {
+		t.Errorf("OPENAI_API_KEY should be updated, got:\n%s", got)
+	}
+}
+
+func TestConfigureInteractiveClearValue(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".octopusgarden")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "config")
+
+	existing := "ANTHROPIC_API_KEY=sk-ant-old\nOPENAI_API_KEY=sk-openai-old\n"
+	if err := os.WriteFile(cfgPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Clear ANTHROPIC with "-", keep OPENAI, skip BASE_URL.
+	input := "-\n\n\n"
+	var out bytes.Buffer
+
+	if err := configureInteractive(strings.NewReader(input), &out, cfgPath); err != nil {
+		t.Fatalf("configureInteractive: %v", err)
+	}
+
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+
+	// ANTHROPIC should be gone.
+	if strings.Contains(got, "ANTHROPIC_API_KEY") {
+		t.Errorf("ANTHROPIC_API_KEY should be cleared, got:\n%s", got)
+	}
+	// OPENAI still there.
+	if !strings.Contains(got, "OPENAI_API_KEY=sk-openai-old") {
+		t.Errorf("OPENAI_API_KEY should be preserved, got:\n%s", got)
+	}
+}
+
+func TestConfigureInteractiveEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".octopusgarden")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "config")
+
+	existing := "ANTHROPIC_API_KEY=sk-ant-keep\nOPENAI_API_KEY=sk-openai-keep\n"
+	if err := os.WriteFile(cfgPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Piped empty input (immediate EOF).
+	var out bytes.Buffer
+	if err := configureInteractive(strings.NewReader(""), &out, cfgPath); err != nil {
+		t.Fatalf("configureInteractive: %v", err)
+	}
+
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+
+	// All existing values preserved.
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=sk-ant-keep") {
+		t.Errorf("ANTHROPIC_API_KEY should be preserved on EOF, got:\n%s", got)
+	}
+	if !strings.Contains(got, "OPENAI_API_KEY=sk-openai-keep") {
+		t.Errorf("OPENAI_API_KEY should be preserved on EOF, got:\n%s", got)
+	}
+}
+
+func TestConfigureInteractiveNoKeyWarning(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		input       string
+		wantWarning bool
+	}{
+		{"no keys", "\n\n\n", true},
+		{"anthropic set", "sk-ant-key-12345678\n\n\n", false},
+		{"openai set", "\nsk-openai-key-12345678\n\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name, ".octopusgarden", "config")
+			var out bytes.Buffer
+			if err := configureInteractive(strings.NewReader(tt.input), &out, path); err != nil {
+				t.Fatalf("configureInteractive: %v", err)
+			}
+			hasWarning := strings.Contains(out.String(), "Warning: no API key configured")
+			if hasWarning != tt.wantWarning {
+				t.Errorf("warning present = %v, want %v\noutput:\n%s", hasWarning, tt.wantWarning, out.String())
+			}
+		})
+	}
+}
+
+func TestReadConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config")
+
+	content := "# comment\n\nANTHROPIC_API_KEY=sk-test\nUNKNOWN=value\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	values, lines, err := readConfigFile(path)
+	if err != nil {
+		t.Fatalf("readConfigFile: %v", err)
+	}
+
+	if values["ANTHROPIC_API_KEY"] != "sk-test" {
+		t.Errorf("ANTHROPIC_API_KEY = %q, want %q", values["ANTHROPIC_API_KEY"], "sk-test")
+	}
+	if values["UNKNOWN"] != "value" {
+		t.Errorf("UNKNOWN = %q, want %q", values["UNKNOWN"], "value")
+	}
+	if len(lines) != 4 {
+		t.Errorf("expected 4 original lines, got %d", len(lines))
+	}
+	if lines[0] != "# comment" {
+		t.Errorf("lines[0] = %q, want %q", lines[0], "# comment")
+	}
+}
+
+func TestReadConfigFileMissing(t *testing.T) {
+	values, lines, err := readConfigFile(filepath.Join(t.TempDir(), "nonexistent"))
+	if err != nil {
+		t.Fatalf("readConfigFile on missing file: %v", err)
+	}
+	if len(values) != 0 {
+		t.Errorf("expected empty map, got %v", values)
+	}
+	if lines != nil {
+		t.Errorf("expected nil lines, got %v", lines)
+	}
+}
+
+func TestWriteConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sub", "config")
+
+	originalLines := []string{
+		"# API keys",
+		"ANTHROPIC_API_KEY=old-key",
+		"",
+		"CUSTOM_THING=preserved",
+	}
+	values := map[string]string{
+		"ANTHROPIC_API_KEY": "new-key",
+		"OPENAI_API_KEY":    "sk-openai",
+		"CUSTOM_THING":      "preserved",
+	}
+
+	if err := writeConfigFile(path, values, originalLines); err != nil {
+		t.Fatalf("writeConfigFile: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(content)
+
+	// Comment preserved.
+	if !strings.Contains(got, "# API keys") {
+		t.Errorf("comment not preserved, got:\n%s", got)
+	}
+	// ANTHROPIC updated in-place.
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=new-key") {
+		t.Errorf("ANTHROPIC_API_KEY not updated, got:\n%s", got)
+	}
+	// Unknown key preserved.
+	if !strings.Contains(got, "CUSTOM_THING=preserved") {
+		t.Errorf("CUSTOM_THING not preserved, got:\n%s", got)
+	}
+	// New OPENAI appended.
+	if !strings.Contains(got, "OPENAI_API_KEY=sk-openai") {
+		t.Errorf("OPENAI_API_KEY not appended, got:\n%s", got)
+	}
+
+	// Verify file permissions.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("perm = %04o, want 0600", perm)
+	}
+
+	// Verify ANTHROPIC comes before OPENAI (in-place before appended).
+	anthIdx := strings.Index(got, "ANTHROPIC_API_KEY")
+	openIdx := strings.Index(got, "OPENAI_API_KEY")
+	if anthIdx > openIdx {
+		t.Errorf("ANTHROPIC_API_KEY should come before OPENAI_API_KEY in output")
 	}
 }
 
