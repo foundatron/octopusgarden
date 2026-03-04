@@ -12,6 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	specpkg "github.com/foundatron/octopusgarden/internal/spec"
@@ -89,6 +94,7 @@ type Attractor struct {
 	llm          llm.Client
 	containerMgr ContainerManager
 	logger       *slog.Logger
+	tracer       trace.Tracer
 }
 
 // RunOptions configures the attractor loop.
@@ -188,11 +194,16 @@ func (s *runState) recordStall(iter int, kind, message string) {
 }
 
 // New creates an Attractor with the given dependencies.
-func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger) *Attractor {
+// A nil TracerProvider defaults to a noop provider (zero overhead).
+func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger, tp trace.TracerProvider) *Attractor {
+	if tp == nil {
+		tp = noop.NewTracerProvider()
+	}
 	return &Attractor{
 		llm:          client,
 		containerMgr: containerMgr,
 		logger:       logger,
+		tracer:       tp.Tracer("octog/attractor"),
 	}
 }
 
@@ -221,6 +232,14 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
 
+	ctx, runSpan := a.tracer.Start(ctx, "attractor.run", trace.WithAttributes(
+		attribute.String("run_id", s.runID),
+		attribute.Float64("budget_usd", opts.BudgetUSD),
+		attribute.Float64("threshold", opts.Threshold),
+		attribute.Int("max_iterations", opts.MaxIterations),
+	))
+	defer runSpan.End()
+
 	// Conditionally summarize large specs for context budget management.
 	if opts.ContextBudget > 0 && specpkg.EstimateTokens(rawSpec) > opts.ContextBudget {
 		summarized, summarizeCost := a.trySummarize(ctx, rawSpec)
@@ -232,25 +251,56 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 		a.logger.Info("iteration start", "run_id", s.runID, "iteration", iter, "cost_usd", s.totalCost, "best_satisfaction", s.bestSatisfaction)
 
 		if s.budgetExceeded() {
-			return s.result(iter-1, StatusBudgetExceeded), nil
+			result := s.result(iter-1, StatusBudgetExceeded)
+			a.setRunSpanAttrs(runSpan, result)
+			return result, nil
 		}
 
 		costBefore := s.totalCost
-		result, err := a.iterate(ctx, rawSpec, iter, s, validate)
+
+		iterCtx, iterSpan := a.tracer.Start(ctx, "attractor.iteration", trace.WithAttributes(
+			attribute.String("run_id", s.runID),
+			attribute.Int("iteration", iter),
+		))
+		result, err := a.iterate(iterCtx, rawSpec, iter, s, validate)
 		if err != nil {
+			iterSpan.RecordError(err)
+			iterSpan.SetStatus(codes.Error, err.Error())
+			iterSpan.End()
+			runSpan.RecordError(err)
+			runSpan.SetStatus(codes.Error, err.Error())
 			return nil, err
 		}
+		iterSpan.SetAttributes(
+			attribute.String("outcome", string(s.lastOutcome)),
+			attribute.Float64("satisfaction", s.lastSatisfaction),
+			attribute.Float64("iteration_cost_usd", s.totalCost-costBefore),
+		)
+		iterSpan.End()
 
 		if opts.Progress != nil {
 			opts.Progress(s.buildProgress(iter, costBefore))
 		}
 
 		if result != nil {
+			a.setRunSpanAttrs(runSpan, result)
 			return result, nil
 		}
 	}
 
-	return s.result(opts.MaxIterations, StatusMaxIterations), nil
+	result := s.result(opts.MaxIterations, StatusMaxIterations)
+	a.setRunSpanAttrs(runSpan, result)
+	return result, nil
+}
+
+// setRunSpanAttrs sets final attributes on the attractor.run span.
+func (a *Attractor) setRunSpanAttrs(span trace.Span, result *RunResult) {
+	span.SetAttributes(
+		attribute.String("status", result.Status),
+		attribute.Int("iterations", result.Iterations),
+		attribute.Float64("satisfaction", result.Satisfaction),
+		attribute.Float64("cost_usd", result.CostUSD),
+	)
 }
 
 // iterate runs a single iteration of the attractor loop.

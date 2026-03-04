@@ -25,6 +25,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/lint"
 	"github.com/foundatron/octopusgarden/internal/llm"
+	"github.com/foundatron/octopusgarden/internal/observability"
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/spec"
 	"github.com/foundatron/octopusgarden/internal/store"
@@ -121,6 +122,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
 	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
+	otelEndpoint := fs.String("otel-endpoint", "", "OTLP/HTTP endpoint for tracing (e.g. localhost:4318); disabled if empty")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
@@ -152,10 +154,26 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 
-	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget)
+	// Resolve OTEL endpoint: flag → env → empty (disabled).
+	endpoint := *otelEndpoint
+	if endpoint == "" {
+		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+
+	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget, endpoint)
 }
 
-func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int) error {
+func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int, otelEndpoint string) error {
+	tp, shutdown, err := observability.InitTracer(ctx, otelEndpoint)
+	if err != nil {
+		return fmt.Errorf("init tracer: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdown(shutdownCtx)
+	}()
+
 	parsedSpec, err := spec.ParseFile(specPath)
 	if err != nil {
 		return fmt.Errorf("parse spec: %w", err)
@@ -197,9 +215,12 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		return currentSession
 	}
 
-	validateFn := buildValidateFn(scenarios, llmClient, logger, judgeModel, sessionGetter)
+	instrumentedLLM := observability.NewTracingLLMClient(llmClient, tp)
+	instrumentedContainer := observability.NewTracingContainerManager(containerMgr, tp)
+	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, judgeModel, sessionGetter)
+	instrumentedValidate := observability.WrapValidateFn(validateFn, tp)
 
-	att := attractor.New(llmClient, containerMgr, logger)
+	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
 	opts := attractor.RunOptions{
 		Model:         model,
 		BudgetUSD:     budget,
@@ -211,7 +232,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	}
 
 	startedAt := time.Now()
-	result, err := att.Run(ctx, parsedSpec.RawContent, opts, validateFn, sessionProvider)
+	result, err := att.Run(ctx, parsedSpec.RawContent, opts, instrumentedValidate, sessionProvider)
 	if err != nil {
 		return fmt.Errorf("attractor run: %w", err)
 	}

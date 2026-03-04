@@ -102,7 +102,7 @@ func TestConvergesImmediately(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build a hello world app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -130,7 +130,7 @@ func TestConvergesOnIteration2(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -156,7 +156,7 @@ func TestStalls(t *testing.T) {
 	opts := defaultOpts(t)
 	opts.StallLimit = 3
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -190,7 +190,7 @@ func TestStallResetsOnImprovement(t *testing.T) {
 	opts := defaultOpts(t)
 	opts.StallLimit = 3
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -218,7 +218,7 @@ func TestBudgetExceeded(t *testing.T) {
 	opts := defaultOpts(t)
 	opts.BudgetUSD = 0.10
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -252,7 +252,7 @@ func TestBuildFailureFeedback(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, mgr, testLogger())
+	a := New(client, mgr, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -285,7 +285,7 @@ func TestHealthCheckFailure(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, mgr, testLogger())
+	a := New(client, mgr, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -309,7 +309,7 @@ func TestMaxIterations(t *testing.T) {
 	opts.MaxIterations = 2
 	opts.StallLimit = 100 // won't stall
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -329,7 +329,7 @@ func TestEmptySpec(t *testing.T) {
 		},
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	_, err := a.Run(context.Background(), "", defaultOpts(t), nil, nil)
 	if !errors.Is(err, errEmptySpec) {
 		t.Fatalf("expected errEmptySpec, got %v", err)
@@ -352,7 +352,7 @@ func TestContextCancellation(t *testing.T) {
 		},
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	_, err := a.Run(ctx, "Build an app", defaultOpts(t), nil, nil)
 	if err == nil {
 		t.Fatal("expected error from canceled context")
@@ -374,7 +374,7 @@ func TestCacheControlSet(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	_, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -401,7 +401,7 @@ func TestCheckpointWritten(t *testing.T) {
 	}
 
 	opts := defaultOpts(t)
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -437,7 +437,7 @@ func TestContainerRunFailure(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, mgr, testLogger())
+	a := New(client, mgr, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -466,7 +466,7 @@ func TestProgressCallback(t *testing.T) {
 		progress = append(progress, p)
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -542,7 +542,7 @@ func TestProgressCallbackBuildFailure(t *testing.T) {
 		progress = append(progress, p)
 	}
 
-	a := New(client, mgr, testLogger())
+	a := New(client, mgr, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -600,7 +600,7 @@ func TestPatchModeUsedOnIteration2(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -649,7 +649,7 @@ func TestPatchModeFallbackOnRegressions(t *testing.T) {
 		return scores[idx], []string{"needs work"}, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -697,7 +697,7 @@ func TestPatchModeRegressionResets(t *testing.T) {
 		return scores[idx], []string{"needs work"}, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -736,7 +736,7 @@ func TestPatchModeDisabledByDefault(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -776,7 +776,7 @@ func TestPatchModeNotActiveWithoutBestFiles(t *testing.T) {
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, mgr, testLogger())
+	a := New(client, mgr, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -839,7 +839,7 @@ func main() { serveFixed() }
 		return 100, nil, 0.005, nil
 	}
 
-	a := New(client, mgr, testLogger())
+	a := New(client, mgr, testLogger(), nil)
 	result, err := a.Run(context.Background(), "Build an app", patchOpts(t), validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -877,7 +877,7 @@ func TestValidateError(t *testing.T) {
 		return 0, nil, 0, fmt.Errorf("judge unavailable")
 	}
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	_, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil)
 	if err == nil {
 		t.Fatal("expected error from validate failure")
@@ -906,7 +906,7 @@ func TestContextBudgetZeroPreservesBehavior(t *testing.T) {
 	opts := defaultOpts(t)
 	opts.ContextBudget = 0 // explicitly zero
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), strings.Repeat("x", 40000), opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -958,7 +958,7 @@ Brief abstract of the spec.`,
 	opts := defaultOpts(t)
 	opts.ContextBudget = 500 // budget is less than spec tokens
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), largeSpec, opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1004,7 +1004,7 @@ func TestContextBudgetSummarizeFailureNonFatal(t *testing.T) {
 	opts := defaultOpts(t)
 	opts.ContextBudget = 500
 
-	a := New(client, &mockContainerMgr{}, testLogger())
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
 	result, err := a.Run(context.Background(), largeSpec, opts, validate, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
