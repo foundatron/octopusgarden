@@ -20,6 +20,16 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func newHTTPRunner(baseURL string, client *http.Client, logger *slog.Logger) *Runner {
+	return NewRunner(
+		map[string]StepExecutor{
+			"request": &HTTPExecutor{Client: client, BaseURL: baseURL},
+			"exec":    &ExecExecutor{},
+		},
+		logger,
+	)
+}
+
 func TestRunnerHappyPath(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /items", func(w http.ResponseWriter, r *http.Request) {
@@ -42,20 +52,20 @@ func TestRunnerHappyPath(t *testing.T) {
 		Setup: []Step{
 			{
 				Description: "Create item",
-				Request:     Request{Method: "POST", Path: "/items", Body: map[string]any{"name": "test item"}},
+				Request:     &Request{Method: "POST", Path: "/items", Body: map[string]any{"name": "test item"}},
 				Capture:     []Capture{{Name: "item_id", JSONPath: "$.id"}},
 			},
 		},
 		Steps: []Step{
 			{
 				Description: "Read item",
-				Request:     Request{Method: "GET", Path: "/items/{item_id}"},
+				Request:     &Request{Method: "GET", Path: "/items/{item_id}"},
 				Expect:      "Returns the item",
 			},
 		},
 	}
 
-	runner := NewRunner(srv.URL, srv.Client(), newTestLogger())
+	runner := newHTTPRunner(srv.URL, srv.Client(), newTestLogger())
 	result, err := runner.Run(context.Background(), sc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -74,11 +84,11 @@ func TestRunnerHappyPath(t *testing.T) {
 	if step.Err != nil {
 		t.Fatalf("unexpected step error: %v", step.Err)
 	}
-	if step.Response.Status != http.StatusOK {
-		t.Errorf("got status %d, want %d", step.Response.Status, http.StatusOK)
+	if !strings.Contains(step.Observed, "HTTP 200") {
+		t.Errorf("observed missing expected status: %s", step.Observed)
 	}
-	if !strings.Contains(step.Response.Body, `"id": 99`) {
-		t.Errorf("response body missing expected content: %s", step.Response.Body)
+	if !strings.Contains(step.CaptureBody, `"id": 99`) {
+		t.Errorf("capture body missing expected content: %s", step.CaptureBody)
 	}
 }
 
@@ -103,14 +113,14 @@ func TestRunnerVariableSubstitutionInBody(t *testing.T) {
 		Setup: []Step{
 			{
 				Description: "Get token",
-				Request:     Request{Method: "POST", Path: "/setup"},
+				Request:     &Request{Method: "POST", Path: "/setup"},
 				Capture:     []Capture{{Name: "auth_token", JSONPath: "$.token"}},
 			},
 		},
 		Steps: []Step{
 			{
 				Description: "Use token in body",
-				Request: Request{
+				Request: &Request{
 					Method: "POST",
 					Path:   "/action",
 					Body:   map[string]any{"token": "{auth_token}"},
@@ -120,7 +130,7 @@ func TestRunnerVariableSubstitutionInBody(t *testing.T) {
 		},
 	}
 
-	runner := NewRunner(srv.URL, srv.Client(), newTestLogger())
+	runner := newHTTPRunner(srv.URL, srv.Client(), newTestLogger())
 	_, err := runner.Run(context.Background(), sc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -151,14 +161,14 @@ func TestRunnerVariableSubstitutionInHeaders(t *testing.T) {
 		Setup: []Step{
 			{
 				Description: "Login",
-				Request:     Request{Method: "POST", Path: "/login"},
+				Request:     &Request{Method: "POST", Path: "/login"},
 				Capture:     []Capture{{Name: "token", JSONPath: "$.token"}},
 			},
 		},
 		Steps: []Step{
 			{
 				Description: "Access protected",
-				Request: Request{
+				Request: &Request{
 					Method:  "GET",
 					Path:    "/protected",
 					Headers: map[string]string{"Authorization": "Bearer {token}"},
@@ -168,7 +178,7 @@ func TestRunnerVariableSubstitutionInHeaders(t *testing.T) {
 		},
 	}
 
-	runner := NewRunner(srv.URL, srv.Client(), newTestLogger())
+	runner := newHTTPRunner(srv.URL, srv.Client(), newTestLogger())
 	_, err := runner.Run(context.Background(), sc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -191,19 +201,19 @@ func TestRunnerSetupFailure(t *testing.T) {
 		Setup: []Step{
 			{
 				Description: "Failing setup",
-				Request:     Request{Method: "GET", Path: "/fail"},
+				Request:     &Request{Method: "GET", Path: "/fail"},
 			},
 		},
 		Steps: []Step{
 			{
 				Description: "Should not run",
-				Request:     Request{Method: "GET", Path: "/ok"},
+				Request:     &Request{Method: "GET", Path: "/ok"},
 				Expect:      "Never reached",
 			},
 		},
 	}
 
-	runner := NewRunner("http://localhost:0", client, newTestLogger())
+	runner := newHTTPRunner("http://localhost:0", client, newTestLogger())
 	_, err := runner.Run(context.Background(), sc)
 	if err == nil {
 		t.Fatal("expected error for setup failure")
@@ -234,18 +244,18 @@ func TestRunnerTransportErrorOnJudgedStep(t *testing.T) {
 		Steps: []Step{
 			{
 				Description: "Failing step",
-				Request:     Request{Method: "GET", Path: "/fail"},
+				Request:     &Request{Method: "GET", Path: "/fail"},
 				Expect:      "Should fail",
 			},
 			{
 				Description: "Succeeding step",
-				Request:     Request{Method: "GET", Path: "/ok"},
+				Request:     &Request{Method: "GET", Path: "/ok"},
 				Expect:      "Should succeed",
 			},
 		},
 	}
 
-	runner := NewRunner("http://localhost:0", client, newTestLogger())
+	runner := newHTTPRunner("http://localhost:0", client, newTestLogger())
 	result, err := runner.Run(context.Background(), sc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -278,13 +288,13 @@ func TestRunnerGetNoContentType(t *testing.T) {
 		Steps: []Step{
 			{
 				Description: "GET with no body",
-				Request:     Request{Method: "GET", Path: "/no-body"},
+				Request:     &Request{Method: "GET", Path: "/no-body"},
 				Expect:      "ok",
 			},
 		},
 	}
 
-	runner := NewRunner(srv.URL, srv.Client(), newTestLogger())
+	runner := newHTTPRunner(srv.URL, srv.Client(), newTestLogger())
 	_, err := runner.Run(context.Background(), sc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -311,13 +321,13 @@ func TestRunnerContextCancellation(t *testing.T) {
 		Steps: []Step{
 			{
 				Description: "Canceled request",
-				Request:     Request{Method: "GET", Path: "/slow"},
+				Request:     &Request{Method: "GET", Path: "/slow"},
 				Expect:      "Never",
 			},
 		},
 	}
 
-	runner := NewRunner(srv.URL, srv.Client(), newTestLogger())
+	runner := newHTTPRunner(srv.URL, srv.Client(), newTestLogger())
 	result, err := runner.Run(ctx, sc)
 	if err != nil {
 		t.Fatalf("unexpected error from Run: %v", err)
@@ -389,5 +399,111 @@ func TestSubstituteVarsJSON(t *testing.T) {
 				t.Errorf("substituteVarsJSON(%q, %v)\n got %q\nwant %q", tt.s, tt.vars, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunnerExecStep(t *testing.T) {
+	sc := Scenario{
+		ID: "exec-test",
+		Steps: []Step{
+			{
+				Description: "Run echo",
+				Exec:        &ExecRequest{Command: "echo hello"},
+				Expect:      "Should output hello",
+			},
+		},
+	}
+
+	runner := newHTTPRunner("http://unused", http.DefaultClient, newTestLogger())
+	result, err := runner.Run(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	if step.Err != nil {
+		t.Fatalf("unexpected step error: %v", step.Err)
+	}
+	if step.StepType != "exec" {
+		t.Errorf("got step type %q, want %q", step.StepType, "exec")
+	}
+	if !strings.Contains(step.Observed, "Exit code: 0") {
+		t.Errorf("observed missing exit code: %s", step.Observed)
+	}
+	if !strings.Contains(step.CaptureBody, "hello") {
+		t.Errorf("capture body missing expected content: %s", step.CaptureBody)
+	}
+}
+
+func TestRunnerMixedSteps(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /items", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"count": 0}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	sc := Scenario{
+		ID: "mixed",
+		Steps: []Step{
+			{
+				Description: "HTTP step",
+				Request:     &Request{Method: "GET", Path: "/items"},
+				Expect:      "Returns items",
+			},
+			{
+				Description: "Exec step",
+				Exec:        &ExecRequest{Command: "echo done"},
+				Expect:      "Outputs done",
+			},
+		},
+	}
+
+	runner := newHTTPRunner(srv.URL, srv.Client(), newTestLogger())
+	result, err := runner.Run(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Steps) != 2 {
+		t.Fatalf("got %d steps, want 2", len(result.Steps))
+	}
+
+	if result.Steps[0].StepType != "request" {
+		t.Errorf("step 0 type = %q, want %q", result.Steps[0].StepType, "request")
+	}
+	if result.Steps[1].StepType != "exec" {
+		t.Errorf("step 1 type = %q, want %q", result.Steps[1].StepType, "exec")
+	}
+}
+
+func TestRunnerUnknownStepType(t *testing.T) {
+	sc := Scenario{
+		ID: "unknown-type",
+		Steps: []Step{
+			{
+				Description: "Step with no type",
+				Expect:      "Should fail",
+			},
+		},
+	}
+
+	runner := newHTTPRunner("http://unused", http.DefaultClient, newTestLogger())
+	result, err := runner.Run(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+
+	if !errors.Is(result.Steps[0].Err, errUnknownStepType) {
+		t.Errorf("expected errUnknownStepType, got: %v", result.Steps[0].Err)
 	}
 }

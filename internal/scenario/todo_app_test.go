@@ -34,6 +34,10 @@ func TestLoadTodoAppScenarios(t *testing.T) {
 			t.Errorf("scenario %s has no steps", s.ID)
 		}
 		for i, step := range s.Steps {
+			if step.Request == nil {
+				t.Errorf("scenario %s step %d has nil request", s.ID, i)
+				continue
+			}
 			if step.Request.Method == "" {
 				t.Errorf("scenario %s step %d has empty method", s.ID, i)
 			}

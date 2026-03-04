@@ -62,12 +62,12 @@ func TestRunAndScore(t *testing.T) {
 			Steps: []scenario.Step{
 				{
 					Description: "Create an item",
-					Request:     scenario.Request{Method: "POST", Path: "/items", Body: map[string]any{"name": "test"}},
+					Request:     &scenario.Request{Method: "POST", Path: "/items", Body: map[string]any{"name": "test"}},
 					Expect:      "Should return 201 with item",
 				},
 				{
 					Description: "Read the item",
-					Request:     scenario.Request{Method: "GET", Path: "/items/1"},
+					Request:     &scenario.Request{Method: "GET", Path: "/items/1"},
 					Expect:      "Should return 200 with item",
 				},
 			},
@@ -114,14 +114,14 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 			Setup: []scenario.Step{
 				{
 					Description: "Create prerequisite",
-					Request:     scenario.Request{Method: "POST", Path: "/setup"},
+					Request:     &scenario.Request{Method: "POST", Path: "/setup"},
 					Expect:      "Should return 200",
 				},
 			},
 			Steps: []scenario.Step{
 				{
 					Description: "Check result",
-					Request:     scenario.Request{Method: "GET", Path: "/result"},
+					Request:     &scenario.Request{Method: "GET", Path: "/result"},
 					Expect:      "Should return data",
 				},
 			},
@@ -261,7 +261,7 @@ func TestValidateThreshold(t *testing.T) {
 			Steps: []scenario.Step{
 				{
 					Description: "Get status",
-					Request:     scenario.Request{Method: "GET", Path: "/status"},
+					Request:     &scenario.Request{Method: "GET", Path: "/status"},
 					Expect:      "Should return 200",
 				},
 			},

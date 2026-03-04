@@ -2,13 +2,6 @@ package scenario
 
 import "time"
 
-// HTTPResponse captures the response from executing a scenario step.
-type HTTPResponse struct {
-	Status  int
-	Headers map[string]string
-	Body    string
-}
-
 // StepScore holds the LLM judge's evaluation of a single step.
 type StepScore struct {
 	Score     int
@@ -20,10 +13,11 @@ type StepScore struct {
 // StepResult captures the outcome of executing a single scenario step.
 type StepResult struct {
 	Description string
-	Request     Request
-	Response    HTTPResponse
+	StepType    string // "request", "exec"
+	Observed    string // formatted output for the judge
+	CaptureBody string // raw body for capture extraction
 	Duration    time.Duration
-	Err         error // non-nil only for network/transport failures
+	Err         error // non-nil only for transport/execution failures
 }
 
 // Result holds execution results for all judged steps in a scenario.

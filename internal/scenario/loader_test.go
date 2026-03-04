@@ -196,6 +196,9 @@ func TestLoad_requestFields(t *testing.T) {
 		t.Fatal("expected at least one step")
 	}
 	req := got.Steps[0].Request
+	if req == nil {
+		t.Fatal("expected non-nil request on step 0")
+	}
 	if req.Method != "POST" {
 		t.Errorf("Method = %q, want %q", req.Method, "POST")
 	}

@@ -77,14 +77,14 @@ steps: []
 			wantMsg:    "non-empty array",
 		},
 		{
-			name: "missing request",
+			name: "missing step type",
 			yaml: `id: test
 steps:
   - description: A step
     expect: "ok"
 `,
 			wantErrors: 1,
-			wantMsg:    "step missing required field: request",
+			wantMsg:    "exactly one of request or exec is required",
 		},
 		{
 			name: "missing method",
@@ -321,6 +321,89 @@ steps:
 `,
 			wantErrors: 0,
 			wantWarns:  0,
+		},
+		{
+			name: "valid exec step",
+			yaml: `id: test
+steps:
+  - description: Run command
+    exec:
+      command: echo hello
+    expect: "outputs hello"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec missing command field",
+			yaml: `id: test
+steps:
+  - description: Run command
+    exec: {}
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "exec missing required field: command",
+		},
+		{
+			name: "exec empty command",
+			yaml: `id: test
+steps:
+  - description: Run command
+    exec:
+      command: ""
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "exec command must not be empty",
+		},
+		{
+			name: "both request and exec",
+			yaml: `id: test
+steps:
+  - description: Ambiguous step
+    request:
+      method: GET
+      path: /items
+    exec:
+      command: echo hello
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "both request and exec",
+		},
+		{
+			name: "exec with variable reference",
+			yaml: `id: test
+setup:
+  - description: Get token
+    request:
+      method: POST
+      path: /login
+    capture:
+      - name: token
+        jsonpath: $.token
+steps:
+  - description: Use token
+    exec:
+      command: "curl -H 'Authorization: {token}' http://localhost/api"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec with uncaptured variable",
+			yaml: `id: test
+steps:
+  - description: Use variable
+    exec:
+      command: echo {missing_var}
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "never captured",
 		},
 	}
 

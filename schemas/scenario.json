@@ -45,14 +45,18 @@
   "$defs": {
     "step": {
       "type": "object",
-      "required": ["request"],
       "additionalProperties": false,
+      "oneOf": [
+        { "required": ["request"] },
+        { "required": ["exec"] }
+      ],
       "properties": {
         "description": {
           "type": "string",
           "description": "What this step does."
         },
         "request": { "$ref": "#/$defs/request" },
+        "exec": { "$ref": "#/$defs/exec_request" },
         "expect": {
           "type": "string",
           "description": "Natural-language expectation judged by the LLM."
@@ -85,6 +89,17 @@
         },
         "body": {
           "description": "Request body. Objects/arrays are JSON-serialized; strings sent as-is."
+        }
+      }
+    },
+    "exec_request": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute (run via sh -c). May contain {variable} references."
         }
       }
     },

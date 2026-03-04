@@ -29,10 +29,8 @@ func NewJudge(client llm.Client, model string, logger *slog.Logger) *Judge {
 	}
 }
 
-// Score evaluates a single step's response against its expected behavior.
-func (j *Judge) Score(ctx context.Context, scenario Scenario, step Step, response HTTPResponse) (StepScore, error) {
-	observed := fmt.Sprintf("HTTP %d\nHeaders: %v\nBody:\n%s", response.Status, response.Headers, response.Body)
-
+// Score evaluates a single step's observed output against its expected behavior.
+func (j *Judge) Score(ctx context.Context, scenario Scenario, step Step, observed string) (StepScore, error) {
 	userPrompt := llm.SatisfactionJudgeUser
 	userPrompt = strings.ReplaceAll(userPrompt, "{scenario_description}", scenario.Description)
 	userPrompt = strings.ReplaceAll(userPrompt, "{step_description}", step.Description)
@@ -84,14 +82,14 @@ func (j *Judge) ScoreScenario(ctx context.Context, scenario Scenario, result Res
 
 		var score StepScore
 		if stepResult.Err != nil {
-			// Transport failure — score 0 without calling LLM.
+			// Execution failure — score 0 without calling LLM.
 			score = StepScore{
 				Score:     0,
-				Reasoning: fmt.Sprintf("HTTP request failed: %v", stepResult.Err),
+				Reasoning: fmt.Sprintf("step execution failed: %v", stepResult.Err),
 			}
 		} else {
 			var err error
-			score, err = j.Score(ctx, scenario, step, stepResult.Response)
+			score, err = j.Score(ctx, scenario, step, stepResult.Observed)
 			if err != nil {
 				return ScoredScenario{}, fmt.Errorf("score step %d: %w", i, err)
 			}

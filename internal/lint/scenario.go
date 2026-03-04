@@ -268,17 +268,29 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 	var diags []Diagnostic
 	fields := nodeFields(node)
 
-	// Check request.
+	// Check step type — exactly one of request or exec must be present.
 	reqFE, hasReq := fields["request"]
-	if !hasReq {
+	execFE, hasExec := fields["exec"]
+
+	switch {
+	case hasReq && hasExec:
 		diags = append(diags, Diagnostic{
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step missing required field: request",
+			Message: "step has both request and exec; exactly one step type is required",
 		})
-	} else {
+	case !hasReq && !hasExec:
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "step missing step type: exactly one of request or exec is required",
+		})
+	case hasReq:
 		diags = append(diags, lintRequest(path, reqFE.value, cs)...)
+	case hasExec:
+		diags = append(diags, lintExec(path, execFE.value, cs)...)
 	}
 
 	// Check expect (warning only, not required for setup).
@@ -305,6 +317,44 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 	capFE, hasCap := fields["capture"]
 	if hasCap {
 		diags = append(diags, lintCaptures(path, capFE.value, cs)...)
+	}
+
+	return diags
+}
+
+func lintExec(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+	if node.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "exec must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	// Check command.
+	cmdFE, hasCmd := fields["command"]
+	if !hasCmd {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "exec missing required field: command",
+		})
+	} else if cmdFE.value.Value == "" {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    cmdFE.value.Line,
+			Level:   Error,
+			Message: "exec command must not be empty",
+		})
+	} else {
+		// Check variable references in command string.
+		refs := extractVarRefs(cmdFE.value.Value)
+		diags = append(diags, checkVarRefs(refs, cs, path, cmdFE.value.Line)...)
 	}
 
 	return diags

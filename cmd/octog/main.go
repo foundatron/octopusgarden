@@ -519,7 +519,13 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 		g.Go(func() error {
 			// Each goroutine gets its own Runner (independent variable capture state) and Judge.
 			httpClient := &http.Client{Timeout: 30 * time.Second}
-			runner := scenario.NewRunner(targetURL, httpClient, logger)
+			runner := scenario.NewRunner(
+				map[string]scenario.StepExecutor{
+					"request": &scenario.HTTPExecutor{Client: httpClient, BaseURL: targetURL},
+					"exec":    &scenario.ExecExecutor{},
+				},
+				logger,
+			)
 			judge := scenario.NewJudge(llmClient, judgeModel, logger)
 
 			result, err := runner.Run(gctx, sc)
