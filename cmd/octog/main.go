@@ -733,7 +733,7 @@ func newLLMClient(provider string, logger *slog.Logger) (llmClients, error) {
 // defaultModel returns the default generation model for the given provider.
 func defaultModel(provider string) string {
 	if provider == "openai" {
-		return "gpt-4o"
+		return "gpt-5.2"
 	}
 	return "claude-sonnet-4-6"
 }
@@ -741,7 +741,7 @@ func defaultModel(provider string) string {
 // defaultJudgeModel returns the default judge model for the given provider.
 func defaultJudgeModel(provider string) string {
 	if provider == "openai" {
-		return "gpt-4o-mini"
+		return "gpt-5-nano"
 	}
 	return "claude-haiku-4-5"
 }

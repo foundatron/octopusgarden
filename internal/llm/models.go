@@ -46,7 +46,7 @@ var pricingTable = map[string]ModelPricing{
 		CacheWritePerMillion: 6.25,
 		CacheReadPerMillion:  0.50,
 	},
-	// OpenAI models — cache writes same as input, cache reads 50% off.
+	// OpenAI models — cache writes same as input price.
 	"gpt-4o": {
 		InputPerMillion:      2.50,
 		OutputPerMillion:     10.00,
@@ -59,17 +59,77 @@ var pricingTable = map[string]ModelPricing{
 		CacheWritePerMillion: 0.15,
 		CacheReadPerMillion:  0.075,
 	},
+	"gpt-4.1": {
+		InputPerMillion:      2.00,
+		OutputPerMillion:     8.00,
+		CacheWritePerMillion: 2.00,
+		CacheReadPerMillion:  0.50,
+	},
+	"gpt-4.1-mini": {
+		InputPerMillion:      0.40,
+		OutputPerMillion:     1.60,
+		CacheWritePerMillion: 0.40,
+		CacheReadPerMillion:  0.10,
+	},
+	"gpt-4.1-nano": {
+		InputPerMillion:      0.10,
+		OutputPerMillion:     0.40,
+		CacheWritePerMillion: 0.10,
+		CacheReadPerMillion:  0.025,
+	},
+	"gpt-5": {
+		InputPerMillion:      1.25,
+		OutputPerMillion:     10.00,
+		CacheWritePerMillion: 1.25,
+		CacheReadPerMillion:  0.125,
+	},
+	"gpt-5-mini": {
+		InputPerMillion:      0.25,
+		OutputPerMillion:     2.00,
+		CacheWritePerMillion: 0.25,
+		CacheReadPerMillion:  0.025,
+	},
+	"gpt-5-nano": {
+		InputPerMillion:      0.05,
+		OutputPerMillion:     0.40,
+		CacheWritePerMillion: 0.05,
+		CacheReadPerMillion:  0.005,
+	},
+	"gpt-5.1": {
+		InputPerMillion:      1.25,
+		OutputPerMillion:     10.00,
+		CacheWritePerMillion: 1.25,
+		CacheReadPerMillion:  0.125,
+	},
+	"gpt-5.2": {
+		InputPerMillion:      1.75,
+		OutputPerMillion:     14.00,
+		CacheWritePerMillion: 1.75,
+		CacheReadPerMillion:  0.175,
+	},
 	"o1": {
 		InputPerMillion:      15.00,
 		OutputPerMillion:     60.00,
 		CacheWritePerMillion: 15.00,
 		CacheReadPerMillion:  7.50,
 	},
+	"o3": {
+		InputPerMillion:      2.00,
+		OutputPerMillion:     8.00,
+		CacheWritePerMillion: 2.00,
+		CacheReadPerMillion:  0.50,
+	},
 	"o3-mini": {
 		InputPerMillion:      1.10,
 		OutputPerMillion:     4.40,
 		CacheWritePerMillion: 1.10,
 		CacheReadPerMillion:  0.55,
+	},
+	"o4-mini": {
+		InputPerMillion:      1.10,
+		OutputPerMillion:     4.40,
+		CacheWritePerMillion: 1.10,
+		CacheReadPerMillion:  0.275,
 	},
 }
 

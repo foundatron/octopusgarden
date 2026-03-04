@@ -8,7 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	openai "github.com/sashabaranov/go-openai"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 )
 
 // Compile-time check that OpenAIClient implements Client.
@@ -18,7 +19,7 @@ var errNoChoices = errors.New("API returned no choices")
 
 // OpenAIClient implements Client using the OpenAI-compatible API.
 type OpenAIClient struct {
-	client   *openai.Client
+	client   openai.Client
 	zeroCost bool
 	logger   *slog.Logger
 }
@@ -27,12 +28,12 @@ type OpenAIClient struct {
 // default OpenAI API endpoint (useful for Ollama or other compatible servers). When zeroCost
 // is true, cost calculation is skipped (for local models with no billing).
 func NewOpenAIClient(apiKey, baseURL string, zeroCost bool, logger *slog.Logger) *OpenAIClient {
-	cfg := openai.DefaultConfig(apiKey)
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if baseURL != "" {
-		cfg.BaseURL = baseURL
+		opts = append(opts, option.WithBaseURL(baseURL))
 	}
 	return &OpenAIClient{
-		client:   openai.NewClientWithConfig(cfg),
+		client:   openai.NewClient(opts...),
 		zeroCost: zeroCost,
 		logger:   logger,
 	}
@@ -49,14 +50,10 @@ type openaiMetrics struct {
 // logUsage extracts token counts, calculates cost, and logs structured metrics
 // for an OpenAI API call. The prefix distinguishes call types (e.g. "openai generate",
 // "openai judge").
-func (c *OpenAIClient) logUsage(prefix, model string, usage openai.Usage) openaiMetrics {
-	inputTokens := usage.PromptTokens
-	outputTokens := usage.CompletionTokens
-
-	var cachedTokens int
-	if usage.PromptTokensDetails != nil {
-		cachedTokens = usage.PromptTokensDetails.CachedTokens
-	}
+func (c *OpenAIClient) logUsage(prefix, model string, usage openai.CompletionUsage) openaiMetrics {
+	inputTokens := int(usage.PromptTokens)
+	outputTokens := int(usage.CompletionTokens)
+	cachedTokens := int(usage.PromptTokensDetails.CachedTokens)
 
 	var cost float64
 	if !c.zeroCost {
@@ -94,30 +91,24 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		maxTokens = 8192
 	}
 
-	messages := make([]openai.ChatCompletionMessage, 0, len(req.Messages)+1)
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
 
 	if req.SystemPrompt != "" {
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: req.SystemPrompt,
-		})
+		messages = append(messages, openai.DeveloperMessage(req.SystemPrompt))
 	}
 
 	for _, msg := range req.Messages {
-		role := openai.ChatMessageRoleUser
 		if msg.Role == "assistant" {
-			role = openai.ChatMessageRoleAssistant
+			messages = append(messages, openai.AssistantMessage(msg.Content))
+		} else {
+			messages = append(messages, openai.UserMessage(msg.Content))
 		}
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    role,
-			Content: msg.Content,
-		})
 	}
 
-	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:     req.Model,
-		Messages:  messages,
-		MaxTokens: maxTokens,
+	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model:               req.Model,
+		Messages:            messages,
+		MaxCompletionTokens: openai.Int(int64(maxTokens)),
 	})
 	if err != nil {
 		return GenerateResponse{}, fmt.Errorf("openai generate: %w", err)
@@ -128,7 +119,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 	}
 
 	content := resp.Choices[0].Message.Content
-	finishReason := string(resp.Choices[0].FinishReason)
+	finishReason := resp.Choices[0].FinishReason
 	m := c.logUsage("openai generate", req.Model, resp.Usage)
 
 	return GenerateResponse{
@@ -143,24 +134,18 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 
 // Judge calls the OpenAI Chat Completions API to score satisfaction.
 func (c *OpenAIClient) Judge(ctx context.Context, req JudgeRequest) (JudgeResponse, error) {
-	messages := make([]openai.ChatCompletionMessage, 0, 2)
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
 
 	if req.SystemPrompt != "" {
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: req.SystemPrompt,
-		})
+		messages = append(messages, openai.DeveloperMessage(req.SystemPrompt))
 	}
 
-	messages = append(messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: req.UserPrompt,
-	})
+	messages = append(messages, openai.UserMessage(req.UserPrompt))
 
-	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:     req.Model,
-		Messages:  messages,
-		MaxTokens: 4096,
+	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model:               req.Model,
+		Messages:            messages,
+		MaxCompletionTokens: openai.Int(4096),
 	})
 	if err != nil {
 		return JudgeResponse{}, fmt.Errorf("openai judge: %w", err)
@@ -194,18 +179,18 @@ func (c *OpenAIClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRespon
 
 // ListModels queries the OpenAI API for available models.
 func (c *OpenAIClient) ListModels(ctx context.Context) ([]AvailableModel, error) {
-	resp, err := c.client.ListModels(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("openai list models: %w", err)
-	}
-
-	models := make([]AvailableModel, 0, len(resp.Models))
-	for _, m := range resp.Models {
+	iter := c.client.Models.ListAutoPaging(ctx)
+	var models []AvailableModel
+	for iter.Next() {
+		m := iter.Current()
 		models = append(models, AvailableModel{
 			ID:          m.ID,
 			DisplayName: m.ID,
-			CreatedAt:   time.Unix(m.CreatedAt, 0),
+			CreatedAt:   time.Unix(m.Created, 0),
 		})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("openai list models: %w", err)
 	}
 	return models, nil
 }

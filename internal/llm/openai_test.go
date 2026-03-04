@@ -190,7 +190,7 @@ func TestOpenAIGenerate_EmptySystemPrompt(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify no system message was sent.
+	// Verify no developer/system message was sent.
 	messages, ok := capturedBody["messages"].([]any)
 	if !ok {
 		t.Fatal("expected messages in request body")
@@ -200,8 +200,9 @@ func TestOpenAIGenerate_EmptySystemPrompt(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if msg["role"] == "system" {
-			t.Error("system message sent despite empty SystemPrompt")
+		role, _ := msg["role"].(string)
+		if role == "developer" || role == "system" {
+			t.Errorf("unexpected %s message sent despite empty SystemPrompt", role)
 		}
 	}
 }

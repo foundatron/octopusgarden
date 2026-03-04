@@ -33,7 +33,7 @@ interface, Anthropic + OpenAI backends)
 Minimize — stdlib first. Allowed exceptions:
 
 - `github.com/anthropics/anthropic-sdk-go` — Anthropic API
-- `github.com/sashabaranov/go-openai` — OpenAI and Ollama only
+- `github.com/openai/openai-go/v3` — OpenAI and Ollama only
 - `gopkg.in/yaml.v3` — scenario YAML
 - `modernc.org/sqlite` — run history (pure-Go, no CGO)
 - `github.com/docker/docker/client` — container orchestration
