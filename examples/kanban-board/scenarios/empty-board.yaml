@@ -1,0 +1,17 @@
+id: empty-board
+description: Empty board shows no cards in any column
+type: functional
+satisfaction_criteria: GET /api/cards returns an empty array and the UI shows no cards
+
+steps:
+  - description: List all cards on fresh board
+    request:
+      method: GET
+      path: /api/cards
+    expect: "Status 200. Response body is an empty JSON array []."
+
+  - description: Verify the UI shows no cards
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads with three empty columns and no card elements visible."

@@ -1,0 +1,48 @@
+id: move-card
+description: Create a card and move it through all columns via the UI
+type: functional
+satisfaction_criteria: Card moves from To Do to In Progress to Done using move buttons
+
+setup:
+  - description: Create a card via the API
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: "Deploy to prod"
+    capture:
+      - name: card_id
+        jsonpath: $.id
+
+steps:
+  - description: Navigate to the board
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads and shows the card 'Deploy to prod' in the To Do column."
+
+  - description: Click Start to move to In Progress
+    browser:
+      action: click
+      selector: "[data-card-id='{card_id}'] [data-testid='move-next']"
+    expect: "The card moves out of To Do."
+
+  - description: Verify card is in In Progress
+    browser:
+      action: assert
+      selector: "[data-column='in-progress']"
+      text: "Deploy to prod"
+    expect: "The In Progress column now contains 'Deploy to prod'."
+
+  - description: Click Done to move to Done
+    browser:
+      action: click
+      selector: "[data-card-id='{card_id}'] [data-testid='move-next']"
+    expect: "The card moves out of In Progress."
+
+  - description: Verify card is in Done
+    browser:
+      action: assert
+      selector: "[data-column='done']"
+      text: "Deploy to prod"
+    expect: "The Done column now contains 'Deploy to prod'."

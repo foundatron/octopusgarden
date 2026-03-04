@@ -1,0 +1,41 @@
+id: delete-card-ui
+description: Delete a card via the UI delete button
+type: functional
+satisfaction_criteria: Clicking the delete button removes the card from the board
+
+setup:
+  - description: Create a card via the API
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: "Temporary card"
+    capture:
+      - name: card_id
+        jsonpath: $.id
+
+steps:
+  - description: Navigate to the board
+    browser:
+      action: navigate
+      url: /
+    expect: "Page loads showing 'Temporary card' in the To Do column."
+
+  - description: Click the delete button on the card
+    browser:
+      action: click
+      selector: "[data-card-id='{card_id}'] [data-testid='delete-card']"
+    expect: "The card is removed and the page refreshes."
+
+  - description: Verify card is no longer visible
+    browser:
+      action: assert
+      selector: "[data-column='todo']"
+      text_absent: "Temporary card"
+    expect: "The To Do column no longer contains 'Temporary card'."
+
+  - description: Verify card is gone from API
+    request:
+      method: GET
+      path: /api/cards/{card_id}
+    expect: "Status 404."

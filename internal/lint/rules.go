@@ -138,8 +138,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC015",
 		Level:       Error,
-		Summary:     "step must have exactly one step type (request or exec)",
-		MsgContains: "exactly one of request or exec is required",
+		Summary:     "step must have exactly one step type (request, exec, or browser)",
+		MsgContains: "exactly one of request, exec, or browser is required",
 	},
 	{
 		ID:          "SC016",
@@ -244,8 +244,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC032",
 		Level:       Error,
-		Summary:     "step must not have both request and exec",
-		MsgContains: "both request and exec",
+		Summary:     "step must not have multiple step types",
+		MsgContains: "step has multiple step types; exactly one of request, exec, or browser is required",
 	},
 	{
 		ID:          "SC033",
@@ -288,5 +288,66 @@ var ScenarioRules = []Rule{
 		Level:       Error,
 		Summary:     "source not supported on this step type",
 		MsgContains: "source is not supported on",
+	},
+	{
+		ID:          "SC040",
+		Level:       Error,
+		Summary:     "browser must be a YAML mapping",
+		MsgContains: "browser must be a mapping",
+	},
+	{
+		ID:          "SC041",
+		Level:       Error,
+		Summary:     "browser must have an action field",
+		MsgContains: "browser missing required field: action",
+	},
+	{
+		ID:          "SC042",
+		Level:       Error,
+		Summary:     "browser action must be navigate, click, fill, or assert",
+		MsgContains: "invalid browser action",
+	},
+	{
+		ID:          "SC043",
+		Level:       Error,
+		Summary:     "browser navigate requires url",
+		MsgContains: "navigate action requires url",
+	},
+	{
+		ID:          "SC044",
+		Level:       Error,
+		Summary:     "browser click requires selector",
+		MsgContains: "click action requires selector",
+	},
+	{
+		ID:          "SC045",
+		Level:       Error,
+		Summary:     "browser fill requires selector",
+		MsgContains: "fill action requires selector",
+	},
+	{
+		ID:          "SC046",
+		Level:       Error,
+		Summary:     "browser fill requires value",
+		MsgContains: "fill action requires value",
+	},
+	{
+		ID:          "SC047",
+		Level:       Error,
+		Summary:     "browser assert requires selector",
+		MsgContains: "assert action requires selector",
+	},
+	{
+		ID:          "SC048",
+		Level:       Warning,
+		Summary:     "browser assert should have assertion fields",
+		MsgContains: "no assertion fields",
+	},
+	{
+		ID:          "SC049",
+		Level:       Error,
+		Summary:     "browser timeout must be a valid Go duration",
+		MsgContains: "browser timeout: invalid duration",
+		Detail:      "Uses same format as exec timeout (e.g. 10s, 30s).",
 	},
 }

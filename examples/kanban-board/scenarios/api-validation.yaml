@@ -1,0 +1,39 @@
+id: api-validation
+description: API rejects invalid card creation and update requests
+type: api
+satisfaction_criteria: Missing or empty title returns 400, invalid column returns 400
+
+steps:
+  - description: Create card with missing title
+    request:
+      method: POST
+      path: /api/cards
+      body: {}
+    expect: "Status 400. Response contains an error message about missing title."
+
+  - description: Create card with empty title
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: ""
+    expect: "Status 400. Response contains an error message about empty or missing title."
+
+  - description: Create a valid card for update tests
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: "Valid card"
+    expect: "Status 201. Response contains the created card."
+    capture:
+      - name: card_id
+        jsonpath: $.id
+
+  - description: Update with invalid column
+    request:
+      method: PUT
+      path: /api/cards/{card_id}
+      body:
+        column: "invalid-column"
+    expect: "Status 400. Response contains an error message about invalid column value."

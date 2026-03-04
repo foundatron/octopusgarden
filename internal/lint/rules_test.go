@@ -111,8 +111,10 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: item_id\n        jsonpath: bad\n",
 		// SC030: variable referenced but never captured
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /items/{missing}\n    expect: ok\n",
-		// SC032: step has both request and exec
+		// SC032: step has multiple step types (request + exec)
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    exec:\n      command: echo hi\n    expect: ok\n",
+		// SC032: step has multiple step types (browser + request)
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: navigate\n      url: /\n    request:\n      method: GET\n      path: /x\n    expect: ok\n",
 		// SC033: exec not a mapping
 		"id: test\nsteps:\n  - description: d\n    exec: notamapping\n    expect: ok\n",
 		// SC034: exec missing command
@@ -127,6 +129,26 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    exec:\n      command: echo hi\n    expect: ok\n    capture:\n      - name: out\n        source: invalid\n",
 		// SC039: source not supported on request
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: out\n        source: stdout\n",
+		// SC040: browser not a mapping
+		"id: test\nsteps:\n  - description: d\n    browser: notamapping\n    expect: ok\n",
+		// SC041: browser missing action
+		"id: test\nsteps:\n  - description: d\n    browser: {}\n    expect: ok\n",
+		// SC042: browser invalid action
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: hover\n    expect: ok\n",
+		// SC043: browser navigate requires url
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: navigate\n    expect: ok\n",
+		// SC044: browser click requires selector
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: click\n    expect: ok\n",
+		// SC045: browser fill requires selector
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: fill\n      value: test\n    expect: ok\n",
+		// SC046: browser fill requires value
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: fill\n      selector: \"#x\"\n    expect: ok\n",
+		// SC047: browser assert requires selector
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: assert\n      text: Hello\n    expect: ok\n",
+		// SC048: browser assert no assertion fields
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: assert\n      selector: h1\n    expect: ok\n",
+		// SC049: browser timeout invalid
+		"id: test\nsteps:\n  - description: d\n    browser:\n      action: navigate\n      url: /\n      timeout: notaduration\n    expect: ok\n",
 	}
 
 	// Rules that can only be triggered by dir-level checks.

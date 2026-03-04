@@ -259,6 +259,31 @@ func TestBuildSystemPromptSuffixSelection(t *testing.T) {
 				"MUST listen on port 8080",
 			},
 		},
+		{
+			name: "NeedsBrowser only",
+			caps: ScenarioCapabilities{NeedsBrowser: true},
+			wantContain: []string{
+				"MUST listen on port 8080",
+			},
+			wantAbsent: []string{
+				"command-line application",
+			},
+		},
+		{
+			name: "NeedsBrowser with NeedsHTTP",
+			caps: ScenarioCapabilities{NeedsBrowser: true, NeedsHTTP: true},
+			wantContain: []string{
+				"MUST listen on port 8080",
+			},
+		},
+		{
+			name: "NeedsBrowser with NeedsExec",
+			caps: ScenarioCapabilities{NeedsBrowser: true, NeedsExec: true},
+			wantContain: []string{
+				"HTTP server AND a command-line tool",
+				"MUST listen on port 8080",
+			},
+		},
 	}
 
 	for _, tt := range tests {

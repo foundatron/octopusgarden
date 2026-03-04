@@ -37,6 +37,7 @@ Minimize — stdlib first. Allowed exceptions:
 - `gopkg.in/yaml.v3` — scenario YAML
 - `modernc.org/sqlite` — run history (pure-Go, no CGO)
 - `github.com/docker/docker/client` — container orchestration
+- `github.com/chromedp/chromedp` — browser automation (pure Go, Chrome DevTools Protocol)
 - `go.opentelemetry.io/otel` + related packages — OpenTelemetry tracing (spans for LLM calls,
   container ops, attractor loop)
 

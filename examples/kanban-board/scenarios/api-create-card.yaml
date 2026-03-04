@@ -1,0 +1,22 @@
+id: api-create-card
+description: Create a card via the REST API and verify the response
+type: api
+satisfaction_criteria: POST /api/cards returns 201 with the created card including generated id and default column
+
+steps:
+  - description: Create a card
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: "Fix login bug"
+    expect: "Status 201. Response contains 'id' (non-empty string), 'title' equal to 'Fix login bug', 'column' equal to 'todo', and 'created_at' (ISO 8601 timestamp)."
+    capture:
+      - name: card_id
+        jsonpath: $.id
+
+  - description: Retrieve the card
+    request:
+      method: GET
+      path: /api/cards/{card_id}
+    expect: "Status 200. Response contains 'title' equal to 'Fix login bug' and 'column' equal to 'todo'."

@@ -217,7 +217,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 
 	instrumentedLLM := observability.NewTracingLLMClient(llmClient, tp)
 	instrumentedContainer := observability.NewTracingContainerManager(containerMgr, tp)
-	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, judgeModel, sessionGetter)
+	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, judgeModel, sessionGetter, caps.NeedsBrowser)
 	instrumentedValidate := observability.WrapValidateFn(validateFn, tp)
 
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
@@ -249,23 +249,25 @@ func detectCapabilities(scenarios []scenario.Scenario) attractor.ScenarioCapabil
 	var caps attractor.ScenarioCapabilities
 	for _, sc := range scenarios {
 		for _, step := range sc.Setup {
-			if step.Request != nil {
-				caps.NeedsHTTP = true
-			}
-			if step.Exec != nil {
-				caps.NeedsExec = true
-			}
+			detectStepCaps(&caps, step)
 		}
 		for _, step := range sc.Steps {
-			if step.Request != nil {
-				caps.NeedsHTTP = true
-			}
-			if step.Exec != nil {
-				caps.NeedsExec = true
-			}
+			detectStepCaps(&caps, step)
 		}
 	}
 	return caps
+}
+
+func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
+	if step.Request != nil {
+		caps.NeedsHTTP = true
+	}
+	if step.Exec != nil {
+		caps.NeedsExec = true
+	}
+	if step.Browser != nil {
+		caps.NeedsBrowser = true
+	}
 }
 
 func progressFn() func(attractor.IterationProgress) {
@@ -366,7 +368,8 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 
 	// Exec steps are not supported when validating against an external --target;
 	// the nil session causes exec steps to run locally (no container).
-	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil })
+	caps := detectCapabilities(scenarios)
+	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil }, caps.NeedsBrowser)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -572,7 +575,7 @@ func resolveStorePath() (string, error) {
 	return filepath.Join(dir, "runs.db"), nil
 }
 
-func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session) (scenario.AggregateResult, error) {
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session, needsBrowser bool) (scenario.AggregateResult, error) {
 	type indexedResult struct {
 		index int
 		ss    scenario.ScoredScenario
@@ -590,13 +593,16 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 		g.Go(func() error {
 			// Each goroutine gets its own Runner (independent variable capture state) and Judge.
 			httpClient := &http.Client{Timeout: 30 * time.Second}
-			runner := scenario.NewRunner(
-				map[string]scenario.StepExecutor{
-					"request": &scenario.HTTPExecutor{Client: httpClient, BaseURL: targetURL},
-					"exec":    &scenario.ExecExecutor{Session: sessionGetter()},
-				},
-				logger,
-			)
+			executors := map[string]scenario.StepExecutor{
+				"request": &scenario.HTTPExecutor{Client: httpClient, BaseURL: targetURL},
+				"exec":    &scenario.ExecExecutor{Session: sessionGetter()},
+			}
+			if needsBrowser {
+				browserExec := &scenario.BrowserExecutor{BaseURL: targetURL, Logger: logger}
+				defer browserExec.Close()
+				executors["browser"] = browserExec
+			}
+			runner := scenario.NewRunner(executors, logger)
 			judge := scenario.NewJudge(llmClient, judgeModel, logger)
 
 			result, err := runner.Run(gctx, sc)
@@ -647,9 +653,9 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 	return scenario.Aggregate(scored), nil
 }
 
-func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session) attractor.ValidateFn {
+func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session, needsBrowser bool) attractor.ValidateFn {
 	return func(ctx context.Context, url string) (float64, []string, float64, error) {
-		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel, sessionGetter)
+		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel, sessionGetter, needsBrowser)
 		if err != nil {
 			return 0, nil, 0, err
 		}
