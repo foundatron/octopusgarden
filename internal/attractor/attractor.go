@@ -331,6 +331,9 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	caps := s.opts.Capabilities
 	var url string
 
+	// When both HTTP and exec capabilities are needed, two containers run from the same image:
+	// - Session container: runs "sleep infinity" for docker exec commands
+	// - HTTP container: runs the image's CMD to serve HTTP on port 8080
 	if caps.NeedsExec {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {

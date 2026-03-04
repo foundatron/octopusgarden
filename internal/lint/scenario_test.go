@@ -3,8 +3,11 @@ package lint
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/foundatron/octopusgarden/internal/scenario"
 )
 
 func TestCheckScenarioContent(t *testing.T) {
@@ -645,5 +648,38 @@ func TestCheckScenarioFileNotFound(t *testing.T) {
 	_, err := CheckScenario("nonexistent.yaml")
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+// TestValidCaptureSourcesSyncWithScenario ensures that the lint package's
+// validCaptureSources map stays in sync with the scenario package's executor
+// ValidCaptureSources methods. If a source is added to exec.go but not here
+// (or vice versa), this test will fail.
+func TestValidCaptureSourcesSyncWithScenario(t *testing.T) {
+	// Exec sources: compare lint's validCaptureSources["exec"] with ExecExecutor.ValidCaptureSources().
+	execExecutor := &scenario.ExecExecutor{}
+	executorSources := execExecutor.ValidCaptureSources()
+	slices.Sort(executorSources)
+
+	lintSources := make([]string, 0, len(validCaptureSources["exec"]))
+	for k := range validCaptureSources["exec"] {
+		lintSources = append(lintSources, k)
+	}
+	slices.Sort(lintSources)
+
+	if len(executorSources) != len(lintSources) {
+		t.Fatalf("exec source count mismatch: scenario.ExecExecutor has %v, lint has %v", executorSources, lintSources)
+	}
+	for i := range executorSources {
+		if executorSources[i] != lintSources[i] {
+			t.Errorf("exec source mismatch at index %d: scenario.ExecExecutor has %q, lint has %q", i, executorSources[i], lintSources[i])
+		}
+	}
+
+	// HTTP steps: validCaptureSources has no "request" entry, meaning source is
+	// not supported on request steps. HTTPExecutor has no ValidCaptureSources
+	// method. Verify the lint map has no "request" entry to keep this invariant.
+	if _, ok := validCaptureSources["request"]; ok {
+		t.Error("validCaptureSources should not have a 'request' entry; HTTP steps do not support source captures")
 	}
 }

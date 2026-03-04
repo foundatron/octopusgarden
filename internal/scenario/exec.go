@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	defaultExecTimeout    = 30 * time.Second
+	defaultExecTimeout = 30 * time.Second
+	// defaultMaxOutputBytes is the maximum bytes captured from command output.
+	// Keep in sync with the constant of the same name in internal/container/docker.go.
 	defaultMaxOutputBytes = 10 << 20 // 10MB
 )
 
@@ -163,10 +165,14 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 	if lw.remaining <= 0 {
 		return len(p), nil // discard silently
 	}
-	if int64(len(p)) > lw.remaining {
+	n := len(p)
+	if int64(n) > lw.remaining {
 		p = p[:lw.remaining]
 	}
-	n, err := lw.w.Write(p)
-	lw.remaining -= int64(n)
-	return n, err
+	written, err := lw.w.Write(p)
+	lw.remaining -= int64(written)
+	if err != nil {
+		return written, err
+	}
+	return n, nil
 }

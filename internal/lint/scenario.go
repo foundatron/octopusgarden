@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -557,6 +558,7 @@ func lintCaptureSource(path string, node *yaml.Node, stepType string) []Diagnost
 		for k := range allowed {
 			valid = append(valid, k)
 		}
+		slices.Sort(valid)
 		return []Diagnostic{{
 			File:    path,
 			Line:    node.Line,

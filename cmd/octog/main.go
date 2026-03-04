@@ -178,11 +178,20 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 
 	// Session provider pattern: the attractor sets the current session before
 	// calling validate, and the validate closure reads it to create ExecExecutors.
+	// Mutex protects against future refactoring that might run the attractor and
+	// validation concurrently (runAndScore fans out to 10 goroutines).
+	var sessionMu sync.Mutex
 	var currentSession *container.Session
 	sessionProvider := attractor.SessionProviderFn(func(session *container.Session) {
+		sessionMu.Lock()
 		currentSession = session
+		sessionMu.Unlock()
 	})
-	sessionGetter := func() *container.Session { return currentSession }
+	sessionGetter := func() *container.Session {
+		sessionMu.Lock()
+		defer sessionMu.Unlock()
+		return currentSession
+	}
 
 	validateFn := buildValidateFn(scenarios, llmClient, logger, judgeModel, sessionGetter)
 
@@ -330,6 +339,8 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return fmt.Errorf("load scenarios: %w", err)
 	}
 
+	// Exec steps are not supported when validating against an external --target;
+	// the nil session causes exec steps to run locally (no container).
 	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil })
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)

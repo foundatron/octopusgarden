@@ -339,6 +339,8 @@ type Session struct {
 	logger      *slog.Logger
 }
 
+// defaultMaxOutputBytes is the maximum bytes captured from exec output.
+// Keep in sync with the constant of the same name in internal/scenario/exec.go.
 const defaultMaxOutputBytes = 10 << 20 // 10MB
 
 // Exec runs a command inside the container via docker exec.
@@ -382,7 +384,9 @@ func (s *Session) Exec(ctx context.Context, command string, opts ExecOptions) (E
 
 	// Write stdin if provided.
 	if opts.Stdin != "" {
-		_, _ = io.WriteString(attachResp.Conn, opts.Stdin)
+		if _, err := io.WriteString(attachResp.Conn, opts.Stdin); err != nil {
+			s.logger.Warn("failed to write stdin to exec", "error", err)
+		}
 		_ = attachResp.CloseWrite()
 	}
 
@@ -420,12 +424,16 @@ func (lw *limitedStringWriter) Write(p []byte) (int, error) {
 	if lw.remaining <= 0 {
 		return len(p), nil
 	}
-	if int64(len(p)) > lw.remaining {
+	n := len(p)
+	if int64(n) > lw.remaining {
 		p = p[:lw.remaining]
 	}
-	n, err := lw.w.Write(p)
-	lw.remaining -= int64(n)
-	return n, err
+	written, err := lw.w.Write(p)
+	lw.remaining -= int64(written)
+	if err != nil {
+		return written, err
+	}
+	return n, nil
 }
 
 // StartSession creates a long-lived container for exec-based validation.

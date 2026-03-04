@@ -211,6 +211,73 @@ func TestWriteCategorizedFeedbackUnknownKind(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptSuffixSelection(t *testing.T) {
+	spec := "Build a sample app"
+
+	tests := []struct {
+		name        string
+		caps        ScenarioCapabilities
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "default HTTP only",
+			caps: ScenarioCapabilities{},
+			wantContain: []string{
+				"MUST listen on port 8080",
+			},
+			wantAbsent: []string{
+				"command-line application",
+			},
+		},
+		{
+			name: "NeedsHTTP true",
+			caps: ScenarioCapabilities{NeedsHTTP: true},
+			wantContain: []string{
+				"MUST listen on port 8080",
+			},
+			wantAbsent: []string{
+				"command-line application",
+			},
+		},
+		{
+			name: "NeedsExec true",
+			caps: ScenarioCapabilities{NeedsExec: true},
+			wantContain: []string{
+				"command-line application",
+				"CLI tool",
+			},
+			wantAbsent: []string{
+				"MUST listen on port 8080",
+			},
+		},
+		{
+			name: "NeedsHTTP and NeedsExec",
+			caps: ScenarioCapabilities{NeedsHTTP: true, NeedsExec: true},
+			wantContain: []string{
+				"HTTP server AND a command-line tool",
+				"MUST listen on port 8080",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prompt := buildSystemPrompt(spec, tt.caps)
+			for _, want := range tt.wantContain {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("prompt should contain %q", want)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(prompt, absent) {
+					t.Errorf("prompt should not contain %q", absent)
+				}
+			}
+		})
+	}
+}
+
 func TestTruncateFeedbackUTF8Safe(t *testing.T) {
 	// Build a string that places a 3-byte UTF-8 rune right at the truncation boundary.
 	// U+2603 SNOWMAN = 3 bytes (0xE2 0x98 0x83)
