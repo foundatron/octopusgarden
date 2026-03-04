@@ -4,6 +4,16 @@
 # Disable line length — code examples and URLs often exceed limits
 MD013: false
 
+# Allow hard tabs in code blocks (Go source uses tabs, embedmd preserves them)
+MD010:
+  code_blocks: false
+
+# embedmd directives look like link reference definitions — suppress false positives
+MD053: false
+
+# embedmd places code blocks immediately after directives (no blank line)
+MD031: false
+
 # Allow inline HTML (for custom formatting if needed)
 MD033: false
 

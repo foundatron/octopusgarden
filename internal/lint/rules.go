@@ -138,8 +138,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC015",
 		Level:       Error,
-		Summary:     "step must have a request field",
-		MsgContains: "step missing required field: request",
+		Summary:     "step must have exactly one step type (request or exec)",
+		MsgContains: "exactly one of request or exec is required",
 	},
 	{
 		ID:          "SC016",
@@ -240,5 +240,29 @@ var ScenarioRules = []Rule{
 		Level:       Error,
 		Summary:     "scenario ids must be unique across a directory",
 		MsgContains: "duplicate scenario id",
+	},
+	{
+		ID:          "SC032",
+		Level:       Error,
+		Summary:     "step must not have both request and exec",
+		MsgContains: "both request and exec",
+	},
+	{
+		ID:          "SC033",
+		Level:       Error,
+		Summary:     "exec must be a YAML mapping",
+		MsgContains: "exec must be a mapping",
+	},
+	{
+		ID:          "SC034",
+		Level:       Error,
+		Summary:     "exec must have a command field",
+		MsgContains: "exec missing required field: command",
+	},
+	{
+		ID:          "SC035",
+		Level:       Error,
+		Summary:     "exec command must not be empty",
+		MsgContains: "exec command must not be empty",
 	},
 }

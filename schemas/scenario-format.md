@@ -21,7 +21,7 @@ Violations prevent the scenario from being loaded.
 | SC012 | steps must be a non-empty array |
 | SC013 | setup must be an array |
 | SC014 | each step must be a YAML mapping |
-| SC015 | step must have a request field |
+| SC015 | step must have exactly one step type (request or exec) |
 | SC018 | request must be a YAML mapping |
 | SC019 | request must have a method |
 | SC020 | HTTP method must be valid — Allowed: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. |
@@ -34,6 +34,10 @@ Violations prevent the scenario from being loaded.
 | SC028 | capture must have a jsonpath field |
 | SC029 | jsonpath must use valid $.field.sub syntax — Must start with $. followed by dot-separated field names. |
 | SC031 | scenario ids must be unique across a directory |
+| SC032 | step must not have both request and exec |
+| SC033 | exec must be a YAML mapping |
+| SC034 | exec must have a command field |
+| SC035 | exec command must not be empty |
 
 ## SHOULD (Warnings)
 

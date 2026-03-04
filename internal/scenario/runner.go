@@ -1,33 +1,30 @@
 package scenario
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 )
 
-var errSetupFailed = errors.New("runner: setup step failed")
+var (
+	errSetupFailed          = errors.New("runner: setup step failed")
+	errNoExecutorRegistered = errors.New("no executor registered for step type")
+)
 
-// Runner executes scenario steps as HTTP requests against a live server.
+// Runner executes scenario steps by dispatching to registered StepExecutors.
 type Runner struct {
-	HTTPClient *http.Client
-	BaseURL    string
-	Logger     *slog.Logger
+	Executors map[string]StepExecutor
+	Logger    *slog.Logger
 }
 
-// NewRunner creates a Runner for the given base URL.
-func NewRunner(baseURL string, httpClient *http.Client, logger *slog.Logger) *Runner {
+// NewRunner creates a Runner with the given executor map.
+func NewRunner(executors map[string]StepExecutor, logger *slog.Logger) *Runner {
 	return &Runner{
-		HTTPClient: httpClient,
-		BaseURL:    baseURL,
-		Logger:     logger,
+		Executors: executors,
+		Logger:    logger,
 	}
 }
 
@@ -38,38 +35,58 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 
 	// Execute setup steps — fatal on failure.
 	for i, step := range scenario.Setup {
-		_, resp, _, err := r.executeStep(ctx, step, vars)
+		executor, err := r.resolveExecutor(step)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
 		}
-		if err := applyCaptures(step.Capture, resp.Body, vars); err != nil {
+
+		output, err := executor.Execute(ctx, step, vars)
+		if err != nil {
+			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
+		}
+		if err := applyCaptures(step.Capture, output.CaptureBody, vars); err != nil {
 			return Result{}, fmt.Errorf("%w: step %d capture: %w", errSetupFailed, i, err)
 		}
-		r.Logger.Debug("setup step completed", "step", i, "description", step.Description, "status", resp.Status)
+		r.Logger.Debug("setup step completed", "step", i, "description", step.Description, "type", step.StepType())
 	}
 
 	// Execute judged steps — non-fatal on failure.
 	results := make([]StepResult, 0, len(scenario.Steps))
 	for i, step := range scenario.Steps {
-		req, resp, dur, err := r.executeStep(ctx, step, vars)
+		executor, err := r.resolveExecutor(step)
+		if err != nil {
+			results = append(results, StepResult{
+				Description: step.Description,
+				StepType:    step.StepType(),
+				Err:         err,
+			})
+			r.Logger.Warn("judged step executor error", "step", i, "description", step.Description, "error", err)
+			continue
+		}
+
+		start := time.Now()
+		output, err := executor.Execute(ctx, step, vars)
+		dur := time.Since(start)
+
 		result := StepResult{
 			Description: step.Description,
-			Request:     req,
-			Response:    resp,
+			StepType:    step.StepType(),
+			Observed:    output.Observed,
+			CaptureBody: output.CaptureBody,
 			Duration:    dur,
 			Err:         err,
 		}
 		results = append(results, result)
 
 		if err != nil {
-			r.Logger.Warn("judged step transport error", "step", i, "description", step.Description, "error", err)
+			r.Logger.Warn("judged step execution error", "step", i, "description", step.Description, "error", err)
 			continue
 		}
 
-		if err := applyCaptures(step.Capture, resp.Body, vars); err != nil {
+		if err := applyCaptures(step.Capture, output.CaptureBody, vars); err != nil {
 			r.Logger.Warn("judged step capture error", "step", i, "error", err)
 		}
-		r.Logger.Debug("judged step completed", "step", i, "description", step.Description, "status", resp.Status)
+		r.Logger.Debug("judged step completed", "step", i, "description", step.Description, "type", step.StepType())
 	}
 
 	return Result{
@@ -78,58 +95,16 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 	}, nil
 }
 
-func (r *Runner) executeStep(ctx context.Context, step Step, vars map[string]string) (Request, HTTPResponse, time.Duration, error) {
-	req := substituteRequest(step.Request, vars)
-
-	body, err := buildRequestBody(req.Body, vars)
-	if err != nil {
-		return req, HTTPResponse{}, 0, fmt.Errorf("build request body: %w", err)
+func (r *Runner) resolveExecutor(step Step) (StepExecutor, error) {
+	st := step.StepType()
+	if st == "" {
+		return nil, errUnknownStepType
 	}
-
-	var bodyReader io.Reader
-	if body != nil {
-		bodyReader = bytes.NewReader(body)
+	executor, ok := r.Executors[st]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", errNoExecutorRegistered, st)
 	}
-
-	url := r.BaseURL + req.Path
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, url, bodyReader)
-	if err != nil {
-		return req, HTTPResponse{}, 0, fmt.Errorf("create request: %w", err)
-	}
-
-	// Default Content-Type for requests with a body.
-	if body != nil {
-		httpReq.Header.Set("Content-Type", "application/json")
-	}
-
-	// Apply step headers (can override defaults).
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
-	}
-
-	start := time.Now()
-	resp, err := r.HTTPClient.Do(httpReq) //nolint:gosec // URL is constructed from configured BaseURL + scenario path, not user input
-	dur := time.Since(start)
-	if err != nil {
-		return req, HTTPResponse{}, dur, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // cap at 10MB
-	if err != nil {
-		return req, HTTPResponse{}, dur, fmt.Errorf("read response body: %w", err)
-	}
-
-	headers := make(map[string]string, len(resp.Header))
-	for k := range resp.Header {
-		headers[k] = resp.Header.Get(k)
-	}
-
-	return req, HTTPResponse{
-		Status:  resp.StatusCode,
-		Headers: headers,
-		Body:    string(respBody),
-	}, dur, nil
+	return executor, nil
 }
 
 func substituteVars(s string, vars map[string]string) string {
@@ -139,59 +114,9 @@ func substituteVars(s string, vars map[string]string) string {
 	return s
 }
 
-func substituteRequest(req Request, vars map[string]string) Request {
-	out := Request{
-		Method:  req.Method,
-		Path:    substituteVars(req.Path, vars),
-		Headers: make(map[string]string, len(req.Headers)),
-		Body:    req.Body,
-	}
-	for k, v := range req.Headers {
-		out.Headers[k] = substituteVars(v, vars)
-	}
-	// Body substitution is handled in buildRequestBody.
-	return out
-}
-
-func buildRequestBody(body any, vars map[string]string) ([]byte, error) {
-	if body == nil {
-		return nil, nil
-	}
-
-	switch v := body.(type) {
-	case string:
-		return []byte(substituteVars(v, vars)), nil
-	default:
-		// map or slice from YAML — marshal to JSON, then substitute with JSON-safe escaping.
-		data, err := json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("marshal body: %w", err)
-		}
-		return []byte(substituteVarsJSON(string(data), vars)), nil
-	}
-}
-
-// substituteVarsJSON replaces {name} placeholders in a JSON string with
-// JSON-escaped values. This prevents captured values containing quotes or
-// newlines from breaking the JSON structure.
-func substituteVarsJSON(s string, vars map[string]string) string {
-	for name, val := range vars {
-		escaped, err := json.Marshal(val)
-		if err != nil {
-			// Fallback to raw substitution if marshaling fails (shouldn't happen for strings).
-			s = strings.ReplaceAll(s, "{"+name+"}", val)
-			continue
-		}
-		// json.Marshal wraps the value in quotes — strip them for substitution
-		// since the placeholder is already inside a JSON string literal.
-		s = strings.ReplaceAll(s, "{"+name+"}", string(escaped[1:len(escaped)-1]))
-	}
-	return s
-}
-
-func applyCaptures(captures []Capture, responseBody string, vars map[string]string) error {
+func applyCaptures(captures []Capture, captureBody string, vars map[string]string) error {
 	for _, c := range captures {
-		val, err := evalJSONPath(responseBody, c.JSONPath)
+		val, err := evalJSONPath(captureBody, c.JSONPath)
 		if err != nil {
 			return fmt.Errorf("capture %q: %w", c.Name, err)
 		}

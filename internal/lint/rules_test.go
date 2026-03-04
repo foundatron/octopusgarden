@@ -111,6 +111,14 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: item_id\n        jsonpath: bad\n",
 		// SC030: variable referenced but never captured
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /items/{missing}\n    expect: ok\n",
+		// SC032: step has both request and exec
+		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    exec:\n      command: echo hi\n    expect: ok\n",
+		// SC033: exec not a mapping
+		"id: test\nsteps:\n  - description: d\n    exec: notamapping\n    expect: ok\n",
+		// SC034: exec missing command
+		"id: test\nsteps:\n  - description: d\n    exec: {}\n    expect: ok\n",
+		// SC035: exec command empty
+		"id: test\nsteps:\n  - description: d\n    exec:\n      command: \"\"\n    expect: ok\n",
 	}
 
 	// Rules that can only be triggered by dir-level checks.

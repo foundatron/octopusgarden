@@ -34,7 +34,7 @@ func TestJudgeScorePerfect(t *testing.T) {
 	}
 
 	judge := NewJudge(client, "test-model", newTestLogger())
-	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "200 OK"}, HTTPResponse{Status: 200, Body: "ok"})
+	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "200 OK"}, "HTTP 200\nBody:\nok")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestJudgeScorePartialWithFailures(t *testing.T) {
 	}
 
 	judge := NewJudge(client, "test-model", newTestLogger())
-	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "full response"}, HTTPResponse{Status: 404, Body: "not found"})
+	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "full response"}, "HTTP 404\nBody:\nnot found")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestJudgeScoreLLMError(t *testing.T) {
 	}
 
 	judge := NewJudge(client, "test-model", newTestLogger())
-	_, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "ok"}, HTTPResponse{Status: 200, Body: "ok"})
+	_, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "ok"}, "HTTP 200\nBody:\nok")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -100,7 +100,7 @@ func TestJudgeScorePromptContainsExpected(t *testing.T) {
 	_, err := judge.Score(context.Background(),
 		Scenario{Description: "My scenario"},
 		Step{Description: "My step", Expect: "Returns 200 with data"},
-		HTTPResponse{Status: 200, Body: `{"data": true}`},
+		"HTTP 200\nBody:\n{\"data\": true}",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -143,8 +143,8 @@ func TestJudgeScoreScenarioAveraging(t *testing.T) {
 	result := Result{
 		ScenarioID: "avg-test",
 		Steps: []StepResult{
-			{Description: "Step 1", Response: HTTPResponse{Status: 200, Body: "ok"}},
-			{Description: "Step 2", Response: HTTPResponse{Status: 200, Body: "ok"}},
+			{Description: "Step 1", Observed: "HTTP 200\nBody:\nok"},
+			{Description: "Step 2", Observed: "HTTP 200\nBody:\nok"},
 		},
 	}
 
@@ -182,7 +182,7 @@ func TestJudgeScoreScenarioTransportError(t *testing.T) {
 		ScenarioID: "err-test",
 		Steps: []StepResult{
 			{Description: "Failing step", Err: errors.New("connection refused")},
-			{Description: "Good step", Response: HTTPResponse{Status: 200, Body: "ok"}},
+			{Description: "Good step", Observed: "HTTP 200\nBody:\nok"},
 		},
 	}
 

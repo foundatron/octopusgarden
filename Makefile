@@ -2,7 +2,7 @@
 
 BINARY := octog
 
-.PHONY: all help build test lint fmt generate clean
+.PHONY: all help build test lint fmt generate clean docs docs-check
 
 all: build
 
@@ -24,6 +24,12 @@ generate: ## Run go generate
 
 fmt: ## Format with gci + gofumpt
 	golangci-lint fmt ./...
+
+docs: ## Sync embedded code in docs
+	go run github.com/campoy/embedmd/v2@latest -w docs/*.md
+
+docs-check: ## Verify docs are in sync with code
+	go run github.com/campoy/embedmd/v2@latest -d docs/*.md
 
 clean: ## Remove built binary
 	rm -f $(BINARY)
