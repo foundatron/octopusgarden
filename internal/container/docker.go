@@ -438,6 +438,9 @@ func (lw *limitedStringWriter) Write(p []byte) (int, error) {
 
 // StartSession creates a long-lived container for exec-based validation.
 // The container runs "sleep infinity" to stay alive for multiple exec calls.
+// Entrypoint is set explicitly so that any ENTRYPOINT in the generated
+// Dockerfile is overridden rather than receiving "sleep" and "infinity" as
+// arguments.
 // Returns a Session and a StopFunc to clean up the container.
 func (m *Manager) StartSession(ctx context.Context, tag string) (*Session, StopFunc, error) {
 	createResp, err := m.docker.ContainerCreate(ctx,
