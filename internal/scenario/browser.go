@@ -152,6 +152,13 @@ func (e *BrowserExecutor) ensureBrowser() error {
 	e.ctxCancel = ctxCancel
 	e.browserCtx = browserCtx
 
+	// Eagerly start the browser so its lifecycle is tied to browserCtx,
+	// not a derived timeout context from the first Execute call.
+	if err := chromedp.Run(e.browserCtx); err != nil {
+		e.Close()
+		return fmt.Errorf("start browser: %w", err)
+	}
+
 	return nil
 }
 
