@@ -5,7 +5,7 @@ import (
 )
 
 func TestLoadTodoAppScenarios(t *testing.T) {
-	scenarios, err := LoadDir("../../scenarios/examples/todo-app")
+	scenarios, err := LoadDir("../../examples/todo-app/scenarios")
 	if err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}

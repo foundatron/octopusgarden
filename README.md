@@ -79,21 +79,21 @@ Run the factory on the included examples:
 ```bash
 # Items REST API (uses default model: claude-sonnet-4-6)
 octog run \
-  --spec specs/examples/hello-api/spec.md \
-  --scenarios scenarios/examples/hello-api/ \
+  --spec examples/hello-api/spec.md \
+  --scenarios examples/hello-api/scenarios/ \
   --threshold 90
 
 # Todo app with auth
 octog run \
-  --spec specs/examples/todo-app/spec.md \
-  --scenarios scenarios/examples/todo-app/ \
+  --spec examples/todo-app/spec.md \
+  --scenarios examples/todo-app/scenarios/ \
   --model claude-sonnet-4-6 \
   --judge-model claude-haiku-4-5
 
 # Expense tracker
 octog run \
-  --spec specs/examples/expense-tracker/spec.md \
-  --scenarios scenarios/examples/expense-tracker/ \
+  --spec examples/expense-tracker/spec.md \
+  --scenarios examples/expense-tracker/scenarios/ \
   --model claude-sonnet-4-6 \
   --judge-model claude-haiku-4-5
 ```
@@ -102,7 +102,7 @@ Validate a running service against scenarios independently:
 
 ```bash
 octog validate \
-  --scenarios scenarios/examples/hello-api/ \
+  --scenarios examples/hello-api/scenarios/ \
   --target http://localhost:8080
 ```
 

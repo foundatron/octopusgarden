@@ -107,7 +107,7 @@ func TestCheckSpecContent(t *testing.T) {
 
 func TestCheckSpecFile(t *testing.T) {
 	// Test with the actual example spec.
-	diags, err := CheckSpec("../../specs/examples/hello-api/spec.md")
+	diags, err := CheckSpec("../../examples/hello-api/spec.md")
 	if err != nil {
 		t.Fatalf("CheckSpec: %v", err)
 	}
