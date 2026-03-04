@@ -38,11 +38,16 @@ const stepPassThreshold = 80
 var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
 	errScenariosAndTargetRequired = errors.New("--scenarios and --target are required")
-	errMissingAPIKey              = errors.New("ANTHROPIC_API_KEY not set (use env var or ~/.octopusgarden/config)")
+	errMissingAnthropicKey        = errors.New("ANTHROPIC_API_KEY not set (use env var or ~/.octopusgarden/config)")
+	errMissingOpenAIKey           = errors.New("OPENAI_API_KEY not set (use env var or ~/.octopusgarden/config)")
+	errNoAPIKey                   = errors.New("no API key found: set ANTHROPIC_API_KEY or OPENAI_API_KEY (or use ~/.octopusgarden/config)")
+	errAmbiguousProvider          = errors.New("both ANTHROPIC_API_KEY and OPENAI_API_KEY are set; use --provider to disambiguate")
 	errBelowThreshold             = errors.New("satisfaction below threshold")
 	errInvalidThreshold           = errors.New("--threshold must be between 0 and 100")
 	errNoJudgeModelPricing        = errors.New("judge model has no pricing entry")
 	errInvalidFormat              = errors.New("--format must be \"text\" or \"json\"")
+	errInvalidProvider            = errors.New("--provider must be \"anthropic\" or \"openai\"")
+	errListModelsUnsupported      = errors.New("provider does not support listing models")
 )
 
 func main() {
@@ -105,8 +110,9 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	specFlag := fs.String("spec", "", "path to spec file (required)")
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
-	model := fs.String("model", "claude-sonnet-4-6", "LLM model to use for generation")
-	judgeModel := fs.String("judge-model", "claude-haiku-4-5", "LLM model for satisfaction judging")
+	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+	model := fs.String("model", "", "LLM model to use for generation (default: provider-specific)")
+	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	budget := fs.Float64("budget", 5.00, "maximum budget in USD")
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
@@ -126,65 +132,58 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errSpecAndScenariosRequired
 	}
 
+	// Validate threshold range early (before potentially slow LLM client creation).
+	if *threshold < 0 || *threshold > 100 {
+		return errInvalidThreshold
+	}
+
+	// Create LLM client (resolves provider) and apply model defaults.
+	clients, err := newLLMClient(*provider, logger)
+	if err != nil {
+		return err
+	}
+	applyModelDefaults(model, judgeModel, clients.provider)
+
 	if err := validateJudgeFlags(*threshold, *judgeModel); err != nil {
 		return err
 	}
 
-	// Parse spec.
-	parsedSpec, err := spec.ParseFile(*specFlag)
+	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget)
+}
+
+func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int) error {
+	parsedSpec, err := spec.ParseFile(specPath)
 	if err != nil {
 		return fmt.Errorf("parse spec: %w", err)
 	}
 
-	// Load scenarios.
-	scenarios, err := scenario.LoadDir(*scenariosFlag)
+	scenarios, err := scenario.LoadDir(scenariosPath)
 	if err != nil {
 		return fmt.Errorf("load scenarios: %w", err)
 	}
 
-	// Create LLM client.
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return errMissingAPIKey
-	}
-	llmClient := llm.NewAnthropicClient(apiKey, logger)
-
-	// Create container manager.
 	containerMgr, err := container.NewManager(logger)
 	if err != nil {
 		return fmt.Errorf("create container manager: %w", err)
 	}
 	defer func() { _ = containerMgr.Close() }()
 
-	// Create store.
 	st, err := openStore(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
 
-	// Build validate function.
-	validateFn := buildValidateFn(scenarios, llmClient, logger, *judgeModel)
+	validateFn := buildValidateFn(scenarios, llmClient, logger, judgeModel)
 
-	// Create attractor and run.
 	att := attractor.New(llmClient, containerMgr, logger)
 	opts := attractor.RunOptions{
-		Model:         *model,
-		BudgetUSD:     *budget,
-		Threshold:     *threshold,
-		PatchMode:     *patchMode,
-		ContextBudget: *contextBudget,
-		Progress: func(p attractor.IterationProgress) {
-			if p.Outcome != attractor.OutcomeValidated {
-				fmt.Fprintf(os.Stderr, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
-					p.Iteration, p.MaxIterations, p.Outcome,
-					p.TotalCostUSD, p.Elapsed.Truncate(time.Second))
-			} else {
-				fmt.Fprintf(os.Stderr, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
-					p.Iteration, p.MaxIterations, p.Satisfaction, p.Threshold,
-					p.TotalCostUSD, p.Trend, p.Elapsed.Truncate(time.Second))
-			}
-		},
+		Model:         model,
+		BudgetUSD:     budget,
+		Threshold:     threshold,
+		PatchMode:     patchMode,
+		ContextBudget: contextBudget,
+		Progress:      progressFn(),
 	}
 
 	startedAt := time.Now()
@@ -194,41 +193,69 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	}
 	finishedAt := time.Now()
 
-	// Print final summary line.
+	printRunSummary(result)
+	recordRun(ctx, logger, st, result, specPath, model, threshold, budget, startedAt, finishedAt)
+	printResult(result)
+	return nil
+}
+
+func progressFn() func(attractor.IterationProgress) {
+	return func(p attractor.IterationProgress) {
+		if p.Outcome != attractor.OutcomeValidated {
+			fmt.Fprintf(os.Stderr, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+				p.Iteration, p.MaxIterations, p.Outcome,
+				p.TotalCostUSD, p.Elapsed.Truncate(time.Second))
+		} else {
+			fmt.Fprintf(os.Stderr, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+				p.Iteration, p.MaxIterations, p.Satisfaction, p.Threshold,
+				p.TotalCostUSD, p.Trend, p.Elapsed.Truncate(time.Second))
+		}
+	}
+}
+
+func printRunSummary(result *attractor.RunResult) {
 	if result.Status == attractor.StatusConverged {
 		fmt.Fprintf(os.Stderr, "\n✓ Converged after %d iterations ($%.2f total)\n", result.Iterations, result.CostUSD) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 	} else {
 		fmt.Fprintf(os.Stderr, "\n✗ %s after %d iterations ($%.2f total)\n", result.Status, result.Iterations, result.CostUSD) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 	}
+}
 
-	// Record result in store.
+func recordRun(ctx context.Context, logger *slog.Logger, st *store.Store, result *attractor.RunResult, specPath, model string, threshold, budget float64, startedAt, finishedAt time.Time) {
 	run := store.Run{
 		ID:           result.RunID,
-		SpecPath:     *specFlag,
-		Model:        *model,
-		Threshold:    *threshold,
-		BudgetUSD:    *budget,
+		SpecPath:     specPath,
+		Model:        model,
+		Threshold:    threshold,
+		BudgetUSD:    budget,
 		StartedAt:    startedAt,
 		FinishedAt:   &finishedAt,
 		Satisfaction: result.Satisfaction,
 		Iterations:   result.Iterations,
 		TotalCostUSD: result.CostUSD,
 		Status:       result.Status,
-		// TotalTokens not yet tracked by attractor.RunResult
 	}
 	if err := st.RecordRun(ctx, run); err != nil {
 		logger.Warn("failed to record run", "error", err)
 	}
+}
 
-	printResult(result)
-	return nil
+// applyModelDefaults sets model and judgeModel to provider-specific defaults if empty.
+func applyModelDefaults(model, judgeModel *string, provider string) {
+	if *model == "" {
+		*model = defaultModel(provider)
+	}
+	if *judgeModel == "" {
+		*judgeModel = defaultJudgeModel(provider)
+	}
 }
 
 func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
 	target := fs.String("target", "", "target URL to validate against (required)")
-	judgeModel := fs.String("judge-model", "claude-haiku-4-5", "LLM model for satisfaction judging")
+	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
 	format := fs.String("format", "text", "output format: text or json")
 
@@ -250,31 +277,36 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return errScenariosAndTargetRequired
 	}
 
+	// Create LLM client (resolves provider) and apply judge model default.
+	clients, err := newLLMClient(*provider, logger)
+	if err != nil {
+		return err
+	}
+	if *judgeModel == "" {
+		*judgeModel = defaultJudgeModel(clients.provider)
+	}
+
 	if err := validateJudgeFlags(*threshold, *judgeModel); err != nil {
 		return err
 	}
 
-	// Load scenarios.
 	scenarios, err := scenario.LoadDir(*scenariosFlag)
 	if err != nil {
 		return fmt.Errorf("load scenarios: %w", err)
 	}
 
-	// Create LLM client for judging.
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return errMissingAPIKey
-	}
-	llmClient := llm.NewAnthropicClient(apiKey, logger)
-
-	agg, err := runAndScore(ctx, scenarios, *target, llmClient, logger, *judgeModel)
+	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
 
-	switch *format {
+	return outputValidation(agg, *target, *threshold, *format)
+}
+
+func outputValidation(agg scenario.AggregateResult, target string, threshold float64, format string) error {
+	switch format {
 	case "json":
-		out := view.NewValidateOutput(agg, *target, *threshold, stepPassThreshold)
+		out := view.NewValidateOutput(agg, target, threshold, stepPassThreshold)
 		if err := view.WriteJSON(os.Stdout, out); err != nil {
 			return fmt.Errorf("write json: %w", err)
 		}
@@ -282,8 +314,8 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		fprintValidationResult(os.Stdout, agg)
 	}
 
-	if *threshold > 0 && agg.Satisfaction < *threshold {
-		return fmt.Errorf("%w: %.1f < %.1f", errBelowThreshold, agg.Satisfaction, *threshold)
+	if threshold > 0 && agg.Satisfaction < threshold {
+		return fmt.Errorf("%w: %.1f < %.1f", errBelowThreshold, agg.Satisfaction, threshold)
 	}
 	return nil
 }
@@ -350,24 +382,35 @@ func validateJudgeFlags(threshold float64, judgeModel string) error {
 	return nil
 }
 
+// modelLister is implemented by LLM clients that can list available models.
+type modelLister interface {
+	ListModels(ctx context.Context) ([]llm.AvailableModel, error)
+}
+
 func modelsCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("models", flag.ContinueOnError)
+	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog models\n\nList available models from the Anthropic API.\n")
+		fmt.Fprintf(os.Stderr, "Usage: octog models [flags]\n\nList available models.\n\nFlags:\n")
+		fs.PrintDefaults()
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return errMissingAPIKey
+	clients, err := newLLMClient(*provider, logger)
+	if err != nil {
+		return err
 	}
 
-	client := llm.NewAnthropicClient(apiKey, logger)
-	models, err := client.ListModels(ctx)
+	lister, ok := clients.client.(modelLister)
+	if !ok {
+		return errListModelsUnsupported
+	}
+
+	models, err := lister.ListModels(ctx)
 	if err != nil {
 		return fmt.Errorf("list models: %w", err)
 	}
@@ -626,6 +669,81 @@ func loadConfig(logger *slog.Logger) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// resolveProvider determines which LLM provider to use based on the --provider
+// flag and environment variables. Returns "anthropic" or "openai".
+func resolveProvider(provider string) (string, error) {
+	if provider != "" {
+		switch provider {
+		case "anthropic", "openai":
+			return provider, nil
+		default:
+			return "", errInvalidProvider
+		}
+	}
+
+	hasAnthropic := os.Getenv("ANTHROPIC_API_KEY") != ""
+	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
+
+	switch {
+	case hasAnthropic && hasOpenAI:
+		return "", errAmbiguousProvider
+	case hasAnthropic:
+		return "anthropic", nil
+	case hasOpenAI:
+		return "openai", nil
+	default:
+		return "", errNoAPIKey
+	}
+}
+
+type llmClients struct {
+	client   llm.Client
+	provider string
+}
+
+// newLLMClient creates the appropriate LLM client based on the resolved provider.
+func newLLMClient(provider string, logger *slog.Logger) (llmClients, error) {
+	resolved, err := resolveProvider(provider)
+	if err != nil {
+		return llmClients{}, err
+	}
+
+	switch resolved {
+	case "openai":
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			return llmClients{}, errMissingOpenAIKey
+		}
+		baseURL := os.Getenv("OPENAI_BASE_URL")
+		zeroCost := baseURL != "" // local endpoints like Ollama have no billing
+		client := llm.NewOpenAIClient(apiKey, baseURL, zeroCost, logger)
+		return llmClients{client: client, provider: resolved}, nil
+	default: // anthropic
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" {
+			return llmClients{}, errMissingAnthropicKey
+		}
+		client := llm.NewAnthropicClient(apiKey, logger)
+		return llmClients{client: client, provider: resolved}, nil
+	}
+}
+
+// defaultModel returns the default generation model for the given provider.
+func defaultModel(provider string) string {
+	if provider == "openai" {
+		return "gpt-4o"
+	}
+	return "claude-sonnet-4-6"
+}
+
+// defaultJudgeModel returns the default judge model for the given provider.
+func defaultJudgeModel(provider string) string {
+	if provider == "openai" {
+		return "gpt-4o-mini"
+	}
+	return "claude-haiku-4-5"
 }
 
 func printResult(result *attractor.RunResult) {

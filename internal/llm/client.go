@@ -29,6 +29,7 @@ type GenerateResponse struct {
 	OutputTokens int
 	CacheHit     bool
 	CostUSD      float64
+	FinishReason string
 }
 
 // JudgeRequest contains parameters for satisfaction judging.

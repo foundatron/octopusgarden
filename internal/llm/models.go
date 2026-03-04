@@ -46,6 +46,31 @@ var pricingTable = map[string]ModelPricing{
 		CacheWritePerMillion: 6.25,
 		CacheReadPerMillion:  0.50,
 	},
+	// OpenAI models — cache writes same as input, cache reads 50% off.
+	"gpt-4o": {
+		InputPerMillion:      2.50,
+		OutputPerMillion:     10.00,
+		CacheWritePerMillion: 2.50,
+		CacheReadPerMillion:  1.25,
+	},
+	"gpt-4o-mini": {
+		InputPerMillion:      0.15,
+		OutputPerMillion:     0.60,
+		CacheWritePerMillion: 0.15,
+		CacheReadPerMillion:  0.075,
+	},
+	"o1": {
+		InputPerMillion:      15.00,
+		OutputPerMillion:     60.00,
+		CacheWritePerMillion: 15.00,
+		CacheReadPerMillion:  7.50,
+	},
+	"o3-mini": {
+		InputPerMillion:      1.10,
+		OutputPerMillion:     4.40,
+		CacheWritePerMillion: 1.10,
+		CacheReadPerMillion:  0.55,
+	},
 }
 
 // fallbackPricing is used for unknown models. Intentionally set to the most
