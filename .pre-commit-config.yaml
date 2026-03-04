@@ -39,7 +39,7 @@ repos:
         additional_dependencies:
           - mdformat-gfm
         args: [--wrap, "100"]
-        exclude: ^schemas/(spec|scenario)-format\.md$
+        exclude: ^(schemas/(spec|scenario)-format\.md|docs/architecture\.md)$
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.21.0
@@ -79,6 +79,16 @@ repos:
         language: system
         entry: bash -c 'go generate ./... && git diff --exit-code -- schemas/spec-format.md schemas/scenario-format.md'
         pass_filenames: false
+
+  # ── Embedded code in docs must be up to date ──────────────────────────────
+  - repo: local
+    hooks:
+      - id: embedmd-check
+        name: embedmd (stale check)
+        language: system
+        entry: bash -c 'go run github.com/campoy/embedmd/v2@latest -d docs/*.md'
+        pass_filenames: false
+        stages: [pre-push]
 
   # ── Go: format + incremental lint on commit ─────────────────────────────────
   - repo: https://github.com/golangci/golangci-lint

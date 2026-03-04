@@ -20,89 +20,33 @@ scenarios using an LLM judge, and iterates on failures until satisfaction conver
 
 ```text
 octopusgarden/
-├── CLAUDE.md
-├── README.md
-├── go.mod
-├── go.sum
-├── cmd/
-│   └── octog/
-│       └── main.go             # CLI entrypoint, subcommand routing
+├── cmd/octog/main.go             # CLI entrypoint, subcommand routing
 ├── internal/
-│   ├── spec/
-│   │   ├── parser.go           # Parse markdown specs into structured form
-│   │   ├── types.go            # Spec data structures
-│   │   └── summary.go          # Pyramid summaries for large specs
-│   ├── scenario/
-│   │   ├── loader.go           # Load scenarios from YAML files
-│   │   ├── runner.go           # Execute scenario steps against running software
-│   │   ├── judge.go            # LLM-as-judge satisfaction scoring
-│   │   ├── types.go            # Scenario data structures
-│   │   ├── result.go           # Result, StepScore, ScoredStep, ScoredScenario, AggregateResult
-│   │   └── jsonpath.go         # Dot-notation JSONPath evaluator ($.field.sub)
-│   ├── attractor/
-│   │   ├── attractor.go        # Core attractor convergence loop
-│   │   ├── convergence.go      # Trend detection
-│   │   └── fileparse.go        # Parse LLM output into files, merge for patch mode
-│   ├── container/
-│   │   └── docker.go           # Build and run Docker containers
-│   ├── llm/
-│   │   ├── client.go           # Model-agnostic LLM client interface
-│   │   ├── anthropic.go        # Anthropic API backend (anthropic-sdk-go)
-│   │   ├── openai.go           # OpenAI/Ollama backend (go-openai)
-│   │   ├── models.go           # Model registry, cost tracking
-│   │   └── prompt.go           # Prompt templates
-│   └── store/
-│       ├── db.go               # SQLite: run history, satisfaction scores, costs
-│       └── types.go            # Run, Iteration structs
-├── specs/
-│   └── examples/
-│       ├── hello-api/
-│       │   └── spec.md
-│       ├── todo-app/
-│       │   └── spec.md
-│       └── expense-tracker/
-│           └── spec.md
-├── scenarios/
-│   └── examples/
-│       ├── hello-api/
-│       │   ├── crud.yaml
-│       │   ├── list.yaml
-│       │   ├── pagination.yaml
-│       │   ├── validation.yaml
-│       │   └── not-found.yaml
-│       ├── todo-app/
-│       │   ├── crud.yaml
-│       │   ├── list.yaml
-│       │   ├── pagination.yaml
-│       │   ├── validation.yaml
-│       │   ├── not-found.yaml
-│       │   ├── register.yaml
-│       │   ├── register-duplicate.yaml
-│       │   ├── register-validation.yaml
-│       │   ├── auth-required.yaml
-│       │   ├── auth-invalid.yaml
-│       │   ├── ownership.yaml
-│       │   ├── mark-completed.yaml
-│       │   └── filter-completed.yaml
-│       └── expense-tracker/
-│           ├── expense-crud.yaml
-│           ├── expense-list.yaml
-│           ├── expense-filter.yaml
-│           ├── expense-summary.yaml
-│           ├── expense-validation.yaml
-│           ├── expense-no-category.yaml
-│           ├── category-crud.yaml
-│           ├── category-duplicate.yaml
-│           ├── category-validation.yaml
-│           ├── register.yaml
-│           ├── register-duplicate.yaml
-│           ├── register-validation.yaml
-│           ├── auth-required.yaml
-│           ├── auth-invalid.yaml
-│           ├── ownership.yaml
-│           └── not-found.yaml
-└── docs/
-    └── architecture.md         # This file
+│   ├── spec/                     # Parse markdown specs (parser.go, types.go, summary.go)
+│   ├── scenario/                 # Load/run/judge YAML scenarios
+│   │   ├── types.go              # Scenario, Step, Request, Capture
+│   │   ├── loader.go             # Load, LoadFile, LoadDir
+│   │   ├── runner.go             # Execute scenario steps against live server
+│   │   ├── judge.go              # LLM-as-judge satisfaction scoring
+│   │   ├── result.go             # Result, StepScore, ScoredStep, ScoredScenario, AggregateResult
+│   │   └── jsonpath.go           # Dot-notation JSONPath evaluator ($.field.sub)
+│   ├── attractor/                # Convergence loop
+│   │   ├── attractor.go          # Core loop, types, options
+│   │   ├── convergence.go        # Trend detection
+│   │   └── fileparse.go          # Parse LLM output into files, merge for patch mode
+│   ├── container/docker.go       # Build and run Docker containers
+│   ├── llm/                      # LLM client abstraction
+│   │   ├── client.go             # Client interface, request/response types
+│   │   ├── anthropic.go          # Anthropic backend (anthropic-sdk-go)
+│   │   ├── openai.go             # OpenAI/Ollama backend (openai-go/v3)
+│   │   ├── json.go               # Shared JSON extraction for judge responses
+│   │   ├── models.go             # Model registry, cost tracking
+│   │   └── prompt.go             # Prompt templates
+│   ├── lint/                     # Spec and scenario linting
+│   └── store/                    # SQLite run history (db.go, types.go)
+├── specs/examples/               # Example spec files
+├── scenarios/examples/           # Example scenario YAML files
+└── docs/architecture.md          # This file
 ```
 
 ## Package Dependency DAG
@@ -123,234 +67,102 @@ cmd/octog
 
 Key constraint: `internal/attractor` never imports `internal/scenario`. The attractor receives spec
 content and failure feedback as strings. The validator (scenario runner + judge) is invoked by
-`cmd/octog`, not by the attractor. Store interaction is also owned by `cmd/octog` — the attractor
-returns a `RunResult` and the CLI records it post-hoc.
+`cmd/octog`, not by the attractor. Store interaction is also owned by `cmd/octog`.
 
 ## LLM Client Interface
 
+[embedmd]:# (../internal/llm/client.go go /^\/\/ Client is/ /^}/)
 ```go
-// internal/llm/client.go
-
+// Client is the model-agnostic LLM interface used by the attractor loop and judge.
 type Client interface {
-    Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
-    Judge(ctx context.Context, req JudgeRequest) (JudgeResponse, error)
-}
-
-type GenerateRequest struct {
-    SystemPrompt string
-    Messages     []Message
-    MaxTokens    int
-    Model        string        // e.g. "claude-sonnet-4-20250514", "gpt-4o"
-    CacheControl *CacheControl // nil = no caching
-}
-
-type CacheControl struct {
-    Type string // "ephemeral"
-}
-
-type GenerateResponse struct {
-    Content     string
-    InputTokens  int
-    OutputTokens int
-    CacheHit     bool  // true if prompt cache was used
-    CostUSD      float64
-}
-
-type JudgeRequest struct {
-    SystemPrompt string
-    UserPrompt   string
-    Model        string
-}
-
-type JudgeResponse struct {
-    Score    int      // 0-100
-    Reasoning string
-    Failures []string
-    CostUSD  float64
-}
-
-type Message struct {
-    Role    string // "user" or "assistant"
-    Content string
+	Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
+	Judge(ctx context.Context, req JudgeRequest) (JudgeResponse, error)
 }
 ```
+
+Request/response types (`GenerateRequest`, `GenerateResponse`, `JudgeRequest`, `JudgeResponse`,
+`Message`, `CacheControl`) are defined in `internal/llm/client.go`.
 
 ### Anthropic Backend (`internal/llm/anthropic.go`)
 
-Uses `github.com/anthropics/anthropic-sdk-go`. Key features:
-
-- Prompt caching via `CacheControl` on system prompt blocks
-- Native token counting from API response
-- Cost estimation from model pricing table
+Uses `github.com/anthropics/anthropic-sdk-go`. Spec content in the system prompt gets
+`CacheControl{Type: "ephemeral"}` — cached across attractor iterations for ~90% input cost reduction
+(cache TTL: 5 minutes, resets on hit). Failure feedback in user messages changes each iteration and
+is not cached.
 
 ### OpenAI Backend (`internal/llm/openai.go`)
 
-Uses `github.com/sashabaranov/go-openai`. For GPT models and OpenAI-compatible endpoints (Ollama at
-`localhost:11434`).
-
-> **Note:** The OpenAI backend is currently a planned stub — it implements the `Client` interface
-> but is not yet wired into the CLI. Contributions welcome.
-
-## Prompt Caching Strategy
-
-The spec content is included in every attractor iteration as a system prompt. Without caching, this
-is the dominant cost.
-
-Anthropic's prompt caching:
-
-1. First request: full cost (cache write)
-1. Subsequent requests with same prefix: ~10% of input cost (cache read)
-1. Cache TTL: 5 minutes (resets on each hit)
-
-Implementation:
-
-- Set `CacheControl: &CacheControl{Type: "ephemeral"}` on the system message block containing spec
-  content
-- The failure feedback in user messages changes each iteration (not cached — that's fine, it's
-  small)
-- Expected savings: 80-90% on input tokens for iterations 2+
+Uses `github.com/openai/openai-go/v3`. For GPT models and OpenAI-compatible endpoints (Ollama via
+`OPENAI_BASE_URL`). Implements `Generate`, `Judge`, and `ListModels`.
 
 ## Spec Data Structures
 
+[embedmd]:# (../internal/spec/types.go go)
 ```go
-// internal/spec/types.go
+package spec
 
+// Spec represents a parsed markdown specification.
 type Spec struct {
-    Title       string
-    Description string
-    Sections    []Section
-    RawContent  string // full markdown, used for LLM prompt
+	Title       string
+	Description string
+	Sections    []Section
+	RawContent  string // full markdown, used for LLM prompt
 }
 
+// Section represents a single heading and its content within a spec.
 type Section struct {
-    Heading string
-    Level   int    // 1, 2, 3...
-    Content string // text content under this heading
+	Heading string
+	Level   int    // 1, 2, 3...
+	Content string // text content under this heading
 }
 ```
 
-### Pyramid Summaries (`internal/spec/summary.go`)
-
-For large specs that exceed a context budget, the spec package produces multi-level summaries to fit
-within a token limit while preserving detail for failure-relevant sections.
-
-```go
-// internal/spec/summary.go
-
-type SummarizedSpec struct {
-    Spec     *Spec
-    Sections []SectionSummary // per-section 2-3 sentence summaries
-    Outline  string           // headings + one-line descriptions
-    Abstract string           // single paragraph
-}
-
-type SectionSummary struct {
-    Heading string
-    Summary string
-}
-
-type SummarizeResult struct {
-    Summary *SummarizedSpec
-    CostUSD float64
-}
-
-func EstimateTokens(text string) int              // len(text)/4 heuristic
-func Summarize(ctx context.Context, s *Spec, client llm.Client, model string) (SummarizeResult, error)
-func SelectContent(ss *SummarizedSpec, budget int, failures []string) string
-```
-
-`SelectContent` picks the richest representation that fits within the budget:
-
-1. Full spec (if it fits)
-1. Section summaries with failure-relevant sections expanded to full content
-1. Outline + failure-relevant sections
-1. Abstract + failure-relevant sections
-1. Abstract alone
-1. Truncated raw content (last resort)
+For large specs exceeding a context budget, `internal/spec/summary.go` produces multi-level pyramid
+summaries (`SummarizedSpec`). `SelectContent` picks the richest representation that fits: full spec →
+section summaries with failure-relevant sections expanded → outline → abstract → truncated.
 
 ## Scenario Data Structures
 
+[embedmd]:# (../internal/scenario/types.go go)
 ```go
-// internal/scenario/types.go
+package scenario
 
+// Scenario represents a holdout validation scenario loaded from YAML.
 type Scenario struct {
-    ID                    string   `yaml:"id"`
-    Description           string   `yaml:"description"`
-    Type                  string   `yaml:"type"`   // "api" only for MVP
-    Weight                *float64 `yaml:"weight"` // nil means not set, defaults to 1.0
-    Setup                 []Step   `yaml:"setup"`
-    Steps                 []Step   `yaml:"steps"`
-    SatisfactionCriteria  string   `yaml:"satisfaction_criteria"`
+	ID                   string   `yaml:"id"`
+	Description          string   `yaml:"description"`
+	Type                 string   `yaml:"type"`   // "api" only for MVP
+	Weight               *float64 `yaml:"weight"` // nil means not set, defaults to 1.0
+	Setup                []Step   `yaml:"setup"`
+	Steps                []Step   `yaml:"steps"`
+	SatisfactionCriteria string   `yaml:"satisfaction_criteria"`
 }
 
+// Step represents a single action within a scenario.
 type Step struct {
-    Description string   `yaml:"description"`
-    Request     Request  `yaml:"request"`
-    Expect      string   `yaml:"expect"` // natural language, judged by LLM
-    Capture     []Capture `yaml:"capture"`
+	Description string    `yaml:"description"`
+	Request     Request   `yaml:"request"`
+	Expect      string    `yaml:"expect"` // natural language, judged by LLM
+	Capture     []Capture `yaml:"capture"`
 }
 
+// Request describes an HTTP request to execute.
 type Request struct {
-    Method  string            `yaml:"method"`
-    Path    string            `yaml:"path"`
-    Headers map[string]string `yaml:"headers"`
-    Body    any               `yaml:"body"`
+	Method  string            `yaml:"method"`
+	Path    string            `yaml:"path"`
+	Headers map[string]string `yaml:"headers"`
+	Body    any               `yaml:"body"`
 }
 
+// Capture defines a variable to extract from a response.
 type Capture struct {
-    Name     string `yaml:"name"`     // variable name
-    JSONPath string `yaml:"jsonpath"` // path into response body
+	Name     string `yaml:"name"`     // variable name
+	JSONPath string `yaml:"jsonpath"` // path into response body
 }
 ```
 
-### Result Types (`internal/scenario/result.go`)
-
-```go
-type HTTPResponse struct {
-    Status  int
-    Headers map[string]string
-    Body    string
-}
-
-type StepResult struct {
-    Description string
-    Request     Request
-    Response    HTTPResponse
-    Duration    time.Duration
-    Err         error // non-nil only for network/transport failures
-}
-
-type Result struct {
-    ScenarioID string
-    Steps      []StepResult // judged steps only, not setup
-}
-
-type StepScore struct {
-    Score     int
-    Reasoning string
-    Failures  []string
-    CostUSD   float64
-}
-
-type ScoredStep struct {
-    StepResult StepResult
-    StepScore  StepScore
-}
-
-type ScoredScenario struct {
-    ScenarioID string
-    Weight     float64
-    Steps      []ScoredStep
-    Score      float64 // average of step scores
-}
-
-type AggregateResult struct {
-    Scenarios    []ScoredScenario
-    Satisfaction float64 // weighted average, 0-100
-    TotalCostUSD float64
-    Failures     []string // deduplicated, sorted
-}
-```
+Result types (`HTTPResponse`, `StepResult`, `Result`, `StepScore`, `ScoredStep`, `ScoredScenario`,
+`AggregateResult`) are in `internal/scenario/result.go`.
 
 ### Scenario YAML Format
 
@@ -374,83 +186,32 @@ steps:
       method: GET
       path: /items/{item_id}
     expect: "Returns the item with name 'test item' and a valid ID"
-  - description: "Update the item"
-    request:
-      method: PUT
-      path: /items/{item_id}
-      body: { "name": "updated item" }
-    expect: "Returns the updated item with name 'updated item'"
   - description: "Delete the item"
     request:
       method: DELETE
       path: /items/{item_id}
     expect: "Returns 200 or 204 indicating successful deletion"
-  - description: "Verify deletion"
-    request:
-      method: GET
-      path: /items/{item_id}
-    expect: "Returns 404 Not Found"
 satisfaction_criteria: |
   All CRUD operations work correctly with appropriate status codes.
 ```
 
 ### Variable Capture and Substitution
 
-The scenario runner:
-
-1. Executes each step sequentially
-1. After each step, evaluates `capture` rules against the response body
-1. Stores captured values in a variable map
-1. Before executing subsequent steps, substitutes `{variable_name}` in paths, headers, and bodies
-
-JSONPath evaluation (`internal/scenario/jsonpath.go`) supports dot-notation only (`$.field.sub`) —
-no library dependency.
+The runner executes steps sequentially, evaluates `capture` rules against response bodies, stores
+values in a variable map, and substitutes `{variable_name}` in subsequent paths, headers, and
+bodies. JSONPath evaluation supports dot-notation only (`$.field.sub`).
 
 ## Scenario Runner
 
-```go
-// internal/scenario/runner.go
-
-type Runner struct {
-    HTTPClient *http.Client
-    BaseURL    string
-    Logger     *slog.Logger
-}
-
-func NewRunner(baseURL string, httpClient *http.Client, logger *slog.Logger) *Runner
-
-func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error)
-```
-
-Setup steps are fatal — if any setup step fails, the runner returns an error immediately. Judged
-steps are non-fatal — transport errors are recorded in `StepResult.Err` and the step is scored 0 by
-the judge without making an LLM call.
+`Runner` (`internal/scenario/runner.go`) executes scenario steps as HTTP requests. Setup steps are
+fatal — if any fails, the runner returns an error immediately. Judged steps are non-fatal — transport
+errors are recorded and the step is scored 0 without making an LLM call.
 
 ## LLM Judge
 
-The judge scores each step independently, then aggregates per scenario.
+The judge scores each step independently using an LLM, then aggregates per scenario.
 
-```go
-// internal/scenario/judge.go
-
-type Judge struct {
-    LLM    llm.Client
-    Model  string
-    Logger *slog.Logger
-}
-
-func NewJudge(client llm.Client, model string, logger *slog.Logger) *Judge
-
-func (j *Judge) Score(ctx context.Context, scenario Scenario, step Step, response HTTPResponse) (StepScore, error)
-func (j *Judge) ScoreScenario(ctx context.Context, scenario Scenario, result Result) (ScoredScenario, error)
-
-// Package-level function.
-func Aggregate(scenarios []ScoredScenario) AggregateResult
-```
-
-### Judge Prompt
-
-The judge uses a split system/user prompt (`internal/llm/prompt.go`):
+Judge prompt (`internal/llm/prompt.go`):
 
 **System** (`SatisfactionJudgeSystem`):
 
@@ -480,97 +241,59 @@ Actual observed behavior:
 {observed}
 ```
 
-### Scoring Guide
-
-- 100: Perfect match to expected behavior
-- 80-99: Works correctly with minor deviations (different wording, extra fields)
-- 50-79: Partially correct (some aspects work, others don't)
-- 1-49: Mostly broken but shows some correct behavior
-- 0: Complete failure or error
-
-### Aggregation
-
 Per-scenario score = average of step scores. Overall satisfaction = weighted average of scenario
-scores (using scenario `weight` field, defaulting to 1.0 when nil).
-
-Use a cheap model for judging (Claude Haiku, GPT-4o-mini).
+scores (using scenario `weight` field, default 1.0). See `Aggregate()` in
+`internal/scenario/judge.go`.
 
 ## Attractor Loop
 
+[embedmd]:# (../internal/attractor/attractor.go go /^\/\/ ContainerManager is/ /^}/)
 ```go
-// internal/attractor/attractor.go
-
-type Attractor struct {
-    llm          llm.Client
-    containerMgr ContainerManager
-    logger       *slog.Logger
-}
-
-func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger) *Attractor
-
-// ValidateFn runs holdout scenarios against a running container and returns results.
-// The attractor never imports internal/scenario — the CLI provides this closure.
-type ValidateFn func(ctx context.Context, url string) (satisfaction float64, failures []string, cost float64, err error)
-
 // ContainerManager is the interface to Docker container operations.
 // *container.Manager satisfies this automatically.
 type ContainerManager interface {
-    Build(ctx context.Context, dir, tag string) error
-    Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
-    WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
+	Build(ctx context.Context, dir, tag string) error
+	Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
+	WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
 }
-
-type RunOptions struct {
-    Model         string
-    BudgetUSD     float64       // 0 = unlimited
-    Threshold     float64       // default 95
-    MaxIterations int           // default 10
-    StallLimit    int           // default 3
-    WorkspaceDir  string        // default "./workspace"
-    HealthTimeout time.Duration // default 30s
-    Progress      ProgressFunc  // optional per-iteration callback
-    PatchMode     bool          // if true, iteration 2+ sends prev best files + failures
-    ContextBudget int           // max estimated tokens for spec in system prompt; 0 = unlimited
-}
-
-type RunResult struct {
-    RunID        string
-    Iterations   int
-    Satisfaction float64
-    CostUSD      float64
-    OutputDir    string
-    Status       string // "converged", "stalled", "budget_exceeded", "max_iterations"
-}
-
-func (a *Attractor) Run(ctx context.Context, spec string, opts RunOptions, validate ValidateFn) (*RunResult, error)
 ```
 
-### Progress Reporting
-
+[embedmd]:# (../internal/attractor/attractor.go go /^\/\/ ValidateFn runs/ /err error\)/)
 ```go
-type ProgressFunc func(IterationProgress)
-
-type IterationProgress struct {
-    RunID            string
-    Iteration        int
-    MaxIterations    int
-    Outcome          IterationOutcome
-    Satisfaction     float64
-    BestSatisfaction float64
-    Threshold        float64
-    Trend            Trend
-    IterationCostUSD float64
-    TotalCostUSD     float64
-    BudgetUSD        float64
-    Elapsed          time.Duration
-    StallCount       int
-}
-
-type IterationOutcome string // "validated", "build_fail", "run_fail", "health_fail", "parse_fail"
+// ValidateFn runs holdout scenarios against a running container and returns results.
+// The attractor never imports internal/scenario — the CLI provides this closure.
+type ValidateFn func(ctx context.Context, url string) (satisfaction float64, failures []string, cost float64, err error)
 ```
 
-The `ProgressFunc` callback is called synchronously after each iteration completes. The CLI uses
-this to print real-time progress to stderr.
+[embedmd]:# (../internal/attractor/attractor.go go /^\/\/ RunOptions configures/ /^}/)
+```go
+// RunOptions configures the attractor loop.
+type RunOptions struct {
+	Model         string
+	BudgetUSD     float64       // 0 = unlimited
+	Threshold     float64       // default 95
+	MaxIterations int           // default 10
+	StallLimit    int           // default 3
+	WorkspaceDir  string        // default "./workspace"
+	HealthTimeout time.Duration // default 30s
+	Progress      ProgressFunc  // optional per-iteration callback
+	PatchMode     bool          // if true, iteration 2+ sends prev best files + failures
+	ContextBudget int           // max estimated tokens for spec in system prompt; 0 = unlimited
+}
+```
+
+[embedmd]:# (../internal/attractor/attractor.go go /^\/\/ RunResult holds/ /^}/)
+```go
+// RunResult holds the outcome of an attractor run.
+type RunResult struct {
+	RunID        string
+	Iterations   int
+	Satisfaction float64
+	CostUSD      float64
+	OutputDir    string
+	Status       string
+}
+```
 
 ### Loop Pseudocode
 
@@ -581,40 +304,56 @@ this to print real-time progress to stderr.
    b. Select spec content (full or summarized with failure-relevant sections expanded)
    c. Build messages:
       - Normal mode: spec only (iter 1) or spec + last 3 failure summaries (iter N>1)
-      - Patch mode (iter 2+ with bestFiles): previous best files + failures, ask for only changed files
+      - Patch mode (iter 2+ with bestFiles): previous best files + failures
    d. Call LLM: generate code
    e. Parse LLM output into files (=== FILE: path === ... === END FILE ===)
-      - Parse failure → satisfaction = 0, increment stall count, continue
    f. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
    g. Write files to workspace/{run_id}/iter_{n}/
-   h. docker build in that directory
-      - Build failure → satisfaction = 0, increment stall count, continue
-   i. docker run with port 0 (random available port)
-      - Run failure → satisfaction = 0, increment stall count, continue
-   j. Wait for health check (GET /, non-5xx, configurable timeout)
-      - Health check failure → satisfaction = 0, stop container, continue
-   k. Call validate(ctx, url) — caller runs scenarios + judge
-   l. If satisfaction >= threshold → write best, return "converged"
-   m. If satisfaction improved → write best, reset stall count
-   n. If satisfaction did not improve → increment stall count
-      - Patch mode: track regressions; after 2 consecutive, disable patch mode
-   o. If stall count >= stall limit → return "stalled"
-   p. If cost > budget → return "budget_exceeded"
-   q. Call Progress callback with IterationProgress
+   h. docker build → docker run → wait for health check → call validate(ctx, url)
+   i. If satisfaction >= threshold → return "converged"
+   j. Track improvement/stalls; patch mode: disable after 2 consecutive regressions
+   k. If stall count >= stall limit → return "stalled"
 3. Return "max_iterations"
 ```
 
-### Context Window Management
+### Progress Reporting
 
-Priority order for context (drop from bottom first):
+[embedmd]:# (../internal/attractor/attractor.go go /^\/\/ IterationOutcome classifies/ /^\)/)
+```go
+// IterationOutcome classifies how a single iteration ended.
+type IterationOutcome string
 
-1. Spec content (always included, cached)
-1. Latest failure feedback
-1. Previous failure feedback (up to 3 total)
+// IterationOutcome constants for progress reporting.
+const (
+	OutcomeValidated  IterationOutcome = "validated"
+	OutcomeBuildFail  IterationOutcome = "build_fail"
+	OutcomeRunFail    IterationOutcome = "run_fail"
+	OutcomeHealthFail IterationOutcome = "health_fail"
+	OutcomeParseFail  IterationOutcome = "parse_fail"
+)
+```
 
-When `ContextBudget` is set and the spec exceeds it, the spec is summarized at multiple levels (see
-Pyramid Summaries above). Each iteration selects the richest representation that fits, with
-failure-relevant sections expanded to full content.
+[embedmd]:# (../internal/attractor/attractor.go go /^\/\/ IterationProgress is/ /^}/)
+```go
+// IterationProgress is passed to the progress callback after each iteration completes.
+type IterationProgress struct {
+	RunID            string
+	Iteration        int
+	MaxIterations    int
+	Outcome          IterationOutcome
+	Satisfaction     float64
+	BestSatisfaction float64
+	Threshold        float64
+	Trend            Trend
+	IterationCostUSD float64
+	TotalCostUSD     float64
+	BudgetUSD        float64
+	Elapsed          time.Duration
+	StallCount       int
+}
+```
+
+The `ProgressFunc` callback is called synchronously after each iteration completes.
 
 ### File Block Parser
 
@@ -626,78 +365,53 @@ file contents here
 === END FILE ===
 ```
 
-`internal/attractor/fileparse.go` extracts these into a map of `path -> content`.
-
-In patch mode, `=== UNCHANGED: path ===` markers are recognized and skipped — carry-forward is
-handled by `MergeFiles(newFiles, prevFiles)`, which copies all previous best files and overlays the
-new output on top.
+In patch mode, `MergeFiles(newFiles, prevFiles)` copies all previous best files and overlays new
+output on top.
 
 ## Convergence (`internal/attractor/convergence.go`)
 
+[embedmd]:# (../internal/attractor/convergence.go go /^\/\/ Trend classifies/ /^\)/)
 ```go
-type Trend string // "improving", "plateau", "regressing", "converged"
+// Trend classifies the direction of score history.
+type Trend string
 
-func DetectTrend(history []float64, threshold float64, stallLimit int) Trend
+// Trend constants for score trajectory classification.
+const (
+	TrendImproving  Trend = "improving"
+	TrendPlateau    Trend = "plateau"
+	TrendRegressing Trend = "regressing"
+	TrendConverged  Trend = "converged"
+)
 ```
 
-`DetectTrend` classifies the score trajectory using a sliding window of size `stallLimit`:
-
-- `converged`: last score >= threshold
-- `improving`: last score > baseline
-- `regressing`: last score < peak within window
-- `plateau`: all scores in window identical, or no movement
+`DetectTrend` classifies the score trajectory using a sliding window: `converged` (score ≥
+threshold), `improving` (score > baseline), `regressing` (score < peak in window), `plateau` (no
+movement).
 
 ## Docker Container Strategy
 
-```go
-// internal/container/docker.go
+`Manager` (`internal/container/docker.go`) builds Docker images and runs containers. Uses port 0 for
+random host port assignment. Health check polls `GET /` every 1s for up to the configured timeout
+(default 30s) — any non-5xx response means healthy.
 
-type Manager struct {
-    docker dockerAPI     // Docker client (interface for testability)
-    http   *http.Client
-    logger *slog.Logger
-}
-
-type StopFunc func()
-
-func NewManager(logger *slog.Logger) (*Manager, error)
-func (m *Manager) Build(ctx context.Context, dir, tag string) error
-func (m *Manager) Run(ctx context.Context, tag string) (url string, stop StopFunc, err error)
-func (m *Manager) WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
-```
-
-### Port Allocation
-
-Use port 0 — Docker assigns a random available host port. Read back the assigned port from container
-inspect.
-
-### Health Check
-
-After `docker run`, poll `GET http://localhost:{port}/` every 1s for up to the configured timeout
-(default 30s). Any non-5xx response means healthy.
-
-### Cleanup
-
-`StopFunc` returned by `Run` stops and removes the container. Always defer cleanup. Cleanup uses
-`context.Background()` to succeed even after caller context cancellation.
+`StopFunc` returned by `Run` stops and removes the container using `context.Background()` to succeed
+even after caller context cancellation. `Close()` closes the underlying Docker client.
 
 ## CLI Interface
 
 ```text
-octog run --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0]
-octog validate --scenarios <dir> --target http://localhost:8080 [--judge-model claude-haiku-4-5] [--threshold 0]
-octog status   # show recent runs, scores, costs
-octog models   # list available models from the API
+octog run       --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0] [--provider anthropic|openai]
+octog validate  --scenarios <dir> --target <url> [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [--provider anthropic|openai]
+octog status    [--format text|json]
+octog lint      --spec <path> --scenarios <dir>
+octog models    [--provider anthropic|openai]
 ```
 
-Subcommands: `run`, `validate`, `status`, `models`. MVP does not include `twin`, `dashboard`, or
-`transfuse` subcommands.
+Subcommands: `run`, `validate`, `status`, `lint`, `models`.
 
-### Config File
-
-On startup, the CLI loads `~/.octopusgarden/config` (KEY=VALUE format, one per line). Currently
-supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`. Environment variables take precedence over config
-values. The config file permissions are checked — a warning is logged if the file is world-readable.
+Provider is auto-detected from which API key is set. Use `--provider` to disambiguate when both are
+present. Config file (`~/.octopusgarden/config`) supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`;
+env vars take precedence. `OPENAI_BASE_URL` overrides the OpenAI endpoint for Ollama etc.
 
 ## SQLite Schema
 
@@ -710,7 +424,7 @@ CREATE TABLE runs (
     budget_usd    REAL,
     started_at    DATETIME NOT NULL,
     finished_at   DATETIME,
-    satisfaction  REAL,         -- final score
+    satisfaction  REAL,
     iterations    INTEGER,
     total_tokens  INTEGER,
     total_cost_usd REAL,
@@ -729,21 +443,3 @@ CREATE TABLE iterations (
     created_at    DATETIME NOT NULL
 );
 ```
-
-## Prompt Templates
-
-Store as Go string constants in `internal/llm/prompt.go`.
-
-### Code Generation Prompt
-
-The attractor builds the system prompt inline via `buildSystemPrompt()` in
-`internal/attractor/attractor.go`, which includes instructions about dependency management and port
-configuration.
-
-### Satisfaction Judge Prompt
-
-The judge uses split prompts for the `Judge` interface:
-
-- `SatisfactionJudgeSystem` — system prompt with scoring guide and JSON response format
-- `SatisfactionJudgeUser` — user prompt template with `{scenario_description}`,
-  `{step_description}`, `{expected}`, and `{observed}` placeholders
