@@ -108,6 +108,9 @@ func TestAnthropicGenerate(t *testing.T) {
 			if resp.CostUSD <= 0 {
 				t.Errorf("cost_usd = %f, want > 0", resp.CostUSD)
 			}
+			if resp.FinishReason != "end_turn" {
+				t.Errorf("finish_reason = %q, want %q", resp.FinishReason, "end_turn")
+			}
 		})
 	}
 }

@@ -33,7 +33,7 @@ interface, Anthropic + OpenAI backends)
 Minimize — stdlib first. Allowed exceptions:
 
 - `github.com/anthropics/anthropic-sdk-go` — Anthropic API
-- `github.com/sashabaranov/go-openai` — OpenAI and Ollama only
+- `github.com/openai/openai-go/v3` — OpenAI and Ollama only
 - `gopkg.in/yaml.v3` — scenario YAML
 - `modernc.org/sqlite` — run history (pure-Go, no CGO)
 - `github.com/docker/docker/client` — container orchestration
@@ -66,6 +66,19 @@ Minimize — stdlib first. Allowed exceptions:
 - Prompt caching: use `cache_control: {type: "ephemeral"}` on spec content in system prompts
   (repeated per attractor iteration — ~90% cost reduction on cache reads)
 - Linting: `make lint`; config in `.golangci.yaml`; gochecknoglobals disabled (pricing tables OK)
+
+## Configuration
+
+API keys go in `~/.octopusgarden/config` (preferred) or environment variables. Config file uses
+`KEY=VALUE` format, one per line. Env vars take precedence over config values.
+
+```ini
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+```
+
+Provider is auto-detected from which key is present. Use `--provider openai|anthropic` to
+disambiguate when both are set. `OPENAI_BASE_URL` overrides the OpenAI endpoint (for Ollama etc.).
 
 ## Docs
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -34,6 +33,48 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger, opts ...option.Reque
 	return &AnthropicClient{
 		client: anthropic.NewClient(allOpts...),
 		logger: logger,
+	}
+}
+
+// anthropicMetrics holds extracted token counts and cost from an Anthropic API response.
+type anthropicMetrics struct {
+	regularInput  int
+	cacheCreation int
+	cacheRead     int
+	output        int
+	cost          float64
+}
+
+// logUsage extracts token counts, calculates cost, and logs structured metrics
+// for an Anthropic API call. The prefix distinguishes call types (e.g. "anthropic generate",
+// "anthropic judge").
+func (c *AnthropicClient) logUsage(prefix, model string, usage anthropic.Usage) anthropicMetrics {
+	cacheCreation := int(usage.CacheCreationInputTokens)
+	cacheRead := int(usage.CacheReadInputTokens)
+	regularInput := int(usage.InputTokens)
+	output := int(usage.OutputTokens)
+
+	cost, usingFallback := CalculateCost(model, regularInput, cacheCreation, cacheRead, output)
+	if usingFallback {
+		c.logger.Warn("using fallback pricing for unknown model", "model", model)
+	}
+
+	c.logger.Info(prefix,
+		"model", model,
+		"input_tokens", regularInput,
+		"cache_creation_tokens", cacheCreation,
+		"cache_read_tokens", cacheRead,
+		"output_tokens", output,
+		"cost_usd", cost,
+		"cache_hit", cacheRead > 0,
+	)
+
+	return anthropicMetrics{
+		regularInput:  regularInput,
+		cacheCreation: cacheCreation,
+		cacheRead:     cacheRead,
+		output:        output,
+		cost:          cost,
 	}
 }
 
@@ -90,32 +131,15 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		content = text.Text
 	}
 
-	cacheCreation := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	regularInput := int(resp.Usage.InputTokens)
-	output := int(resp.Usage.OutputTokens)
-
-	cost, usingFallback := CalculateCost(req.Model, regularInput, cacheCreation, cacheRead, output)
-	if usingFallback {
-		c.logger.Warn("using fallback pricing for unknown model", "model", req.Model)
-	}
-
-	c.logger.Info("anthropic generate",
-		"model", req.Model,
-		"input_tokens", regularInput,
-		"cache_creation_tokens", cacheCreation,
-		"cache_read_tokens", cacheRead,
-		"output_tokens", output,
-		"cost_usd", cost,
-		"cache_hit", cacheRead > 0,
-	)
+	m := c.logUsage("anthropic generate", req.Model, resp.Usage)
 
 	return GenerateResponse{
 		Content:      content,
-		InputTokens:  regularInput + cacheCreation + cacheRead,
-		OutputTokens: output,
-		CacheHit:     cacheRead > 0,
-		CostUSD:      cost,
+		InputTokens:  m.regularInput + m.cacheCreation + m.cacheRead,
+		OutputTokens: m.output,
+		CacheHit:     m.cacheRead > 0,
+		CostUSD:      m.cost,
+		FinishReason: string(resp.StopReason),
 	}, nil
 }
 
@@ -142,13 +166,6 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]AvailableModel, err
 		return nil, fmt.Errorf("anthropic list models: %w", err)
 	}
 	return models, nil
-}
-
-// judgeResult is the expected JSON structure from the judge LLM.
-type judgeResult struct {
-	Score     int      `json:"score"`
-	Reasoning string   `json:"reasoning"`
-	Failures  []string `json:"failures"`
 }
 
 // Judge calls the Anthropic Messages API to score satisfaction.
@@ -188,24 +205,7 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 		content = text.Text
 	}
 
-	cacheCreation := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	regularInput := int(resp.Usage.InputTokens)
-	output := int(resp.Usage.OutputTokens)
-	cost, usingFallback := CalculateCost(req.Model, regularInput, cacheCreation, cacheRead, output)
-	if usingFallback {
-		c.logger.Warn("using fallback pricing for unknown model", "model", req.Model)
-	}
-
-	c.logger.Info("anthropic judge",
-		"model", req.Model,
-		"input_tokens", regularInput,
-		"cache_creation_tokens", cacheCreation,
-		"cache_read_tokens", cacheRead,
-		"output_tokens", output,
-		"cost_usd", cost,
-		"cache_hit", cacheRead > 0,
-	)
+	m := c.logUsage("anthropic judge", req.Model, resp.Usage)
 
 	// Parse JSON response — strip markdown code fences if present.
 	cleaned := extractJSON(content)
@@ -215,7 +215,7 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 		return JudgeResponse{
 			Score:     0,
 			Reasoning: content,
-			CostUSD:   cost,
+			CostUSD:   m.cost,
 		}, nil
 	}
 
@@ -223,24 +223,6 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 		Score:     result.Score,
 		Reasoning: result.Reasoning,
 		Failures:  result.Failures,
-		CostUSD:   cost,
+		CostUSD:   m.cost,
 	}, nil
-}
-
-// extractJSON strips markdown code fences from LLM output to get raw JSON.
-// Handles ```json\n...\n``` and ```\n...\n``` patterns.
-func extractJSON(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		// Strip opening fence (with optional language tag).
-		if idx := strings.Index(s, "\n"); idx != -1 {
-			s = s[idx+1:]
-		}
-		// Strip closing fence.
-		if idx := strings.LastIndex(s, "```"); idx != -1 {
-			s = s[:idx]
-		}
-		s = strings.TrimSpace(s)
-	}
-	return s
 }

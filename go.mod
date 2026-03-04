@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.6.0
+	github.com/openai/openai-go/v3 v3.24.0
 	github.com/opencontainers/image-spec v1.1.1
 	golang.org/x/sync v0.17.0
 	gopkg.in/yaml.v3 v3.0.1
