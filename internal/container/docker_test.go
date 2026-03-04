@@ -572,9 +572,12 @@ func TestStartSessionSuccess(t *testing.T) {
 	if session == nil {
 		t.Fatal("expected non-nil session")
 	}
-	// Verify sleep infinity command
-	if len(gotConfig.Cmd) != 2 || gotConfig.Cmd[0] != "sleep" || gotConfig.Cmd[1] != "infinity" {
-		t.Errorf("expected [sleep infinity], got %v", gotConfig.Cmd)
+	// Verify entrypoint override and sleep infinity command
+	if len(gotConfig.Entrypoint) != 1 || gotConfig.Entrypoint[0] != "sleep" {
+		t.Errorf("expected entrypoint [sleep], got %v", gotConfig.Entrypoint)
+	}
+	if len(gotConfig.Cmd) != 1 || gotConfig.Cmd[0] != "infinity" {
+		t.Errorf("expected cmd [infinity], got %v", gotConfig.Cmd)
 	}
 }
 

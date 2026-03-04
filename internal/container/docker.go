@@ -442,8 +442,9 @@ func (lw *limitedStringWriter) Write(p []byte) (int, error) {
 func (m *Manager) StartSession(ctx context.Context, tag string) (*Session, StopFunc, error) {
 	createResp, err := m.docker.ContainerCreate(ctx,
 		&dockercontainer.Config{
-			Image: tag,
-			Cmd:   []string{"sleep", "infinity"},
+			Image:      tag,
+			Entrypoint: []string{"sleep"},
+			Cmd:        []string{"infinity"},
 		},
 		nil, nil, nil, "",
 	)
