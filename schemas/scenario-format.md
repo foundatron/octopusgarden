@@ -31,13 +31,17 @@ Violations prevent the scenario from being loaded.
 | SC024 | capture must have a name field |
 | SC025 | capture name must not be empty |
 | SC026 | capture name must be a valid identifier — Must match ^[a-zA-Z_][a-zA-Z0-9_]*$. |
-| SC028 | capture must have a jsonpath field |
+| SC028 | capture must have jsonpath or source |
 | SC029 | jsonpath must use valid $.field.sub syntax — Must start with $. followed by dot-separated field names. |
 | SC031 | scenario ids must be unique across a directory |
 | SC032 | step must not have both request and exec |
 | SC033 | exec must be a YAML mapping |
 | SC034 | exec must have a command field |
 | SC035 | exec command must not be empty |
+| SC036 | exec env must be a YAML mapping |
+| SC037 | exec timeout must be a valid Go duration |
+| SC038 | capture source invalid for step type |
+| SC039 | source not supported on this step type |
 
 ## SHOULD (Warnings)
 

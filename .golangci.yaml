@@ -108,6 +108,8 @@ linters:
       comparison: true
 
   exclusions:
+    paths:
+      - workspace   # generated attractor output — not project source code
     rules:
       - path: "_test\\.go"
         linters:

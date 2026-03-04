@@ -1,0 +1,23 @@
+id: draw
+description: Draw command outputs ASCII art of an octopus garden
+type: functional
+satisfaction_criteria: Draw command produces ASCII art containing octopus and garden elements in various sizes
+
+steps:
+  - description: Default draw command
+    exec:
+      command: octopus-garden draw
+    expect: "Exit code 0. Output contains ASCII art with at least one recognizable octopus character and at least one garden element (seaweed, coral, shells, or fish)."
+    capture:
+      - name: default_exit
+        source: exitcode
+
+  - description: Draw small size
+    exec:
+      command: octopus-garden draw --size small
+    expect: "Exit code 0. Output is compact (at most 10 lines) and contains octopus and garden elements."
+
+  - description: Draw large size
+    exec:
+      command: octopus-garden draw --size large
+    expect: "Exit code 0. Output is large and detailed (at least 20 lines) and contains octopus and garden elements."

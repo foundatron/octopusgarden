@@ -3,8 +3,11 @@ package lint
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/foundatron/octopusgarden/internal/scenario"
 )
 
 func TestCheckScenarioContent(t *testing.T) {
@@ -195,7 +198,7 @@ steps:
 			wantMsg:    "capture missing required field: name",
 		},
 		{
-			name: "capture missing jsonpath",
+			name: "capture missing jsonpath and source",
 			yaml: `id: test
 steps:
   - description: A step
@@ -207,7 +210,7 @@ steps:
       - name: item_id
 `,
 			wantErrors: 1,
-			wantMsg:    "capture missing required field: jsonpath",
+			wantMsg:    "capture requires at least one of jsonpath or source",
 		},
 		{
 			name: "capture invalid name",
@@ -405,6 +408,147 @@ steps:
 			wantWarns:  1,
 			wantMsg:    "never captured",
 		},
+		{
+			name: "exec with stdin env timeout",
+			yaml: `id: test
+steps:
+  - description: Full exec
+    exec:
+      command: myapp
+      stdin: "input data"
+      env:
+        FOO: bar
+        BAZ: qux
+      timeout: 10s
+    expect: "outputs data"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec invalid timeout",
+			yaml: `id: test
+steps:
+  - description: Bad timeout
+    exec:
+      command: echo hello
+      timeout: notaduration
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "not a valid duration",
+		},
+		{
+			name: "exec env not a mapping",
+			yaml: `id: test
+steps:
+  - description: Bad env
+    exec:
+      command: echo hello
+      env: "not a mapping"
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "exec env must be a mapping",
+		},
+		{
+			name: "exec capture with valid source",
+			yaml: `id: test
+steps:
+  - description: Capture stdout
+    exec:
+      command: echo hello
+    expect: "ok"
+    capture:
+      - name: output
+        source: stdout
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec capture with source and jsonpath",
+			yaml: `id: test
+steps:
+  - description: Capture stdout json field
+    exec:
+      command: echo '{"id":"1"}'
+    expect: "ok"
+    capture:
+      - name: item_id
+        source: stdout
+        jsonpath: $.id
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec capture with invalid source",
+			yaml: `id: test
+steps:
+  - description: Bad source
+    exec:
+      command: echo hello
+    expect: "ok"
+    capture:
+      - name: output
+        source: invalid
+`,
+			wantErrors: 1,
+			wantMsg:    "invalid source",
+		},
+		{
+			name: "request capture with source error",
+			yaml: `id: test
+steps:
+  - description: Source on request
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+    capture:
+      - name: output
+        source: stdout
+`,
+			wantErrors: 1,
+			wantMsg:    "source is not supported on request steps",
+		},
+		{
+			name: "exec stdin var ref",
+			yaml: `id: test
+setup:
+  - description: Get data
+    request:
+      method: GET
+      path: /data
+    capture:
+      - name: data
+        jsonpath: $.value
+steps:
+  - description: Pipe data
+    exec:
+      command: cat
+      stdin: "{data}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec env var ref uncaptured",
+			yaml: `id: test
+steps:
+  - description: Env ref
+    exec:
+      command: echo $FOO
+      env:
+        FOO: "{missing}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "never captured",
+		},
 	}
 
 	for _, tt := range tests {
@@ -504,5 +648,38 @@ func TestCheckScenarioFileNotFound(t *testing.T) {
 	_, err := CheckScenario("nonexistent.yaml")
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+// TestValidCaptureSourcesSyncWithScenario ensures that the lint package's
+// validCaptureSources map stays in sync with the scenario package's executor
+// ValidCaptureSources methods. If a source is added to exec.go but not here
+// (or vice versa), this test will fail.
+func TestValidCaptureSourcesSyncWithScenario(t *testing.T) {
+	// Exec sources: compare lint's validCaptureSources["exec"] with ExecExecutor.ValidCaptureSources().
+	execExecutor := &scenario.ExecExecutor{}
+	executorSources := execExecutor.ValidCaptureSources()
+	slices.Sort(executorSources)
+
+	lintSources := make([]string, 0, len(validCaptureSources["exec"]))
+	for k := range validCaptureSources["exec"] {
+		lintSources = append(lintSources, k)
+	}
+	slices.Sort(lintSources)
+
+	if len(executorSources) != len(lintSources) {
+		t.Fatalf("exec source count mismatch: scenario.ExecExecutor has %v, lint has %v", executorSources, lintSources)
+	}
+	for i := range executorSources {
+		if executorSources[i] != lintSources[i] {
+			t.Errorf("exec source mismatch at index %d: scenario.ExecExecutor has %q, lint has %q", i, executorSources[i], lintSources[i])
+		}
+	}
+
+	// HTTP steps: validCaptureSources has no "request" entry, meaning source is
+	// not supported on request steps. HTTPExecutor has no ValidCaptureSources
+	// method. Verify the lint map has no "request" entry to keep this invariant.
+	if _, ok := validCaptureSources["request"]; ok {
+		t.Error("validCaptureSources should not have a 'request' entry; HTTP steps do not support source captures")
 	}
 }

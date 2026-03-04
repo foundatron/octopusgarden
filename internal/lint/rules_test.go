@@ -105,7 +105,7 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: 123bad\n        jsonpath: $.id\n",
 		// SC027: capture shadows earlier
 		"id: test\nsteps:\n  - description: d1\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: item_id\n        jsonpath: $.id\n  - description: d2\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: item_id\n        jsonpath: $.id\n",
-		// SC028: capture missing jsonpath
+		// SC028: capture missing jsonpath and source
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: item_id\n",
 		// SC029: invalid jsonpath
 		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: item_id\n        jsonpath: bad\n",
@@ -119,6 +119,14 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    exec: {}\n    expect: ok\n",
 		// SC035: exec command empty
 		"id: test\nsteps:\n  - description: d\n    exec:\n      command: \"\"\n    expect: ok\n",
+		// SC036: exec env not a mapping
+		"id: test\nsteps:\n  - description: d\n    exec:\n      command: echo hi\n      env: notamapping\n    expect: ok\n",
+		// SC037: exec timeout invalid
+		"id: test\nsteps:\n  - description: d\n    exec:\n      command: echo hi\n      timeout: notaduration\n    expect: ok\n",
+		// SC038: capture invalid source
+		"id: test\nsteps:\n  - description: d\n    exec:\n      command: echo hi\n    expect: ok\n    capture:\n      - name: out\n        source: invalid\n",
+		// SC039: source not supported on request
+		"id: test\nsteps:\n  - description: d\n    request:\n      method: GET\n      path: /x\n    expect: ok\n    capture:\n      - name: out\n        source: stdout\n",
 	}
 
 	// Rules that can only be triggered by dir-level checks.

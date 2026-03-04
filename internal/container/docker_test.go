@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,21 +17,26 @@ import (
 	"testing"
 	"time"
 
+	dockertypes "github.com/docker/docker/api/types"
 	dockerbuild "github.com/docker/docker/api/types/build"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	dockernetwork "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // mockDockerAPI implements dockerAPI for unit tests.
 type mockDockerAPI struct {
-	imageBuildFunc       func(ctx context.Context, buildContext io.Reader, options dockerbuild.ImageBuildOptions) (dockerbuild.ImageBuildResponse, error)
-	containerCreateFunc  func(ctx context.Context, config *dockercontainer.Config, hostConfig *dockercontainer.HostConfig, networkingConfig *dockernetwork.NetworkingConfig, platform *ocispec.Platform, containerName string) (dockercontainer.CreateResponse, error)
-	containerStartFunc   func(ctx context.Context, containerID string, options dockercontainer.StartOptions) error
-	containerInspectFunc func(ctx context.Context, containerID string) (dockercontainer.InspectResponse, error)
-	containerStopFunc    func(ctx context.Context, containerID string, options dockercontainer.StopOptions) error
-	containerRemoveFunc  func(ctx context.Context, containerID string, options dockercontainer.RemoveOptions) error
+	imageBuildFunc           func(ctx context.Context, buildContext io.Reader, options dockerbuild.ImageBuildOptions) (dockerbuild.ImageBuildResponse, error)
+	containerCreateFunc      func(ctx context.Context, config *dockercontainer.Config, hostConfig *dockercontainer.HostConfig, networkingConfig *dockernetwork.NetworkingConfig, platform *ocispec.Platform, containerName string) (dockercontainer.CreateResponse, error)
+	containerStartFunc       func(ctx context.Context, containerID string, options dockercontainer.StartOptions) error
+	containerInspectFunc     func(ctx context.Context, containerID string) (dockercontainer.InspectResponse, error)
+	containerStopFunc        func(ctx context.Context, containerID string, options dockercontainer.StopOptions) error
+	containerRemoveFunc      func(ctx context.Context, containerID string, options dockercontainer.RemoveOptions) error
+	containerExecCreateFunc  func(ctx context.Context, containerID string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error)
+	containerExecAttachFunc  func(ctx context.Context, execID string, config dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error)
+	containerExecInspectFunc func(ctx context.Context, execID string) (dockercontainer.ExecInspect, error)
 }
 
 func (m *mockDockerAPI) ImageBuild(ctx context.Context, buildContext io.Reader, options dockerbuild.ImageBuildOptions) (dockerbuild.ImageBuildResponse, error) {
@@ -55,6 +61,27 @@ func (m *mockDockerAPI) ContainerStop(ctx context.Context, containerID string, o
 
 func (m *mockDockerAPI) ContainerRemove(ctx context.Context, containerID string, options dockercontainer.RemoveOptions) error {
 	return m.containerRemoveFunc(ctx, containerID, options)
+}
+
+func (m *mockDockerAPI) ContainerExecCreate(ctx context.Context, containerID string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+	if m.containerExecCreateFunc != nil {
+		return m.containerExecCreateFunc(ctx, containerID, config)
+	}
+	return dockercontainer.ExecCreateResponse{}, nil
+}
+
+func (m *mockDockerAPI) ContainerExecAttach(ctx context.Context, execID string, config dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+	if m.containerExecAttachFunc != nil {
+		return m.containerExecAttachFunc(ctx, execID, config)
+	}
+	return dockertypes.HijackedResponse{}, nil
+}
+
+func (m *mockDockerAPI) ContainerExecInspect(ctx context.Context, execID string) (dockercontainer.ExecInspect, error) {
+	if m.containerExecInspectFunc != nil {
+		return m.containerExecInspectFunc(ctx, execID)
+	}
+	return dockercontainer.ExecInspect{}, nil
 }
 
 // roundTripFunc adapts a function to http.RoundTripper.
@@ -503,5 +530,241 @@ func TestWaitHealthyStatusCodes(t *testing.T) {
 				t.Errorf("status %d: healthy = %v, want %v", tc.status, healthy, tc.healthy)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StartSession tests
+// ---------------------------------------------------------------------------
+
+func defaultSessionMock() *mockDockerAPI {
+	return &mockDockerAPI{
+		containerCreateFunc: func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+			return dockercontainer.CreateResponse{ID: testContainerID}, nil
+		},
+		containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+			return nil
+		},
+		containerStopFunc: func(_ context.Context, _ string, _ dockercontainer.StopOptions) error {
+			return nil
+		},
+		containerRemoveFunc: func(_ context.Context, _ string, _ dockercontainer.RemoveOptions) error {
+			return nil
+		},
+	}
+}
+
+func TestStartSessionSuccess(t *testing.T) {
+	var gotConfig *dockercontainer.Config
+	mock := defaultSessionMock()
+	mock.containerCreateFunc = func(_ context.Context, config *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+		gotConfig = config
+		return dockercontainer.CreateResponse{ID: testContainerID}, nil
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	session, stop, err := m.StartSession(context.Background(), "test:latest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer stop()
+
+	if session == nil {
+		t.Fatal("expected non-nil session")
+	}
+	// Verify sleep infinity command
+	if len(gotConfig.Cmd) != 2 || gotConfig.Cmd[0] != "sleep" || gotConfig.Cmd[1] != "infinity" {
+		t.Errorf("expected [sleep infinity], got %v", gotConfig.Cmd)
+	}
+}
+
+func TestStartSessionCreateError(t *testing.T) {
+	mock := defaultSessionMock()
+	mock.containerCreateFunc = func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+		return dockercontainer.CreateResponse{}, errors.New("image not found")
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, _, err := m.StartSession(context.Background(), "test:latest")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestStartSessionStartError(t *testing.T) {
+	var removedID string
+	mock := defaultSessionMock()
+	mock.containerStartFunc = func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+		return errors.New("cannot start")
+	}
+	mock.containerRemoveFunc = func(_ context.Context, containerID string, _ dockercontainer.RemoveOptions) error {
+		removedID = containerID
+		return nil
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, _, err := m.StartSession(context.Background(), "test:latest")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if removedID != testContainerID {
+		t.Errorf("expected container cleanup, got removeID=%q", removedID)
+	}
+}
+
+func TestStartSessionStopCleansUp(t *testing.T) {
+	var stoppedID, removedID string
+	mock := defaultSessionMock()
+	mock.containerStopFunc = func(_ context.Context, containerID string, _ dockercontainer.StopOptions) error {
+		stoppedID = containerID
+		return nil
+	}
+	mock.containerRemoveFunc = func(_ context.Context, containerID string, _ dockercontainer.RemoveOptions) error {
+		removedID = containerID
+		return nil
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, stop, err := m.StartSession(context.Background(), "test:latest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stop()
+
+	if stoppedID != testContainerID {
+		t.Errorf("expected stop with container ID, got %q", stoppedID)
+	}
+	if removedID != testContainerID {
+		t.Errorf("expected remove with container ID, got %q", removedID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session.Exec tests
+// ---------------------------------------------------------------------------
+
+// buildMuxStream creates a stdcopy multiplexed stream with stdout and stderr content.
+func buildMuxStream(stdout, stderr string) io.Reader {
+	var buf bytes.Buffer
+	stdoutWriter := stdcopy.NewStdWriter(&buf, stdcopy.Stdout)
+	stderrWriter := stdcopy.NewStdWriter(&buf, stdcopy.Stderr)
+	if stdout != "" {
+		_, _ = stdoutWriter.Write([]byte(stdout))
+	}
+	if stderr != "" {
+		_, _ = stderrWriter.Write([]byte(stderr))
+	}
+	return &buf
+}
+
+// fakeHijackedResponse creates a HijackedResponse from a reader for testing.
+func fakeHijackedResponse(body io.Reader) dockertypes.HijackedResponse {
+	// Create a pipe-based connection that the HijackedResponse can use.
+	serverConn, clientConn := net.Pipe()
+	go func() {
+		// Write the body content to the server side so the client can read it.
+		_, _ = io.Copy(serverConn, body)
+		_ = serverConn.Close()
+	}()
+	return dockertypes.NewHijackedResponse(clientConn, "application/vnd.docker.raw-stream")
+}
+
+func TestSessionExecSuccess(t *testing.T) {
+	mock := defaultSessionMock()
+	mock.containerExecCreateFunc = func(_ context.Context, _ string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+		return dockercontainer.ExecCreateResponse{ID: "exec123"}, nil
+	}
+	mock.containerExecAttachFunc = func(_ context.Context, _ string, _ dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+		return fakeHijackedResponse(buildMuxStream("hello\n", "")), nil
+	}
+	mock.containerExecInspectFunc = func(_ context.Context, _ string) (dockercontainer.ExecInspect, error) {
+		return dockercontainer.ExecInspect{ExitCode: 0}, nil
+	}
+
+	session := &Session{containerID: testContainerID, docker: mock, logger: newTestLogger()}
+	result, err := session.Exec(context.Background(), "echo hello", ExecOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", result.ExitCode)
+	}
+	if !strings.Contains(result.Stdout, "hello") {
+		t.Errorf("expected 'hello' in stdout, got %q", result.Stdout)
+	}
+}
+
+func TestSessionExecNonZeroExit(t *testing.T) {
+	mock := defaultSessionMock()
+	mock.containerExecCreateFunc = func(_ context.Context, _ string, _ dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+		return dockercontainer.ExecCreateResponse{ID: "exec123"}, nil
+	}
+	mock.containerExecAttachFunc = func(_ context.Context, _ string, _ dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+		return fakeHijackedResponse(buildMuxStream("", "error msg\n")), nil
+	}
+	mock.containerExecInspectFunc = func(_ context.Context, _ string) (dockercontainer.ExecInspect, error) {
+		return dockercontainer.ExecInspect{ExitCode: 1}, nil
+	}
+
+	session := &Session{containerID: testContainerID, docker: mock, logger: newTestLogger()}
+	result, err := session.Exec(context.Background(), "fail", ExecOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ExitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", result.ExitCode)
+	}
+	if !strings.Contains(result.Stderr, "error msg") {
+		t.Errorf("expected 'error msg' in stderr, got %q", result.Stderr)
+	}
+}
+
+func TestSessionExecCreateError(t *testing.T) {
+	mock := defaultSessionMock()
+	mock.containerExecCreateFunc = func(_ context.Context, _ string, _ dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+		return dockercontainer.ExecCreateResponse{}, errors.New("container gone")
+	}
+
+	session := &Session{containerID: testContainerID, docker: mock, logger: newTestLogger()}
+	_, err := session.Exec(context.Background(), "echo hi", ExecOptions{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errExecFailed) {
+		t.Errorf("expected errExecFailed, got: %v", err)
+	}
+}
+
+func TestSessionExecPassesEnv(t *testing.T) {
+	var gotConfig dockercontainer.ExecOptions
+	mock := defaultSessionMock()
+	mock.containerExecCreateFunc = func(_ context.Context, _ string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+		gotConfig = config
+		return dockercontainer.ExecCreateResponse{ID: "exec123"}, nil
+	}
+	mock.containerExecAttachFunc = func(_ context.Context, _ string, _ dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+		return fakeHijackedResponse(buildMuxStream("", "")), nil
+	}
+	mock.containerExecInspectFunc = func(_ context.Context, _ string) (dockercontainer.ExecInspect, error) {
+		return dockercontainer.ExecInspect{ExitCode: 0}, nil
+	}
+
+	session := &Session{containerID: testContainerID, docker: mock, logger: newTestLogger()}
+	_, err := session.Exec(context.Background(), "echo $FOO", ExecOptions{
+		Env: map[string]string{"FOO": "bar"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundEnv := false
+	for _, e := range gotConfig.Env {
+		if e == "FOO=bar" {
+			foundEnv = true
+			break
+		}
+	}
+	if !foundEnv {
+		t.Errorf("expected FOO=bar in exec env, got %v", gotConfig.Env)
 	}
 }

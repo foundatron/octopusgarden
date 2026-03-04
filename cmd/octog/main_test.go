@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/scenario"
 )
@@ -82,7 +83,7 @@ func TestRunAndScore(t *testing.T) {
 		},
 	}
 
-	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001")
+	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil })
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 
 	mock := &mockLLMClient{}
 	// Use unreachable address to deterministically cause connection errors.
-	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger(), "claude-haiku-4-5-20251001")
+	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil })
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -302,7 +303,7 @@ func TestValidateThreshold(t *testing.T) {
 				},
 			}
 
-			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001")
+			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil })
 			if err != nil {
 				t.Fatalf("runAndScore: %v", err)
 			}
@@ -416,6 +417,109 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 	// Unknown key should not be set.
 	if got := os.Getenv("UNKNOWN_KEY"); got == "value" {
 		t.Error("unknown key should not be set in environment")
+	}
+}
+
+func TestDetectCapabilities(t *testing.T) {
+	tests := []struct {
+		name      string
+		scenarios []scenario.Scenario
+		wantHTTP  bool
+		wantExec  bool
+	}{
+		{
+			name:      "empty scenarios",
+			scenarios: nil,
+			wantHTTP:  false,
+			wantExec:  false,
+		},
+		{
+			name: "HTTP only in steps",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "http-only",
+					Steps: []scenario.Step{
+						{Request: &scenario.Request{Method: "GET", Path: "/items"}},
+					},
+				},
+			},
+			wantHTTP: true,
+			wantExec: false,
+		},
+		{
+			name: "exec only in steps",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "exec-only",
+					Steps: []scenario.Step{
+						{Exec: &scenario.ExecRequest{Command: "echo hello"}},
+					},
+				},
+			},
+			wantHTTP: false,
+			wantExec: true,
+		},
+		{
+			name: "both HTTP and exec",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "mixed",
+					Steps: []scenario.Step{
+						{Request: &scenario.Request{Method: "GET", Path: "/items"}},
+						{Exec: &scenario.ExecRequest{Command: "echo hello"}},
+					},
+				},
+			},
+			wantHTTP: true,
+			wantExec: true,
+		},
+		{
+			name: "HTTP in setup exec in steps",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "setup-http",
+					Setup: []scenario.Step{
+						{Request: &scenario.Request{Method: "POST", Path: "/setup"}},
+					},
+					Steps: []scenario.Step{
+						{Exec: &scenario.ExecRequest{Command: "check"}},
+					},
+				},
+			},
+			wantHTTP: true,
+			wantExec: true,
+		},
+		{
+			name: "multiple scenarios aggregate",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "http-scenario",
+					Steps: []scenario.Step{
+						{Request: &scenario.Request{Method: "GET", Path: "/a"}},
+					},
+				},
+				{
+					ID: "exec-scenario",
+					Steps: []scenario.Step{
+						{Exec: &scenario.ExecRequest{Command: "test"}},
+					},
+				},
+			},
+			wantHTTP: true,
+			wantExec: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			caps := detectCapabilities(tt.scenarios)
+			if caps.NeedsHTTP != tt.wantHTTP {
+				t.Errorf("NeedsHTTP = %v, want %v", caps.NeedsHTTP, tt.wantHTTP)
+			}
+			if caps.NeedsExec != tt.wantExec {
+				t.Errorf("NeedsExec = %v, want %v", caps.NeedsExec, tt.wantExec)
+			}
+		})
 	}
 }
 

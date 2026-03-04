@@ -44,7 +44,7 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
 		}
-		if err := applyCaptures(step.Capture, output.CaptureBody, vars); err != nil {
+		if err := applyCaptures(step.Capture, output, vars); err != nil {
 			return Result{}, fmt.Errorf("%w: step %d capture: %w", errSetupFailed, i, err)
 		}
 		r.Logger.Debug("setup step completed", "step", i, "description", step.Description, "type", step.StepType())
@@ -83,7 +83,7 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 			continue
 		}
 
-		if err := applyCaptures(step.Capture, output.CaptureBody, vars); err != nil {
+		if err := applyCaptures(step.Capture, output, vars); err != nil {
 			r.Logger.Warn("judged step capture error", "step", i, "error", err)
 		}
 		r.Logger.Debug("judged step completed", "step", i, "description", step.Description, "type", step.StepType())
@@ -114,13 +114,32 @@ func substituteVars(s string, vars map[string]string) string {
 	return s
 }
 
-func applyCaptures(captures []Capture, captureBody string, vars map[string]string) error {
+func applyCaptures(captures []Capture, output StepOutput, vars map[string]string) error {
 	for _, c := range captures {
-		val, err := evalJSONPath(captureBody, c.JSONPath)
+		val, err := resolveCapture(c, output)
 		if err != nil {
 			return fmt.Errorf("capture %q: %w", c.Name, err)
 		}
 		vars[c.Name] = val
 	}
 	return nil
+}
+
+// resolveCapture implements composable source + jsonpath capture logic:
+//  1. source set → body = output.CaptureSources[source]
+//     - jsonpath also set → value = evalJSONPath(body, jsonpath)
+//     - only source → value = strings.TrimSpace(body)
+//  2. only jsonpath → value = evalJSONPath(output.CaptureBody, jsonpath) [existing]
+func resolveCapture(c Capture, output StepOutput) (string, error) {
+	if c.Source != "" {
+		body := output.CaptureSources[c.Source]
+		if c.JSONPath != "" {
+			return evalJSONPath(body, c.JSONPath)
+		}
+		return strings.TrimSpace(body), nil
+	}
+	if c.JSONPath != "" {
+		return evalJSONPath(output.CaptureBody, c.JSONPath)
+	}
+	return "", errNoCapture
 }

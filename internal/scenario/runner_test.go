@@ -482,6 +482,98 @@ func TestRunnerMixedSteps(t *testing.T) {
 	}
 }
 
+func TestResolveCapture(t *testing.T) {
+	tests := []struct {
+		name    string
+		capture Capture
+		output  StepOutput
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "source only returns trimmed source content",
+			capture: Capture{Name: "out", Source: "stderr"},
+			output: StepOutput{
+				CaptureSources: map[string]string{
+					"stderr": "  error output\n",
+				},
+			},
+			want: "error output",
+		},
+		{
+			name:    "jsonpath only extracts from CaptureBody",
+			capture: Capture{Name: "id", JSONPath: "$.id"},
+			output: StepOutput{
+				CaptureBody: `{"id":"42","name":"test"}`,
+			},
+			want: "42",
+		},
+		{
+			name:    "source and jsonpath extracts jsonpath from source",
+			capture: Capture{Name: "val", Source: "stdout", JSONPath: "$.key"},
+			output: StepOutput{
+				CaptureBody: `{"key":"from-body"}`,
+				CaptureSources: map[string]string{
+					"stdout": `{"key":"from-stdout"}`,
+				},
+			},
+			want: "from-stdout",
+		},
+		{
+			name:    "invalid jsonpath returns error",
+			capture: Capture{Name: "bad", JSONPath: "invalid"},
+			output: StepOutput{
+				CaptureBody: `{"id":"1"}`,
+			},
+			wantErr: true,
+		},
+		{
+			name:    "no source or jsonpath returns errNoCapture",
+			capture: Capture{Name: "empty"},
+			output:  StepOutput{},
+			wantErr: true,
+		},
+		{
+			name:    "source with empty content returns empty string",
+			capture: Capture{Name: "out", Source: "stdout"},
+			output: StepOutput{
+				CaptureSources: map[string]string{
+					"stdout": "",
+				},
+			},
+			want: "",
+		},
+		{
+			name:    "exitcode source returns raw value",
+			capture: Capture{Name: "code", Source: "exitcode"},
+			output: StepOutput{
+				CaptureSources: map[string]string{
+					"exitcode": "0",
+				},
+			},
+			want: "0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveCapture(tt.capture, tt.output)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got value %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunnerUnknownStepType(t *testing.T) {
 	sc := Scenario{
 		ID: "unknown-type",

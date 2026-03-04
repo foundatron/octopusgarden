@@ -16,10 +16,12 @@ import (
 	"strings"
 	"time"
 
+	dockertypes "github.com/docker/docker/api/types"
 	dockerbuild "github.com/docker/docker/api/types/build"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -29,6 +31,7 @@ var (
 	errNoPortBinding      = errors.New("container: no host port binding found for container port 8080/tcp")
 	errContainerUnhealthy = errors.New("container: health check timed out")
 	errNotADirectory      = errors.New("container: build context is not a directory")
+	errExecFailed         = errors.New("container: exec create failed")
 )
 
 // dockerAPI is the minimal Docker API surface used by Manager.
@@ -40,6 +43,9 @@ type dockerAPI interface {
 	ContainerInspect(ctx context.Context, containerID string) (dockercontainer.InspectResponse, error)
 	ContainerStop(ctx context.Context, containerID string, options dockercontainer.StopOptions) error
 	ContainerRemove(ctx context.Context, containerID string, options dockercontainer.RemoveOptions) error
+	ContainerExecCreate(ctx context.Context, containerID string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error)
+	ContainerExecAttach(ctx context.Context, execID string, config dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error)
+	ContainerExecInspect(ctx context.Context, execID string) (dockercontainer.ExecInspect, error)
 }
 
 // Compile-time check: *dockerclient.Client must implement dockerAPI.
@@ -308,6 +314,162 @@ func walkFn(root string, tw *tar.Writer) fs.WalkDirFunc {
 		}
 		return copyFileToTar(path, tw)
 	}
+}
+
+// ExecOptions configures a container exec invocation.
+type ExecOptions struct {
+	Stdin          string
+	Env            map[string]string
+	Timeout        time.Duration
+	MaxOutputBytes int64 // default 10MB
+}
+
+// ExecResult holds the output of a container exec invocation.
+type ExecResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// Session provides command execution inside a running container.
+// It implements ContainerSession.
+type Session struct {
+	containerID string
+	docker      dockerAPI
+	logger      *slog.Logger
+}
+
+// defaultMaxOutputBytes is the maximum bytes captured from exec output.
+// Keep in sync with the constant of the same name in internal/scenario/exec.go.
+const defaultMaxOutputBytes = 10 << 20 // 10MB
+
+// Exec runs a command inside the container via docker exec.
+func (s *Session) Exec(ctx context.Context, command string, opts ExecOptions) (ExecResult, error) {
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	maxBytes := opts.MaxOutputBytes
+	if maxBytes == 0 {
+		maxBytes = defaultMaxOutputBytes
+	}
+
+	// Build env list.
+	envList := make([]string, 0, len(opts.Env))
+	for k, v := range opts.Env {
+		envList = append(envList, k+"="+v)
+	}
+
+	execConfig := dockercontainer.ExecOptions{
+		Cmd:          []string{"sh", "-c", command},
+		AttachStdout: true,
+		AttachStderr: true,
+		AttachStdin:  opts.Stdin != "",
+		Env:          envList,
+	}
+
+	createResp, err := s.docker.ContainerExecCreate(ctx, s.containerID, execConfig)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("%w: %w", errExecFailed, err)
+	}
+
+	attachResp, err := s.docker.ContainerExecAttach(ctx, createResp.ID, dockercontainer.ExecAttachOptions{})
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("container: exec attach: %w", err)
+	}
+	defer attachResp.Close()
+
+	// Write stdin if provided.
+	if opts.Stdin != "" {
+		if _, err := io.WriteString(attachResp.Conn, opts.Stdin); err != nil {
+			s.logger.Warn("failed to write stdin to exec", "error", err)
+		}
+		_ = attachResp.CloseWrite()
+	}
+
+	// Read stdout/stderr via stdcopy demux.
+	var stdout, stderr strings.Builder
+	_, err = stdcopy.StdCopy(
+		&limitedStringWriter{w: &stdout, remaining: maxBytes},
+		&limitedStringWriter{w: &stderr, remaining: maxBytes},
+		attachResp.Reader,
+	)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("container: exec read output: %w", err)
+	}
+
+	// Inspect to get exit code.
+	inspectResp, err := s.docker.ContainerExecInspect(ctx, createResp.ID)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("container: exec inspect: %w", err)
+	}
+
+	return ExecResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: inspectResp.ExitCode,
+	}, nil
+}
+
+// limitedStringWriter wraps a strings.Builder and stops writing after a byte limit.
+type limitedStringWriter struct {
+	w         *strings.Builder
+	remaining int64
+}
+
+func (lw *limitedStringWriter) Write(p []byte) (int, error) {
+	if lw.remaining <= 0 {
+		return len(p), nil
+	}
+	n := len(p)
+	if int64(n) > lw.remaining {
+		p = p[:lw.remaining]
+	}
+	written, err := lw.w.Write(p)
+	lw.remaining -= int64(written)
+	if err != nil {
+		return written, err
+	}
+	return n, nil
+}
+
+// StartSession creates a long-lived container for exec-based validation.
+// The container runs "sleep infinity" to stay alive for multiple exec calls.
+// Returns a Session and a StopFunc to clean up the container.
+func (m *Manager) StartSession(ctx context.Context, tag string) (*Session, StopFunc, error) {
+	createResp, err := m.docker.ContainerCreate(ctx,
+		&dockercontainer.Config{
+			Image: tag,
+			Cmd:   []string{"sleep", "infinity"},
+		},
+		nil, nil, nil, "",
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("container: session create: %w", err)
+	}
+	containerID := createResp.ID
+
+	if err := m.docker.ContainerStart(ctx, containerID, dockercontainer.StartOptions{}); err != nil {
+		_ = m.docker.ContainerRemove(context.Background(), containerID, dockercontainer.RemoveOptions{Force: true})
+		return nil, nil, fmt.Errorf("container: session start: %w", err)
+	}
+
+	shortID := containerID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	m.logger.Info("session container started", "id", shortID)
+
+	session := &Session{
+		containerID: containerID,
+		docker:      m.docker,
+		logger:      m.logger,
+	}
+	stopFn := func() { m.stopAndRemove(containerID) }
+	return session, stopFn, nil
 }
 
 // copyFileToTar opens path and writes its contents to tw.
