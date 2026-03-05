@@ -92,5 +92,4 @@ Users can only access their own todos. Attempting to access another user's todo 
 
 - In-memory storage (no database required)
 - Listen on port 8080
-- Any programming language
 - JSON content type for all responses
