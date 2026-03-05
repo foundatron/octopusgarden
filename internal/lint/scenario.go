@@ -297,6 +297,12 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 		}
 	}
 
+	// Check retry.
+	retryFE, hasRetry := fields["retry"]
+	if hasRetry {
+		diags = append(diags, lintRetry(path, retryFE.value)...)
+	}
+
 	// Check captures.
 	capFE, hasCap := fields["capture"]
 	if hasCap {
@@ -860,6 +866,63 @@ func lintCaptureName(path string, fields map[string]*fieldEntry, capNode *yaml.N
 		})
 	}
 	cs.add(name, path, nameFE.value.Line)
+	return diags
+}
+
+func lintRetry(path string, node *yaml.Node) []Diagnostic {
+	if node.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "retry must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	if attemptsFE, ok := fields["attempts"]; ok {
+		var a int
+		if err := attemptsFE.value.Decode(&a); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    attemptsFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("retry attempts must be an integer: %s", err),
+			})
+		} else if a < 1 {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    attemptsFE.value.Line,
+				Level:   Warning,
+				Message: "retry attempts should be at least 1 (defaults to 3)",
+			})
+		}
+	}
+
+	if intervalFE, ok := fields["interval"]; ok && intervalFE.value.Value != "" {
+		if _, err := time.ParseDuration(intervalFE.value.Value); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    intervalFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("retry interval %q is not a valid duration", intervalFE.value.Value),
+			})
+		}
+	}
+
+	if timeoutFE, ok := fields["timeout"]; ok && timeoutFE.value.Value != "" {
+		if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    timeoutFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("retry timeout %q is not a valid duration", timeoutFE.value.Value),
+			})
+		}
+	}
+
 	return diags
 }
 

@@ -574,6 +574,315 @@ func TestResolveCapture(t *testing.T) {
 	}
 }
 
+// mockExecutor returns an error for the first failCount calls, then succeeds.
+type mockExecutor struct {
+	failCount int
+	callCount int
+	failErr   error
+	output    StepOutput
+}
+
+func (m *mockExecutor) Execute(_ context.Context, _ Step, _ map[string]string) (StepOutput, error) {
+	m.callCount++
+	if m.callCount <= m.failCount {
+		return StepOutput{}, m.failErr
+	}
+	return m.output, nil
+}
+
+func (m *mockExecutor) ValidCaptureSources() []string { return nil }
+
+func TestExecuteWithRetry(t *testing.T) {
+	okOutput := StepOutput{Observed: "ok", CaptureBody: `{"id":"1"}`}
+	transientErr := errors.New("connection refused")
+
+	tests := []struct {
+		name       string
+		retry      *Retry
+		failCount  int
+		wantErr    bool
+		wantCalls  int
+		wantOutput StepOutput
+	}{
+		{
+			name:       "succeeds on first attempt",
+			retry:      &Retry{Attempts: 3, Interval: "10ms"},
+			failCount:  0,
+			wantCalls:  1,
+			wantOutput: okOutput,
+		},
+		{
+			name:       "succeeds after transient failures",
+			retry:      &Retry{Attempts: 5, Interval: "10ms"},
+			failCount:  2,
+			wantCalls:  3,
+			wantOutput: okOutput,
+		},
+		{
+			name:      "exhausts all attempts",
+			retry:     &Retry{Attempts: 3, Interval: "10ms"},
+			failCount: 10,
+			wantErr:   true,
+			wantCalls: 3,
+		},
+		{
+			name:       "default attempts when zero",
+			retry:      &Retry{Attempts: 0, Interval: "10ms"},
+			failCount:  2,
+			wantCalls:  3,
+			wantOutput: okOutput,
+		},
+		{
+			name:      "invalid interval returns error",
+			retry:     &Retry{Attempts: 3, Interval: "notaduration"},
+			failCount: 0,
+			wantErr:   true,
+			wantCalls: 0,
+		},
+		{
+			name:      "invalid timeout returns error",
+			retry:     &Retry{Attempts: 3, Interval: "10ms", Timeout: "notaduration"},
+			failCount: 0,
+			wantErr:   true,
+			wantCalls: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockExecutor{
+				failCount: tt.failCount,
+				failErr:   transientErr,
+				output:    okOutput,
+			}
+
+			runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+			step := Step{
+				Description: "test step",
+				Request:     &Request{Method: "GET", Path: "/test"},
+				Retry:       tt.retry,
+			}
+
+			output, err := runner.executeStep(context.Background(), mock, step, nil)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if output.Observed != tt.wantOutput.Observed {
+				t.Errorf("observed = %q, want %q", output.Observed, tt.wantOutput.Observed)
+			}
+			if mock.callCount != tt.wantCalls {
+				t.Errorf("callCount = %d, want %d", mock.callCount, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestRetryTimeoutCapsRetries(t *testing.T) {
+	mock := &mockExecutor{
+		failCount: 100,
+		failErr:   errors.New("connection refused"),
+	}
+
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	step := Step{
+		Description: "timeout step",
+		Request:     &Request{Method: "GET", Path: "/test"},
+		Retry:       &Retry{Attempts: 100, Interval: "50ms", Timeout: "120ms"},
+	}
+
+	_, err := runner.executeStep(context.Background(), mock, step, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Should have executed fewer than 10 attempts due to timeout.
+	if mock.callCount >= 10 {
+		t.Errorf("expected timeout to cap retries, got %d calls", mock.callCount)
+	}
+}
+
+func TestRetryContextCancellation(t *testing.T) {
+	mock := &mockExecutor{
+		failCount: 100,
+		failErr:   errors.New("connection refused"),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	step := Step{
+		Description: "cancel step",
+		Request:     &Request{Method: "GET", Path: "/test"},
+		Retry:       &Retry{Attempts: 10, Interval: "1s"},
+	}
+
+	_, err := runner.executeStep(ctx, mock, step, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Should stop after first attempt + context check, returning context error.
+	if mock.callCount > 2 {
+		t.Errorf("expected early exit on cancel, got %d calls", mock.callCount)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestRetryNoRetryBehaviorUnchanged(t *testing.T) {
+	mock := &mockExecutor{
+		failCount: 0,
+		output:    StepOutput{Observed: "ok"},
+	}
+
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	step := Step{
+		Description: "no retry",
+		Request:     &Request{Method: "GET", Path: "/test"},
+	}
+
+	output, err := runner.executeStep(context.Background(), mock, step, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Observed != "ok" {
+		t.Errorf("observed = %q, want %q", output.Observed, "ok")
+	}
+	if mock.callCount != 1 {
+		t.Errorf("callCount = %d, want 1", mock.callCount)
+	}
+}
+
+func TestRetrySetupStepSuccess(t *testing.T) {
+	mock := &mockExecutor{
+		failCount: 1,
+		failErr:   errors.New("connection refused"),
+		output:    StepOutput{Observed: "ok", CaptureBody: `{"id":"42"}`},
+	}
+
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "retry-setup",
+		Setup: []Step{
+			{
+				Description: "Setup with retry",
+				Request:     &Request{Method: "POST", Path: "/items"},
+				Retry:       &Retry{Attempts: 3, Interval: "10ms"},
+				Capture:     []Capture{{Name: "item_id", JSONPath: "$.id"}},
+			},
+		},
+		Steps: []Step{
+			{
+				Description: "Read item",
+				Request:     &Request{Method: "GET", Path: "/items/{item_id}"},
+				Expect:      "ok",
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.callCount < 2 {
+		t.Errorf("callCount = %d, want at least 2 (1 fail + 1 success)", mock.callCount)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+}
+
+func TestRetrySetupExhausted(t *testing.T) {
+	mock := &mockExecutor{
+		failCount: 10,
+		failErr:   errors.New("connection refused"),
+	}
+
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "retry-setup-fail",
+		Setup: []Step{
+			{
+				Description: "Setup with retry",
+				Request:     &Request{Method: "POST", Path: "/items"},
+				Retry:       &Retry{Attempts: 3, Interval: "10ms"},
+			},
+		},
+		Steps: []Step{
+			{
+				Description: "Should not run",
+				Request:     &Request{Method: "GET", Path: "/items/1"},
+				Expect:      "never",
+			},
+		},
+	}
+
+	_, err := runner.Run(context.Background(), sc)
+	if err == nil {
+		t.Fatal("expected error for exhausted setup retry")
+	}
+	if !errors.Is(err, errSetupFailed) {
+		t.Errorf("expected errSetupFailed, got: %v", err)
+	}
+}
+
+func TestRetryCapturesFromFinalAttempt(t *testing.T) {
+	callCount := 0
+	exec := &countingExecutor{
+		maxFails: 2,
+		failErr:  errors.New("connection refused"),
+		outputs: []StepOutput{
+			{}, // fail
+			{}, // fail
+			{Observed: "ok", CaptureBody: `{"id":"final"}`},
+		},
+		callCount: &callCount,
+	}
+
+	runner := NewRunner(map[string]StepExecutor{"request": exec}, newTestLogger())
+	step := Step{
+		Description: "retry capture",
+		Request:     &Request{Method: "GET", Path: "/test"},
+		Retry:       &Retry{Attempts: 5, Interval: "10ms"},
+		Capture:     []Capture{{Name: "result_id", JSONPath: "$.id"}},
+	}
+
+	output, err := runner.executeStep(context.Background(), exec, step, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.CaptureBody != `{"id":"final"}` {
+		t.Errorf("capture body = %q, want from final attempt", output.CaptureBody)
+	}
+}
+
+type countingExecutor struct {
+	maxFails  int
+	failErr   error
+	outputs   []StepOutput
+	callCount *int
+}
+
+func (e *countingExecutor) Execute(_ context.Context, _ Step, _ map[string]string) (StepOutput, error) {
+	idx := *e.callCount
+	*e.callCount++
+	if idx < e.maxFails {
+		return StepOutput{}, e.failErr
+	}
+	if idx < len(e.outputs) {
+		return e.outputs[idx], nil
+	}
+	return StepOutput{}, nil
+}
+
+func (e *countingExecutor) ValidCaptureSources() []string { return nil }
+
 func TestRunnerUnknownStepType(t *testing.T) {
 	sc := Scenario{
 		ID: "unknown-type",
