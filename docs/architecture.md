@@ -164,6 +164,9 @@ const (
 // StepExecutor executes a single scenario step and returns its output.
 type StepExecutor interface {
 	Execute(ctx context.Context, step Step, vars map[string]string) (StepOutput, error)
+	// ValidCaptureSources returns the capture source names valid for this step type,
+	// or nil if the step type does not support source-based capture.
+	ValidCaptureSources() []string
 }
 
 // StepOutput is the result of executing a step, independent of step type.
