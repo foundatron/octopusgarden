@@ -26,7 +26,6 @@ var (
 	errGRPCMissingMethod    = errors.New("grpc step missing required field: method")
 	errGRPCNotAService      = errors.New("resolved name is not a service")
 	errGRPCMethodNotFound   = errors.New("method not found in service")
-	errGRPCClientStreamStub = errors.New("grpc: client-streaming not yet implemented")
 	errGRPCServerStreamStub = errors.New("grpc: server-streaming not yet implemented")
 )
 
@@ -224,11 +223,45 @@ func substituteGRPCRequest(req GRPCRequest, vars map[string]string) GRPCRequest 
 	return out
 }
 
-// Stub methods for streaming — will be implemented in Phase 3 and 4.
+func (e *GRPCExecutor) executeClientStream(ctx context.Context, methodDesc protoreflect.MethodDescriptor, req GRPCRequest) (StepOutput, error) {
+	fullMethod := fmt.Sprintf("/%s/%s", methodDesc.Parent().(protoreflect.ServiceDescriptor).FullName(), methodDesc.Name())
 
-func (e *GRPCExecutor) executeClientStream(_ context.Context, _ protoreflect.MethodDescriptor, _ GRPCRequest) (StepOutput, error) {
-	return StepOutput{}, errGRPCClientStreamStub
+	streamDesc := &grpc.StreamDesc{
+		StreamName:    string(methodDesc.Name()),
+		ClientStreams: true,
+	}
+
+	var headerMD metadata.MD
+	stream, err := e.conn.NewStream(ctx, streamDesc, fullMethod, grpc.Header(&headerMD))
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("grpc: open client stream: %w", err)
+	}
+
+	for i, msgJSON := range req.Stream.Messages {
+		inputMsg := dynamicpb.NewMessage(methodDesc.Input())
+		if err := protojson.Unmarshal([]byte(msgJSON), inputMsg); err != nil {
+			return StepOutput{}, fmt.Errorf("grpc: unmarshal stream message %d: %w", i, err)
+		}
+		if err := stream.SendMsg(inputMsg); err != nil {
+			return StepOutput{}, fmt.Errorf("grpc: send stream message %d: %w", i, err)
+		}
+	}
+
+	// Close send side and receive the response.
+	outputMsg := dynamicpb.NewMessage(methodDesc.Output())
+	if err := stream.CloseSend(); err != nil {
+		return StepOutput{}, fmt.Errorf("grpc: close send: %w", err)
+	}
+	recvErr := stream.RecvMsg(outputMsg)
+
+	st := status.Convert(recvErr)
+	respJSON, _ := protojson.Marshal(outputMsg)
+	streamInfo := fmt.Sprintf("client-streaming, sent %d messages", len(req.Stream.Messages))
+
+	return buildGRPCOutput(req.Service, req.Method, streamInfo, st, headerMD, string(respJSON)), nil
 }
+
+// Stub for server-streaming — will be implemented in Phase 4.
 
 func (e *GRPCExecutor) executeServerStream(_ context.Context, _ protoreflect.MethodDescriptor, _ GRPCRequest) (StepOutput, error) {
 	return StepOutput{}, errGRPCServerStreamStub
