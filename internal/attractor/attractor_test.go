@@ -358,6 +358,29 @@ func TestEmptySpec(t *testing.T) {
 	}
 }
 
+func TestUnsupportedLanguage(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{}, nil
+		},
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	opts := defaultOpts(t)
+	opts.Language = "cobol"
+	_, err := a.Run(context.Background(), "some spec", opts, nil, nil, nil)
+	if !errors.Is(err, errUnsupportedLanguage) {
+		t.Fatalf("expected errUnsupportedLanguage, got %v", err)
+	}
+
+	// Valid language should not error on this check.
+	opts.Language = "python"
+	_, err = a.Run(context.Background(), "some spec", opts, nil, nil, nil)
+	if errors.Is(err, errUnsupportedLanguage) {
+		t.Fatal("valid language should not return errUnsupportedLanguage")
+	}
+}
+
 func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.

@@ -8,14 +8,14 @@ import (
 
 func TestBuildSystemPromptContainsSpec(t *testing.T) {
 	spec := "Build a REST API for managing widgets"
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{})
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "")
 	if !strings.Contains(prompt, spec) {
 		t.Error("system prompt should contain the spec")
 	}
 }
 
 func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
-	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{})
+	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{}, "go")
 
 	checks := []string{
 		"EXAMPLE",
@@ -32,8 +32,8 @@ func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
 
 func TestBuildSystemPromptDeterministic(t *testing.T) {
 	spec := "Build a hello world app"
-	a := buildSystemPrompt(spec, ScenarioCapabilities{})
-	b := buildSystemPrompt(spec, ScenarioCapabilities{})
+	a := buildSystemPrompt(spec, ScenarioCapabilities{}, "")
+	b := buildSystemPrompt(spec, ScenarioCapabilities{}, "")
 	if a != b {
 		t.Error("buildSystemPrompt should produce identical output for the same spec")
 	}
@@ -327,7 +327,7 @@ func TestBuildSystemPromptSuffixSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prompt := buildSystemPrompt(spec, tt.caps)
+			prompt := buildSystemPrompt(spec, tt.caps, "")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("prompt should contain %q", want)
@@ -355,5 +355,150 @@ func TestTruncateFeedbackUTF8Safe(t *testing.T) {
 	trimmed := strings.TrimSuffix(got, "\n[truncated]")
 	if !utf8.ValidString(trimmed) {
 		t.Error("truncated content should be valid UTF-8")
+	}
+}
+
+func TestBuildSystemPromptAutoModeNoLanguageBias(t *testing.T) {
+	caps := []ScenarioCapabilities{
+		{},
+		{NeedsHTTP: true},
+		{NeedsExec: true},
+		{NeedsGRPC: true},
+	}
+	biasTerms := []string{
+		"golang", "go mod", "go build",
+		"python", "pip install",
+		"node:", "npm install",
+		"rust:", "cargo build",
+	}
+
+	for _, c := range caps {
+		prompt := buildSystemPrompt("some spec", c, "")
+		lower := strings.ToLower(prompt)
+		for _, term := range biasTerms {
+			if strings.Contains(lower, term) {
+				t.Errorf("auto mode (caps=%+v) should not contain language-specific term %q", c, term)
+			}
+		}
+	}
+}
+
+func TestBuildSystemPromptWithLanguage(t *testing.T) {
+	tests := []struct {
+		lang        string
+		caps        ScenarioCapabilities
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			lang: "go",
+			caps: ScenarioCapabilities{},
+			wantContain: []string{
+				"golang:1.24-alpine",
+				"main.go",
+				"go mod tidy",
+			},
+			wantAbsent: []string{"python", "node:", "rust:"},
+		},
+		{
+			lang: "go",
+			caps: ScenarioCapabilities{NeedsExec: true},
+			wantContain: []string{
+				"golang:1.24-alpine",
+				"os.Args",
+			},
+		},
+		{
+			lang: "python",
+			caps: ScenarioCapabilities{},
+			wantContain: []string{
+				"python:3.12-slim",
+				"app.py",
+				"pip install",
+			},
+			wantAbsent: []string{"golang", "node:", "rust:"},
+		},
+		{
+			lang: "python",
+			caps: ScenarioCapabilities{NeedsExec: true},
+			wantContain: []string{
+				"python:3.12-slim",
+				"argparse",
+			},
+		},
+		{
+			lang: "node",
+			caps: ScenarioCapabilities{},
+			wantContain: []string{
+				"node:22-alpine",
+				"index.js",
+				"npm install",
+			},
+			wantAbsent: []string{"golang", "python:", "rust:"},
+		},
+		{
+			lang: "rust",
+			caps: ScenarioCapabilities{},
+			wantContain: []string{
+				"rust:1.84-alpine",
+				"src/main.rs",
+				"cargo build",
+			},
+			wantAbsent: []string{"golang", "python:", "node:"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.lang+"_"+capsSuffix(tt.caps), func(t *testing.T) {
+			prompt := buildSystemPrompt("some spec", tt.caps, tt.lang)
+			for _, want := range tt.wantContain {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("prompt should contain %q", want)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(prompt, absent) {
+					t.Errorf("prompt should not contain %q", absent)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildSystemPromptGRPCWithLanguage(t *testing.T) {
+	tests := []struct {
+		lang      string
+		wantSetup string
+	}{
+		{"go", "protoc-gen-go"},
+		{"python", "grpcio"},
+		{"node", "@grpc/grpc-js"},
+		{"rust", "tonic"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.lang, func(t *testing.T) {
+			prompt := buildSystemPrompt("some spec", ScenarioCapabilities{NeedsGRPC: true}, tt.lang)
+			if !strings.Contains(prompt, tt.wantSetup) {
+				t.Errorf("gRPC prompt for %s should contain %q", tt.lang, tt.wantSetup)
+			}
+			if !strings.Contains(prompt, "proto/service.proto") {
+				t.Errorf("gRPC prompt for %s should contain proto example", tt.lang)
+			}
+		})
+	}
+}
+
+// capsSuffix returns a short string describing capabilities for test names.
+func capsSuffix(caps ScenarioCapabilities) string {
+	switch {
+	case caps.NeedsHTTP:
+		return "http"
+	case caps.NeedsExec:
+		return "cli"
+	case caps.NeedsGRPC:
+		return "grpc"
+	default:
+		return "default"
 	}
 }
