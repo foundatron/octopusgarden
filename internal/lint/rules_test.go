@@ -149,6 +149,18 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    browser:\n      action: assert\n      selector: h1\n    expect: ok\n",
 		// SC049: browser timeout invalid
 		"id: test\nsteps:\n  - description: d\n    browser:\n      action: navigate\n      url: /\n      timeout: notaduration\n    expect: ok\n",
+		// SC050: grpc not a mapping
+		"id: test\nsteps:\n  - description: d\n    grpc: notamapping\n    expect: ok\n",
+		// SC051: grpc missing service
+		"id: test\nsteps:\n  - description: d\n    grpc:\n      method: Register\n    expect: ok\n",
+		// SC052: grpc missing method
+		"id: test\nsteps:\n  - description: d\n    grpc:\n      service: svc.Service\n    expect: ok\n",
+		// SC053: grpc timeout invalid
+		"id: test\nsteps:\n  - description: d\n    grpc:\n      service: svc.Service\n      method: Get\n      timeout: notaduration\n    expect: ok\n",
+		// SC054: grpc stream messages not an array
+		"id: test\nsteps:\n  - description: d\n    grpc:\n      service: svc.Service\n      method: Stream\n      stream:\n        messages: notarray\n    expect: ok\n",
+		// SC055: grpc receive timeout invalid
+		"id: test\nsteps:\n  - description: d\n    grpc:\n      service: svc.Service\n      method: Watch\n      stream:\n        receive:\n          timeout: badvalue\n    expect: ok\n",
 	}
 
 	// Rules that can only be triggered by dir-level checks.

@@ -49,7 +49,8 @@
       "oneOf": [
         { "required": ["request"] },
         { "required": ["exec"] },
-        { "required": ["browser"] }
+        { "required": ["browser"] },
+        { "required": ["grpc"] }
       ],
       "properties": {
         "description": {
@@ -59,6 +60,7 @@
         "request": { "$ref": "#/$defs/request" },
         "exec": { "$ref": "#/$defs/exec_request" },
         "browser": { "$ref": "#/$defs/browser_request" },
+        "grpc": { "$ref": "#/$defs/grpc_request" },
         "expect": {
           "type": "string",
           "description": "Natural-language expectation judged by the LLM."
@@ -140,8 +142,74 @@
         },
         "source": {
           "type": "string",
-          "enum": ["stdout", "stderr", "exitcode", "text", "html", "count", "location"],
-          "description": "Capture source for exec or browser steps. Can be combined with jsonpath."
+          "enum": ["stdout", "stderr", "exitcode", "text", "html", "count", "location", "status", "headers"],
+          "description": "Capture source for exec, browser, or grpc steps. Can be combined with jsonpath."
+        }
+      }
+    },
+    "grpc_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "Fully qualified gRPC service name (e.g. 'telemetry.TelemetryService'). May contain {variable} references."
+        },
+        "method": {
+          "type": "string",
+          "description": "gRPC method name (e.g. 'RegisterSensor'). May contain {variable} references."
+        },
+        "body": {
+          "type": "string",
+          "description": "JSON request message body. May contain {variable} references."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "gRPC metadata headers as key-value pairs."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Call timeout as a Go duration (e.g. '30s', '5s'). Default: 30s."
+        },
+        "stream": {
+          "$ref": "#/$defs/grpc_stream",
+          "description": "Streaming configuration. Nil for unary calls."
+        }
+      }
+    },
+    "grpc_stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Client-streaming: list of JSON messages to send."
+        },
+        "receive": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timeout": {
+              "type": "string",
+              "description": "Receive timeout as a Go duration."
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of messages to collect from server stream."
+            },
+            "background": {
+              "type": "boolean",
+              "description": "Start stream in background goroutine for persistent streaming."
+            }
+          },
+          "description": "Server-streaming receive configuration."
+        },
+        "id": {
+          "type": "string",
+          "description": "Reference a named background stream to collect buffered messages."
         }
       }
     },

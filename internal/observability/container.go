@@ -95,6 +95,53 @@ func (t *TracingContainerManager) WaitHealthy(ctx context.Context, url string, t
 	return nil
 }
 
+// RunMultiPort delegates to the inner manager and records a container.run_multi_port span.
+func (t *TracingContainerManager) RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error) {
+	ctx, span := t.tracer.Start(ctx, "container.run_multi_port", trace.WithAttributes(
+		attribute.String("container.tag", tag),
+		attribute.Int("container.extra_ports", len(extraPorts)),
+	))
+
+	result, stop, err := t.inner.RunMultiPort(ctx, tag, extraPorts)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.Bool("container.success", false))
+		span.End()
+		return result, stop, err
+	}
+
+	span.SetAttributes(
+		attribute.Bool("container.success", true),
+		attribute.String("container.url", result.URL),
+	)
+	wrappedStop := func() {
+		stop()
+		span.End()
+	}
+	return result, wrappedStop, nil
+}
+
+// WaitPort delegates to the inner manager and records a container.wait_port span.
+func (t *TracingContainerManager) WaitPort(ctx context.Context, addr string, timeout time.Duration) error {
+	ctx, span := t.tracer.Start(ctx, "container.wait_port", trace.WithAttributes(
+		attribute.String("container.addr", addr),
+		attribute.String("container.port_timeout", timeout.String()),
+	))
+	defer span.End()
+
+	err := t.inner.WaitPort(ctx, addr, timeout)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.Bool("container.port_ready", false))
+		return err
+	}
+
+	span.SetAttributes(attribute.Bool("container.port_ready", true))
+	return nil
+}
+
 // StartSession delegates to the inner manager and records a container.session span.
 // The span covers the full session lifetime — it ends when the returned StopFunc is called.
 func (t *TracingContainerManager) StartSession(ctx context.Context, tag string) (*container.Session, container.StopFunc, error) {

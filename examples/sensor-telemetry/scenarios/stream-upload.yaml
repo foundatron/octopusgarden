@@ -1,0 +1,35 @@
+id: stream-upload
+description: Batch-upload multiple readings via client-streaming and verify stats
+type: api
+weight: 2.0
+
+setup:
+  - description: Register a temperature sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "warehouse-t2", "type": "temperature", "location": "Building A"}'
+    capture:
+      - name: sensor_id
+        jsonpath: $.id
+
+steps:
+  - description: Batch-upload five readings via client streaming
+    grpc:
+      service: telemetry.TelemetryService
+      method: StreamUpload
+      stream:
+        messages:
+          - '{"sensor_id": "{sensor_id}", "value": 22.5, "unit": "celsius", "timestamp": "2025-01-15T10:00:00Z"}'
+          - '{"sensor_id": "{sensor_id}", "value": 23.1, "unit": "celsius", "timestamp": "2025-01-15T10:01:00Z"}'
+          - '{"sensor_id": "{sensor_id}", "value": 21.8, "unit": "celsius", "timestamp": "2025-01-15T10:02:00Z"}'
+          - '{"sensor_id": "{sensor_id}", "value": 24.0, "unit": "celsius", "timestamp": "2025-01-15T10:03:00Z"}'
+          - '{"sensor_id": "{sensor_id}", "value": 22.0, "unit": "celsius", "timestamp": "2025-01-15T10:04:00Z"}'
+    expect: "Upload summary shows 5 accepted and 0 rejected."
+
+  - description: Verify stats reflect all uploaded readings
+    grpc:
+      service: telemetry.TelemetryService
+      method: GetStats
+      body: '{"sensor_id": "{sensor_id}"}'
+    expect: "Stats show count 5, min 21.8, max 24.0, avg approximately 22.68."

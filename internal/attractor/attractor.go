@@ -75,6 +75,7 @@ type ScenarioCapabilities struct {
 	NeedsHTTP    bool // any scenario has request steps
 	NeedsExec    bool // any scenario has exec steps
 	NeedsBrowser bool // any scenario has browser steps
+	NeedsGRPC    bool // any scenario has grpc steps
 }
 
 // ContainerManager is the interface to Docker container operations.
@@ -82,7 +83,9 @@ type ScenarioCapabilities struct {
 type ContainerManager interface {
 	Build(ctx context.Context, dir, tag string) error
 	Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
+	RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error)
 	WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
+	WaitPort(ctx context.Context, addr string, timeout time.Duration) error
 	StartSession(ctx context.Context, tag string) (session *container.Session, stop container.StopFunc, err error)
 }
 
@@ -127,6 +130,10 @@ type RunResult struct {
 // The CLI captures this and passes it to the ExecExecutor.
 type SessionProviderFn func(session *container.Session)
 
+// GRPCTargetProviderFn is called by the attractor to set the current gRPC target address.
+// The CLI captures this and passes it to the GRPCExecutor.
+type GRPCTargetProviderFn func(target string)
+
 // runState holds mutable state across iterations of the attractor loop.
 type runState struct {
 	runID                string
@@ -146,6 +153,7 @@ type runState struct {
 	patchRegressionCount int                     // consecutive regressions while patch mode active
 	summarized           *specpkg.SummarizedSpec // nil if spec fits budget or budget is 0
 	sessionProvider      SessionProviderFn       // callback to set the current session
+	grpcTargetProvider   GRPCTargetProviderFn    // callback to set the gRPC target
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -212,8 +220,9 @@ func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger, 
 // spec is the specification content (never scenario content — holdout isolation).
 // validate is a closure provided by the CLI that runs scenarios and judges satisfaction.
 // sessionProvider is an optional callback called before validation to set the container session.
+// grpcTargetProvider is an optional callback called before validation to set the gRPC target.
 // Returns a RunResult for normal termination, or an error for unrecoverable failures.
-func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, validate ValidateFn, sessionProvider SessionProviderFn) (*RunResult, error) {
+func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, validate ValidateFn, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn) (*RunResult, error) {
 	if strings.TrimSpace(rawSpec) == "" {
 		return nil, errEmptySpec
 	}
@@ -221,14 +230,18 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 	if sessionProvider == nil {
 		sessionProvider = func(_ *container.Session) {} // no-op
 	}
+	if grpcTargetProvider == nil {
+		grpcTargetProvider = func(_ string) {} // no-op
+	}
 
 	opts = withDefaults(opts)
 	s := &runState{
-		runID:           generateRunID(),
-		opts:            opts,
-		startTime:       time.Now(),
-		patchActive:     opts.PatchMode,
-		sessionProvider: sessionProvider,
+		runID:              generateRunID(),
+		opts:               opts,
+		startTime:          time.Now(),
+		patchActive:        opts.PatchMode,
+		sessionProvider:    sessionProvider,
+		grpcTargetProvider: grpcTargetProvider,
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -399,7 +412,20 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		defer s.sessionProvider(nil) // clear session after validation
 	}
 
-	if caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec {
+	switch {
+	case caps.NeedsGRPC:
+		res, err := a.startGRPCContainer(ctx, iter, tag, caps, s)
+		if err != nil {
+			return nil, err
+		}
+		if res.stalled != nil {
+			return res.stalled, nil
+		}
+		defer res.stop()
+		url = res.url
+		s.grpcTargetProvider(res.grpcTarget)
+		defer s.grpcTargetProvider("") // clear after validation
+	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
 		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
 		var stop container.StopFunc
 		var err error
@@ -431,6 +457,61 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	a.logger.Info("iteration result", "iteration", iter, "satisfaction", satisfaction, "failures", len(failures))
 
 	return a.processValidation(iter, satisfaction, failures, files, s)
+}
+
+// grpcContainerResult holds the outputs of startGRPCContainer.
+type grpcContainerResult struct {
+	url        string
+	stop       container.StopFunc
+	grpcTarget string
+	stalled    *RunResult // non-nil if startup failed (stall, not error)
+}
+
+// startGRPCContainer launches a container with gRPC port exposed and waits for readiness.
+// The caller must defer result.stop() when result.stalled is nil.
+func (a *Attractor) startGRPCContainer(ctx context.Context, iter int, tag string, caps ScenarioCapabilities, s *runState) (grpcContainerResult, error) {
+	runResult, stop, err := a.containerMgr.RunMultiPort(ctx, tag, []string{container.DefaultGRPCPort})
+	if err != nil {
+		a.logger.Warn("container run failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeRunFail
+		s.lastSatisfaction = 0
+		s.recordStall(iter, feedbackRunError, fmt.Sprintf("Container failed to start: %s", err))
+		return grpcContainerResult{stalled: a.checkStalled(iter, s)}, nil
+	}
+
+	grpcTarget := runResult.ExtraPorts[container.DefaultGRPCPort]
+	if stallResult := a.waitGRPCHealth(ctx, iter, caps, runResult.URL, grpcTarget, s); stallResult != nil {
+		stop()
+		return grpcContainerResult{stalled: stallResult}, nil
+	}
+
+	return grpcContainerResult{url: runResult.URL, stop: stop, grpcTarget: grpcTarget}, nil
+}
+
+// waitGRPCHealth waits for either HTTP or gRPC port readiness depending on capabilities.
+// Returns a stall result if health check fails, nil on success.
+func (a *Attractor) waitGRPCHealth(ctx context.Context, iter int, caps ScenarioCapabilities, url, grpcTarget string, s *runState) *RunResult {
+	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
+	if needsHTTP {
+		if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
+			a.logger.Warn("health check failed", "iteration", iter, "error", err)
+			s.lastOutcome = OutcomeHealthFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
+			return a.checkStalled(iter, s)
+		}
+		return nil
+	}
+	if grpcTarget != "" {
+		if err := a.containerMgr.WaitPort(ctx, grpcTarget, s.opts.HealthTimeout); err != nil {
+			a.logger.Warn("gRPC port health check failed", "iteration", iter, "error", err)
+			s.lastOutcome = OutcomeHealthFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackHealthError, fmt.Sprintf("gRPC port health check failed: %s", err))
+			return a.checkStalled(iter, s)
+		}
+	}
+	return nil
 }
 
 // processValidation handles post-validation logic: convergence, stall detection, checkpoint.

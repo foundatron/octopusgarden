@@ -215,9 +215,24 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		return currentSession
 	}
 
+	// gRPC target provider pattern: same as session provider — attractor sets it,
+	// validate closure reads it.
+	var grpcTargetMu sync.Mutex
+	var currentGRPCTarget string
+	grpcTargetProvider := attractor.GRPCTargetProviderFn(func(target string) {
+		grpcTargetMu.Lock()
+		currentGRPCTarget = target
+		grpcTargetMu.Unlock()
+	})
+	grpcTargetGetter := func() string {
+		grpcTargetMu.Lock()
+		defer grpcTargetMu.Unlock()
+		return currentGRPCTarget
+	}
+
 	instrumentedLLM := observability.NewTracingLLMClient(llmClient, tp)
 	instrumentedContainer := observability.NewTracingContainerManager(containerMgr, tp)
-	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, judgeModel, sessionGetter, caps.NeedsBrowser)
+	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, judgeModel, sessionGetter, caps.NeedsBrowser, grpcTargetGetter)
 	instrumentedValidate := observability.WrapValidateFn(validateFn, tp)
 
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
@@ -232,7 +247,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	}
 
 	startedAt := time.Now()
-	result, err := att.Run(ctx, parsedSpec.RawContent, opts, instrumentedValidate, sessionProvider)
+	result, err := att.Run(ctx, parsedSpec.RawContent, opts, instrumentedValidate, sessionProvider, grpcTargetProvider)
 	if err != nil {
 		return fmt.Errorf("attractor run: %w", err)
 	}
@@ -267,6 +282,9 @@ func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
 	}
 	if step.Browser != nil {
 		caps.NeedsBrowser = true
+	}
+	if step.GRPC != nil {
+		caps.NeedsGRPC = true
 	}
 }
 
@@ -325,6 +343,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
 	target := fs.String("target", "", "target URL to validate against (required)")
+	grpcTarget := fs.String("grpc-target", "", "gRPC target (host:port) to validate against (required for gRPC scenarios)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
@@ -369,7 +388,10 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	// Exec steps are not supported when validating against an external --target;
 	// the nil session causes exec steps to run locally (no container).
 	caps := detectCapabilities(scenarios)
-	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil }, caps.NeedsBrowser)
+	if caps.NeedsGRPC && *grpcTarget == "" {
+		logger.Warn("scenarios contain gRPC steps but --grpc-target is not set; gRPC steps will fail")
+	}
+	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil }, caps.NeedsBrowser, *grpcTarget)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -575,7 +597,42 @@ func resolveStorePath() (string, error) {
 	return filepath.Join(dir, "runs.db"), nil
 }
 
-func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session, needsBrowser bool) (scenario.AggregateResult, error) {
+// executorOpts captures the parameters for building per-goroutine step executors.
+type executorOpts struct {
+	targetURL     string
+	logger        *slog.Logger
+	sessionGetter func() *container.Session
+	needsBrowser  bool
+	grpcTarget    string
+}
+
+// buildExecutors creates a fresh set of StepExecutors and a cleanup function.
+func buildExecutors(opts executorOpts) (map[string]scenario.StepExecutor, func()) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	executors := map[string]scenario.StepExecutor{
+		"request": &scenario.HTTPExecutor{Client: httpClient, BaseURL: opts.targetURL},
+		"exec":    &scenario.ExecExecutor{Session: opts.sessionGetter()},
+	}
+	var closers []func()
+	if opts.needsBrowser {
+		browserExec := &scenario.BrowserExecutor{BaseURL: opts.targetURL, Logger: opts.logger}
+		executors["browser"] = browserExec
+		closers = append(closers, browserExec.Close)
+	}
+	if opts.grpcTarget != "" {
+		grpcExec := &scenario.GRPCExecutor{Target: opts.grpcTarget, Logger: opts.logger}
+		executors["grpc"] = grpcExec
+		closers = append(closers, grpcExec.Close)
+	}
+	cleanup := func() {
+		for _, fn := range closers {
+			fn()
+		}
+	}
+	return executors, cleanup
+}
+
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL string, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session, needsBrowser bool, grpcTarget string) (scenario.AggregateResult, error) {
 	type indexedResult struct {
 		index int
 		ss    scenario.ScoredScenario
@@ -592,16 +649,14 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 	for i, sc := range scenarios {
 		g.Go(func() error {
 			// Each goroutine gets its own Runner (independent variable capture state) and Judge.
-			httpClient := &http.Client{Timeout: 30 * time.Second}
-			executors := map[string]scenario.StepExecutor{
-				"request": &scenario.HTTPExecutor{Client: httpClient, BaseURL: targetURL},
-				"exec":    &scenario.ExecExecutor{Session: sessionGetter()},
-			}
-			if needsBrowser {
-				browserExec := &scenario.BrowserExecutor{BaseURL: targetURL, Logger: logger}
-				defer browserExec.Close()
-				executors["browser"] = browserExec
-			}
+			executors, cleanup := buildExecutors(executorOpts{
+				targetURL:     targetURL,
+				logger:        logger,
+				sessionGetter: sessionGetter,
+				needsBrowser:  needsBrowser,
+				grpcTarget:    grpcTarget,
+			})
+			defer cleanup()
 			runner := scenario.NewRunner(executors, logger)
 			judge := scenario.NewJudge(llmClient, judgeModel, logger)
 
@@ -653,9 +708,9 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, targetURL s
 	return scenario.Aggregate(scored), nil
 }
 
-func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session, needsBrowser bool) attractor.ValidateFn {
+func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger, judgeModel string, sessionGetter func() *container.Session, needsBrowser bool, grpcTargetGetter func() string) attractor.ValidateFn {
 	return func(ctx context.Context, url string) (float64, []string, float64, error) {
-		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel, sessionGetter, needsBrowser)
+		agg, err := runAndScore(ctx, scenarios, url, llmClient, logger, judgeModel, sessionGetter, needsBrowser, grpcTargetGetter())
 		if err != nil {
 			return 0, nil, 0, err
 		}

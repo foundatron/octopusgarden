@@ -51,7 +51,7 @@ func TestSystemPromptContainsOnlySpec(t *testing.T) {
 	}
 
 	a := New(client, &mockContainerMgr{}, testLogger(), nil)
-	_, err := a.Run(context.Background(), specContent, defaultOpts(t), validate, nil)
+	_, err := a.Run(context.Background(), specContent, defaultOpts(t), validate, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestScenarioContentNeverInSystemPrompt(t *testing.T) {
 	opts.StallLimit = 100 // prevent stall exit
 
 	a := New(client, &mockContainerMgr{}, testLogger(), nil)
-	result, err := a.Run(context.Background(), specContent, opts, validate, nil)
+	result, err := a.Run(context.Background(), specContent, opts, validate, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -138,8 +138,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC015",
 		Level:       Error,
-		Summary:     "step must have exactly one step type (request, exec, or browser)",
-		MsgContains: "exactly one of request, exec, or browser is required",
+		Summary:     "step must have exactly one step type (request, exec, browser, or grpc)",
+		MsgContains: "exactly one of request, exec, browser, or grpc is required",
 	},
 	{
 		ID:          "SC016",
@@ -245,7 +245,7 @@ var ScenarioRules = []Rule{
 		ID:          "SC032",
 		Level:       Error,
 		Summary:     "step must not have multiple step types",
-		MsgContains: "step has multiple step types; exactly one of request, exec, or browser is required",
+		MsgContains: "step has multiple step types; exactly one of request, exec, browser, or grpc is required",
 	},
 	{
 		ID:          "SC033",
@@ -349,5 +349,42 @@ var ScenarioRules = []Rule{
 		Summary:     "browser timeout must be a valid Go duration",
 		MsgContains: "browser timeout: invalid duration",
 		Detail:      "Uses same format as exec timeout (e.g. 10s, 30s).",
+	},
+	// gRPC step rules.
+	{
+		ID:          "SC050",
+		Level:       Error,
+		Summary:     "grpc must be a YAML mapping",
+		MsgContains: "grpc must be a mapping",
+	},
+	{
+		ID:          "SC051",
+		Level:       Error,
+		Summary:     "grpc service is required",
+		MsgContains: "grpc missing required field: service",
+	},
+	{
+		ID:          "SC052",
+		Level:       Error,
+		Summary:     "grpc method is required",
+		MsgContains: "grpc missing required field: method",
+	},
+	{
+		ID:          "SC053",
+		Level:       Error,
+		Summary:     "grpc timeout must be a valid Go duration",
+		MsgContains: "grpc timeout",
+	},
+	{
+		ID:          "SC054",
+		Level:       Error,
+		Summary:     "grpc stream messages must be an array",
+		MsgContains: "grpc stream messages must be an array",
+	},
+	{
+		ID:          "SC055",
+		Level:       Error,
+		Summary:     "grpc receive timeout must be a valid Go duration",
+		MsgContains: "grpc receive timeout",
 	},
 }
