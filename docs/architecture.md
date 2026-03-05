@@ -437,6 +437,7 @@ type ValidateFn func(ctx context.Context, url string) (satisfaction float64, fai
 // RunOptions configures the attractor loop.
 type RunOptions struct {
 	Model         string
+	Language      string               // language hint: "go", "python", "node", "rust", or "" (auto)
 	BudgetUSD     float64              // 0 = unlimited
 	Threshold     float64              // default 95
 	MaxIterations int                  // default 10
