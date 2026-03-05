@@ -11,7 +11,9 @@ import (
 type mockContainerMgr struct {
 	buildFn        func(ctx context.Context, dir, tag string) error
 	runFn          func(ctx context.Context, tag string) (string, container.StopFunc, error)
+	runMultiPortFn func(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error)
 	waitHealthyFn  func(ctx context.Context, url string, timeout time.Duration) error
+	waitPortFn     func(ctx context.Context, addr string, timeout time.Duration) error
 	startSessionFn func(ctx context.Context, tag string) (*container.Session, container.StopFunc, error)
 }
 
@@ -23,8 +25,22 @@ func (m *mockContainerMgr) Run(ctx context.Context, tag string) (string, contain
 	return m.runFn(ctx, tag)
 }
 
+func (m *mockContainerMgr) RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error) {
+	if m.runMultiPortFn != nil {
+		return m.runMultiPortFn(ctx, tag, extraPorts)
+	}
+	return container.RunResult{URL: "http://127.0.0.1:9999", ExtraPorts: map[string]string{}}, func() {}, nil
+}
+
 func (m *mockContainerMgr) WaitHealthy(ctx context.Context, url string, timeout time.Duration) error {
 	return m.waitHealthyFn(ctx, url, timeout)
+}
+
+func (m *mockContainerMgr) WaitPort(ctx context.Context, addr string, timeout time.Duration) error {
+	if m.waitPortFn != nil {
+		return m.waitPortFn(ctx, addr, timeout)
+	}
+	return nil
 }
 
 func (m *mockContainerMgr) StartSession(ctx context.Context, tag string) (*container.Session, container.StopFunc, error) {

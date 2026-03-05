@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, or browser)")
+	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, or grpc)")
 	errNoCapture       = errors.New("capture has neither source nor jsonpath")
 )
 
@@ -23,6 +23,12 @@ const (
 	BrowserSourceHTML     = "html"
 	BrowserSourceCount    = "count"
 	BrowserSourceLocation = "location"
+)
+
+// GRPC capture source constants.
+const (
+	GRPCSourceStatus  = "status"
+	GRPCSourceHeaders = "headers"
 )
 
 // StepExecutor executes a single scenario step and returns its output.
@@ -54,11 +60,12 @@ type Step struct {
 	Request     *Request        `yaml:"request"`
 	Exec        *ExecRequest    `yaml:"exec"`
 	Browser     *BrowserRequest `yaml:"browser"`
+	GRPC        *GRPCRequest    `yaml:"grpc"`
 	Expect      string          `yaml:"expect"` // natural language, judged by LLM
 	Capture     []Capture       `yaml:"capture"`
 }
 
-// StepType returns the step type key: "request", "exec", "browser", or "" if unknown.
+// StepType returns the step type key: "request", "exec", "browser", "grpc", or "" if unknown.
 func (s Step) StepType() string {
 	if s.Request != nil {
 		return "request"
@@ -68,6 +75,9 @@ func (s Step) StepType() string {
 	}
 	if s.Browser != nil {
 		return "browser"
+	}
+	if s.GRPC != nil {
+		return "grpc"
 	}
 	return ""
 }
@@ -98,6 +108,30 @@ type BrowserRequest struct {
 	TextAbsent string `yaml:"text_absent"` // assert: element does NOT contain text
 	Count      *int   `yaml:"count"`       // assert: number of matching elements
 	Timeout    string `yaml:"timeout"`     // wait timeout (default: 10s)
+}
+
+// GRPCRequest describes a gRPC call to execute.
+type GRPCRequest struct {
+	Service string            `yaml:"service"` // e.g. "telemetry.TelemetryService"
+	Method  string            `yaml:"method"`  // e.g. "RegisterSensor"
+	Body    string            `yaml:"body"`    // JSON request message (unary/server-streaming)
+	Headers map[string]string `yaml:"headers"` // gRPC metadata
+	Timeout string            `yaml:"timeout"` // call timeout (default: 30s)
+	Stream  *GRPCStream       `yaml:"stream"`  // streaming config (nil for unary)
+}
+
+// GRPCStream configures streaming behavior for a gRPC step.
+type GRPCStream struct {
+	Messages []string     `yaml:"messages"` // client-streaming: list of JSON messages to send
+	Receive  *GRPCReceive `yaml:"receive"`  // server-streaming: receive config
+	ID       string       `yaml:"id"`       // reference a named background stream
+}
+
+// GRPCReceive configures how to receive server-streaming messages.
+type GRPCReceive struct {
+	Timeout    string `yaml:"timeout"`
+	Count      int    `yaml:"count"`
+	Background bool   `yaml:"background"`
 }
 
 // Capture defines a variable to extract from a response.

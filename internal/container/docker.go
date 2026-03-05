@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,12 +27,16 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
+// DefaultGRPCPort is the standard container port for gRPC services.
+const DefaultGRPCPort = "50051/tcp"
+
 var (
 	errBuildFailed        = errors.New("container: image build failed")
 	errNoPortBinding      = errors.New("container: no host port binding found for container port 8080/tcp")
 	errContainerUnhealthy = errors.New("container: health check timed out")
 	errNotADirectory      = errors.New("container: build context is not a directory")
 	errExecFailed         = errors.New("container: exec create failed")
+	errPortUnreachable    = errors.New("container: port health check timed out")
 )
 
 // dockerAPI is the minimal Docker API surface used by Manager.
@@ -210,6 +215,111 @@ func (m *Manager) stopAndRemove(containerID string) {
 	ctx := context.Background()
 	_ = m.docker.ContainerStop(ctx, containerID, dockercontainer.StopOptions{})
 	_ = m.docker.ContainerRemove(ctx, containerID, dockercontainer.RemoveOptions{Force: true})
+}
+
+// RunResult holds the container URL and any extra port bindings.
+type RunResult struct {
+	URL        string            // HTTP base URL (port 8080)
+	ExtraPorts map[string]string // e.g. "50051/tcp" -> "127.0.0.1:54321"
+}
+
+// RunMultiPort starts a container exposing port 8080 plus additional ports.
+// Extra ports are bound to 127.0.0.1 with ephemeral host ports.
+func (m *Manager) RunMultiPort(ctx context.Context, tag string, extraPorts []string) (RunResult, StopFunc, error) {
+	containerPort := nat.Port("8080/tcp")
+	exposed := nat.PortSet{containerPort: struct{}{}}
+	bindings := nat.PortMap{
+		containerPort: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}},
+	}
+
+	for _, p := range extraPorts {
+		port := nat.Port(p)
+		exposed[port] = struct{}{}
+		bindings[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}
+	}
+
+	createResp, err := m.docker.ContainerCreate(ctx,
+		&dockercontainer.Config{
+			Image:        tag,
+			ExposedPorts: exposed,
+		},
+		&dockercontainer.HostConfig{
+			PortBindings: bindings,
+		},
+		nil, nil, "",
+	)
+	if err != nil {
+		return RunResult{}, nil, fmt.Errorf("container: create: %w", err)
+	}
+	containerID := createResp.ID
+
+	if err := m.docker.ContainerStart(ctx, containerID, dockercontainer.StartOptions{}); err != nil {
+		_ = m.docker.ContainerRemove(context.Background(), containerID, dockercontainer.RemoveOptions{Force: true})
+		return RunResult{}, nil, fmt.Errorf("container: start: %w", err)
+	}
+
+	inspectResp, err := m.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		m.stopAndRemove(containerID)
+		return RunResult{}, nil, fmt.Errorf("container: inspect: %w", err)
+	}
+
+	httpBindings, ok := inspectResp.NetworkSettings.Ports[containerPort]
+	if !ok || len(httpBindings) == 0 {
+		m.stopAndRemove(containerID)
+		return RunResult{}, nil, errNoPortBinding
+	}
+
+	result := RunResult{
+		URL:        "http://127.0.0.1:" + httpBindings[0].HostPort,
+		ExtraPorts: make(map[string]string, len(extraPorts)),
+	}
+
+	for _, p := range extraPorts {
+		port := nat.Port(p)
+		portBindings := inspectResp.NetworkSettings.Ports[port]
+		if len(portBindings) > 0 {
+			result.ExtraPorts[p] = net.JoinHostPort(portBindings[0].HostIP, portBindings[0].HostPort)
+		}
+	}
+
+	stopFn := func() { m.stopAndRemove(containerID) }
+
+	shortID := containerID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	m.logger.Info("container started (multi-port)", "id", shortID, "url", result.URL, "extra_ports", result.ExtraPorts)
+	return result, stopFn, nil
+}
+
+// WaitPort polls a TCP address until it accepts connections or the timeout expires.
+// Used for gRPC services that have no HTTP health endpoint.
+func (m *Manager) WaitPort(ctx context.Context, addr string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	dialer := &net.Dialer{Timeout: time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err == nil {
+		_ = conn.Close()
+		return nil
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %s after %s", errPortUnreachable, addr, timeout)
+		case <-ticker.C:
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err == nil {
+				_ = conn.Close()
+				return nil
+			}
+		}
+	}
 }
 
 // WaitHealthy polls the container URL until it returns a non-5xx response or
