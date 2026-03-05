@@ -253,7 +253,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		PatchMode:     patchMode,
 		ContextBudget: contextBudget,
 		Language:      language,
-		Progress:      progressFn(),
+		Progress:      progressFn(ctx, logger, st),
 		Capabilities:  caps,
 	}
 
@@ -297,7 +297,7 @@ func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
 	}
 }
 
-func progressFn() func(attractor.IterationProgress) {
+func progressFn(ctx context.Context, logger *slog.Logger, st *store.Store) func(attractor.IterationProgress) {
 	return func(p attractor.IterationProgress) {
 		if p.Outcome != attractor.OutcomeValidated {
 			fmt.Fprintf(os.Stderr, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
@@ -307,6 +307,20 @@ func progressFn() func(attractor.IterationProgress) {
 			fmt.Fprintf(os.Stderr, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 				p.Iteration, p.MaxIterations, p.Satisfaction, p.Threshold,
 				p.TotalCostUSD, p.Trend, p.Elapsed.Truncate(time.Second))
+		}
+
+		it := store.Iteration{
+			RunID:        p.RunID,
+			Iteration:    p.Iteration,
+			Satisfaction: p.Satisfaction,
+			InputTokens:  p.InputTokens,
+			OutputTokens: p.OutputTokens,
+			CostUSD:      p.IterationCostUSD,
+			Failures:     p.Failures,
+			CreatedAt:    time.Now(),
+		}
+		if err := st.RecordIteration(ctx, it); err != nil {
+			logger.Warn("failed to record iteration", "error", err)
 		}
 	}
 }
