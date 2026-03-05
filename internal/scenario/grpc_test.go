@@ -71,7 +71,7 @@ func TestParseGRPCTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := parseGRPCTimeout(tt.input)
+			got, err := parseStepTimeout(tt.input, defaultGRPCTimeout)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("wantErr=%v, got %v", tt.wantErr, err)
 			}

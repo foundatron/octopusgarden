@@ -16,6 +16,9 @@ type HTTPExecutor struct {
 	BaseURL string
 }
 
+// ValidCaptureSources returns nil — HTTP steps use JSONPath capture only.
+func (e *HTTPExecutor) ValidCaptureSources() []string { return nil }
+
 // Execute performs an HTTP request and returns the step output.
 func (e *HTTPExecutor) Execute(ctx context.Context, step Step, vars map[string]string) (StepOutput, error) {
 	req := substituteRequest(*step.Request, vars)
