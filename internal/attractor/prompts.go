@@ -152,6 +152,62 @@ file content here
 - Generate ONLY the file blocks, minimize explanatory text
 - Include all dependencies and configuration files`
 
+const systemPromptSuffixGRPC = `
+
+INSTRUCTIONS:
+- Generate ALL files needed for a working gRPC application
+- Include a Dockerfile that builds and runs the application with a gRPC server on port 50051
+- The gRPC server MUST enable server reflection (import "google.golang.org/grpc/reflection"; reflection.Register(srv))
+- Include .proto files and generate Go stubs in the Dockerfile (protoc + protoc-gen-go + protoc-gen-go-grpc)
+- Do NOT generate go.sum — use go mod tidy in the Dockerfile
+- Output each file in this exact format:
+
+=== FILE: path/to/file ===
+file content here
+=== END FILE ===
+
+- Generate ONLY the file blocks, minimize explanatory text
+- The application MUST serve gRPC on port 50051
+- Include all .proto files, generated code, and configuration files`
+
+const systemPromptSuffixHTTPAndGRPC = `
+
+INSTRUCTIONS:
+- Generate ALL files needed for a working application that serves both HTTP and gRPC
+- Include a Dockerfile that builds and runs the application
+- The application MUST listen on port 8080 for HTTP requests
+- The application MUST serve gRPC on port 50051
+- The gRPC server MUST enable server reflection (import "google.golang.org/grpc/reflection"; reflection.Register(srv))
+- Include .proto files and generate Go stubs in the Dockerfile (protoc + protoc-gen-go + protoc-gen-go-grpc)
+- Do NOT generate go.sum — use go mod tidy in the Dockerfile
+- Output each file in this exact format:
+
+=== FILE: path/to/file ===
+file content here
+=== END FILE ===
+
+- Generate ONLY the file blocks, minimize explanatory text
+- Include all .proto files, generated code, and configuration files`
+
+const systemPromptSuffixCLIAndGRPC = `
+
+INSTRUCTIONS:
+- Generate ALL files needed for a working application that serves both as a CLI tool and a gRPC server
+- Include a Dockerfile that builds the application and installs it in PATH
+- The application MUST serve gRPC on port 50051
+- The gRPC server MUST enable server reflection (import "google.golang.org/grpc/reflection"; reflection.Register(srv))
+- The application must also support command-line invocation for CLI operations
+- Include .proto files and generate Go stubs in the Dockerfile (protoc + protoc-gen-go + protoc-gen-go-grpc)
+- Do NOT generate go.sum — use go mod tidy in the Dockerfile
+- Output each file in this exact format:
+
+=== FILE: path/to/file ===
+file content here
+=== END FILE ===
+
+- Generate ONLY the file blocks, minimize explanatory text
+- Include all .proto files, generated code, and configuration files`
+
 const dependencyRules = `
 
 DEPENDENCY RULES:
@@ -173,6 +229,12 @@ func buildSystemPrompt(spec string, caps ScenarioCapabilities) string {
 func selectPromptSuffix(caps ScenarioCapabilities) string {
 	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
 	switch {
+	case needsHTTP && caps.NeedsGRPC:
+		return systemPromptSuffixHTTPAndGRPC
+	case caps.NeedsExec && caps.NeedsGRPC:
+		return systemPromptSuffixCLIAndGRPC
+	case caps.NeedsGRPC:
+		return systemPromptSuffixGRPC
 	case needsHTTP && caps.NeedsExec:
 		return systemPromptSuffixBoth
 	case caps.NeedsExec:

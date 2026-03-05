@@ -284,6 +284,45 @@ func TestBuildSystemPromptSuffixSelection(t *testing.T) {
 				"MUST listen on port 8080",
 			},
 		},
+		{
+			name: "NeedsGRPC only",
+			caps: ScenarioCapabilities{NeedsGRPC: true},
+			wantContain: []string{
+				"gRPC server on port 50051",
+				"server reflection",
+				".proto files",
+			},
+			wantAbsent: []string{
+				"port 8080",
+			},
+		},
+		{
+			name: "NeedsHTTP and NeedsGRPC",
+			caps: ScenarioCapabilities{NeedsHTTP: true, NeedsGRPC: true},
+			wantContain: []string{
+				"port 8080",
+				"port 50051",
+				"server reflection",
+			},
+		},
+		{
+			name: "NeedsExec and NeedsGRPC",
+			caps: ScenarioCapabilities{NeedsExec: true, NeedsGRPC: true},
+			wantContain: []string{
+				"CLI",
+				"port 50051",
+				"server reflection",
+			},
+		},
+		{
+			name: "NeedsBrowser and NeedsGRPC",
+			caps: ScenarioCapabilities{NeedsBrowser: true, NeedsGRPC: true},
+			wantContain: []string{
+				"port 8080",
+				"port 50051",
+				"server reflection",
+			},
+		},
 	}
 
 	for _, tt := range tests {
