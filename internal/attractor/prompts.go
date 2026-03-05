@@ -66,16 +66,42 @@ DEPENDENCY RULES:
 - NEVER generate lock files or checksum files (go.sum, package-lock.json, yarn.lock, Cargo.lock, etc.) — you cannot compute valid hashes; the build will fail
 - Let the package manager resolve and verify dependencies at build time`
 
+// geneSectionHeader introduces the gene section in the system prompt.
+// The spec-takes-precedence note ensures holdout isolation semantics.
+const geneSectionHeader = `
+
+PROVEN PATTERNS (extracted from a working exemplar — synthesize equivalent behavior
+adapted to the specification above. Preserve the structural approach and invariants.
+The SPECIFICATION always takes precedence over these patterns on any conflict):
+
+`
+
 // buildSystemPrompt creates the system prompt containing the spec.
 // This prompt is cached across iterations via CacheControl: ephemeral.
 // The suffix is selected based on scenario capabilities and optional language.
 // When language is "" (auto), no language-specific examples or dep rules are emitted.
-func buildSystemPrompt(spec string, caps ScenarioCapabilities, language string) string {
+// genes and geneLanguage are optional; when genes is empty, no gene section is emitted.
+func buildSystemPrompt(spec string, caps ScenarioCapabilities, language, genes, geneLanguage string) string {
 	var b strings.Builder
 	b.WriteString(systemPromptPrefix)
 	b.WriteString(spec)
+	if genes != "" {
+		b.WriteString(buildGeneSection(genes, language, geneLanguage))
+	}
 	b.WriteString(buildCapabilitySuffix(caps, language))
 	b.WriteString(buildDepRules(language))
+	return b.String()
+}
+
+// buildGeneSection formats the gene guide text for inclusion in the system prompt.
+// When geneLanguage differs from language, a cross-language adaptation note is added.
+func buildGeneSection(genes, language, geneLanguage string) string {
+	var b strings.Builder
+	b.WriteString(geneSectionHeader)
+	if geneLanguage != "" && language != "" && geneLanguage != language {
+		fmt.Fprintf(&b, "(These patterns are from a %s implementation — adapt idioms to %s)\n\n", geneLanguage, language)
+	}
+	b.WriteString(genes)
 	return b.String()
 }
 
