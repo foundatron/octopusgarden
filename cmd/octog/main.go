@@ -343,6 +343,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
 	target := fs.String("target", "", "target URL to validate against (required)")
+	grpcTarget := fs.String("grpc-target", "", "gRPC target (host:port) to validate against (required for gRPC scenarios)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
@@ -387,7 +388,10 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	// Exec steps are not supported when validating against an external --target;
 	// the nil session causes exec steps to run locally (no container).
 	caps := detectCapabilities(scenarios)
-	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil }, caps.NeedsBrowser, "")
+	if caps.NeedsGRPC && *grpcTarget == "" {
+		logger.Warn("scenarios contain gRPC steps but --grpc-target is not set; gRPC steps will fail")
+	}
+	agg, err := runAndScore(ctx, scenarios, *target, clients.client, logger, *judgeModel, func() *container.Session { return nil }, caps.NeedsBrowser, *grpcTarget)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}

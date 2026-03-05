@@ -159,6 +159,7 @@ INSTRUCTIONS:
 - Include a Dockerfile that builds and runs the application with a gRPC server on port 50051
 - The gRPC server MUST enable server reflection so clients can discover services at runtime
 - Include .proto files defining the service and compile them as part of the Docker build
+- Install protoc and any language-specific protobuf/gRPC compiler plugins in the Dockerfile
 - Output each file in this exact format:
 
 === FILE: path/to/file ===
@@ -170,7 +171,6 @@ EXAMPLE (showing correct format with two files):
 === FILE: proto/service.proto ===
 syntax = "proto3";
 package example;
-option go_package = "example/proto";
 
 service ExampleService {
   rpc GetItem (GetItemRequest) returns (Item);
@@ -179,14 +179,12 @@ message GetItemRequest { string id = 1; }
 message Item { string id = 1; string name = 2; }
 === END FILE ===
 === FILE: Dockerfile ===
-FROM golang:1.22-alpine
-RUN apk add --no-cache protobuf
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-RUN go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+FROM <appropriate-base-image>
+RUN <install protoc and language-specific protobuf/gRPC plugins>
 WORKDIR /app
 COPY . .
-RUN protoc --go_out=. --go-grpc_out=. proto/*.proto
-RUN go mod tidy && go build -o server .
+RUN <compile .proto files to generate stubs>
+RUN <install dependencies and build the application>
 CMD ["./server"]
 === END FILE ===
 

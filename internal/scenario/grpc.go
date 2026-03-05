@@ -23,12 +23,24 @@ import (
 const defaultGRPCTimeout = 30 * time.Second
 
 var (
-	errGRPCMissingService = errors.New("grpc step missing required field: service")
-	errGRPCMissingMethod  = errors.New("grpc step missing required field: method")
-	errGRPCNotAService    = errors.New("resolved name is not a service")
-	errGRPCMethodNotFound = errors.New("method not found in service")
-	errGRPCStreamNotFound = errors.New("background stream not found")
+	errGRPCMissingService  = errors.New("grpc step missing required field: service")
+	errGRPCMissingMethod   = errors.New("grpc step missing required field: method")
+	errGRPCNotAService     = errors.New("resolved name is not a service")
+	errGRPCMethodNotFound  = errors.New("method not found in service")
+	errGRPCStreamNotFound  = errors.New("background stream not found")
+	errGRPCNoParentService = errors.New("method descriptor has no parent service")
 )
+
+// fullMethodPath returns the full gRPC method path (e.g. "/pkg.Service/Method")
+// from a method descriptor, with a guarded type assertion on the parent.
+func fullMethodPath(methodDesc protoreflect.MethodDescriptor) (string, error) {
+	parent := methodDesc.Parent()
+	svcDesc, ok := parent.(protoreflect.ServiceDescriptor)
+	if !ok {
+		return "", fmt.Errorf("method %s: %w", methodDesc.Name(), errGRPCNoParentService)
+	}
+	return fmt.Sprintf("/%s/%s", svcDesc.FullName(), methodDesc.Name()), nil
+}
 
 // GRPCExecutor executes gRPC steps using server reflection for dynamic invocation.
 // A single connection persists across steps within a scenario.
@@ -168,10 +180,13 @@ func (e *GRPCExecutor) executeUnary(ctx context.Context, methodDesc protoreflect
 	}
 
 	outputMsg := dynamicpb.NewMessage(methodDesc.Output())
-	fullMethod := fmt.Sprintf("/%s/%s", methodDesc.Parent().(protoreflect.ServiceDescriptor).FullName(), methodDesc.Name())
+	fullMethod, err := fullMethodPath(methodDesc)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("grpc: %w", err)
+	}
 
 	var headerMD metadata.MD
-	err := e.conn.Invoke(ctx, fullMethod, inputMsg, outputMsg, grpc.Header(&headerMD))
+	err = e.conn.Invoke(ctx, fullMethod, inputMsg, outputMsg, grpc.Header(&headerMD))
 
 	st := status.Convert(err)
 	respJSON, _ := protojson.Marshal(outputMsg)
@@ -251,7 +266,10 @@ func substituteGRPCRequest(req GRPCRequest, vars map[string]string) GRPCRequest 
 }
 
 func (e *GRPCExecutor) executeClientStream(ctx context.Context, methodDesc protoreflect.MethodDescriptor, req GRPCRequest) (StepOutput, error) {
-	fullMethod := fmt.Sprintf("/%s/%s", methodDesc.Parent().(protoreflect.ServiceDescriptor).FullName(), methodDesc.Name())
+	fullMethod, err := fullMethodPath(methodDesc)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("grpc: %w", err)
+	}
 
 	streamDesc := &grpc.StreamDesc{
 		StreamName:    string(methodDesc.Name()),
@@ -302,7 +320,10 @@ func (e *GRPCExecutor) executeServerStream(ctx context.Context, methodDesc proto
 
 func (e *GRPCExecutor) executeForegroundServerStream(ctx context.Context, methodDesc protoreflect.MethodDescriptor, req GRPCRequest) (StepOutput, error) {
 	recv := req.Stream.Receive
-	fullMethod := fmt.Sprintf("/%s/%s", methodDesc.Parent().(protoreflect.ServiceDescriptor).FullName(), methodDesc.Name())
+	fullMethod, err := fullMethodPath(methodDesc)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("grpc: %w", err)
+	}
 
 	inputMsg := dynamicpb.NewMessage(methodDesc.Input())
 	if req.Body != "" {
@@ -337,6 +358,11 @@ func (e *GRPCExecutor) executeForegroundServerStream(ctx context.Context, method
 func receiveMessages(ctx context.Context, stream grpc.ClientStream, methodDesc protoreflect.MethodDescriptor, recv *GRPCReceive) ([]string, error) {
 	recvTimeout, err := parseGRPCTimeout(recv.Timeout)
 	if err != nil {
+		slog.Warn("grpc: invalid receive timeout, using default",
+			"timeout", recv.Timeout,
+			"default", defaultGRPCTimeout,
+			"error", err,
+		)
 		recvTimeout = defaultGRPCTimeout
 	}
 
@@ -387,17 +413,22 @@ func buildServerStreamOutput(req GRPCRequest, messages []string, st *status.Stat
 }
 
 // ensureBgContext creates the background context for background streams if not yet created.
-func (e *GRPCExecutor) ensureBgContext(ctx context.Context) {
+// Uses context.Background() so that background streams outlive individual step timeouts.
+// The Close() method cancels bgCtx to clean up all background streams.
+func (e *GRPCExecutor) ensureBgContext() {
 	if e.bgCtx == nil {
-		e.bgCtx, e.bgCancel = context.WithCancel(ctx)
+		e.bgCtx, e.bgCancel = context.WithCancel(context.Background())
 		e.bgStreams = make(map[string]*backgroundStream)
 	}
 }
 
 func (e *GRPCExecutor) startBackgroundStream(ctx context.Context, methodDesc protoreflect.MethodDescriptor, req GRPCRequest) (StepOutput, error) {
-	e.ensureBgContext(ctx)
+	e.ensureBgContext()
 
-	fullMethod := fmt.Sprintf("/%s/%s", methodDesc.Parent().(protoreflect.ServiceDescriptor).FullName(), methodDesc.Name())
+	fullMethod, err := fullMethodPath(methodDesc)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("grpc: %w", err)
+	}
 
 	inputMsg := dynamicpb.NewMessage(methodDesc.Input())
 	if req.Body != "" {
@@ -467,6 +498,11 @@ func (e *GRPCExecutor) collectBackground(req GRPCRequest) (StepOutput, error) {
 
 	recvTimeout, err := parseGRPCTimeout(recv.Timeout)
 	if err != nil {
+		slog.Warn("grpc: invalid collect timeout, using default",
+			"timeout", recv.Timeout,
+			"default", defaultGRPCTimeout,
+			"error", err,
+		)
 		recvTimeout = defaultGRPCTimeout
 	}
 
@@ -475,14 +511,22 @@ func (e *GRPCExecutor) collectBackground(req GRPCRequest) (StepOutput, error) {
 		count = 1
 	}
 
-	deadline := time.After(recvTimeout)
+	timer := time.NewTimer(recvTimeout)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
 	messages := make([]string, 0, count)
+loop:
 	for len(messages) < count {
 		bg.mu.Lock()
 		available := len(bg.messages)
 		if available > 0 {
 			take := min(available, count-len(messages))
-			messages = append(messages, bg.messages[:take]...)
+			taken := make([]string, take)
+			copy(taken, bg.messages[:take])
+			messages = append(messages, taken...)
 			bg.messages = bg.messages[take:]
 		}
 		bgErr := bg.err
@@ -497,20 +541,33 @@ func (e *GRPCExecutor) collectBackground(req GRPCRequest) (StepOutput, error) {
 
 		// Poll briefly before checking again.
 		select {
-		case <-deadline:
-			goto done
-		case <-time.After(50 * time.Millisecond):
+		case <-timer.C:
+			break loop
+		case <-ticker.C:
 		}
 	}
-done:
+
 	captureBody := "[" + strings.Join(messages, ",") + "]"
 
 	var observed strings.Builder
 	fmt.Fprintf(&observed, "gRPC background stream %s: collected %d messages\n", streamID, len(messages))
 	fmt.Fprintf(&observed, "[%s]", strings.Join(messages, ", "))
 
+	// Derive gRPC status from background stream error if available.
+	grpcStatus := "OK"
+	bg.mu.Lock()
+	if bg.err != nil {
+		st := status.Convert(bg.err)
+		grpcStatus = st.Code().String()
+	}
+	bg.mu.Unlock()
+
 	return StepOutput{
 		Observed:    observed.String(),
 		CaptureBody: captureBody,
+		CaptureSources: map[string]string{
+			GRPCSourceStatus:  grpcStatus,
+			GRPCSourceHeaders: "{}",
+		},
 	}, nil
 }

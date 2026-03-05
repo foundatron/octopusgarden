@@ -32,7 +32,7 @@ const DefaultGRPCPort = "50051/tcp"
 
 var (
 	errBuildFailed        = errors.New("container: image build failed")
-	errNoPortBinding      = errors.New("container: no host port binding found for container port 8080/tcp")
+	errNoPortBinding      = errors.New("container: no expected port bindings found on container")
 	errContainerUnhealthy = errors.New("container: health check timed out")
 	errNotADirectory      = errors.New("container: build context is not a directory")
 	errExecFailed         = errors.New("container: exec create failed")
@@ -223,19 +223,20 @@ type RunResult struct {
 	ExtraPorts map[string]string // e.g. "50051/tcp" -> "127.0.0.1:54321"
 }
 
-// RunMultiPort starts a container exposing port 8080 plus additional ports.
-// Extra ports are bound to 127.0.0.1 with ephemeral host ports.
+// RunMultiPort starts a container exposing port 8080 (optional) plus additional ports.
+// The HTTP port (8080) is treated as optional: if only extra ports are bound, URL is left empty.
+// Returns errNoPortBinding only if neither 8080 nor any extra port is bound.
 func (m *Manager) RunMultiPort(ctx context.Context, tag string, extraPorts []string) (RunResult, StopFunc, error) {
 	containerPort := nat.Port("8080/tcp")
 	exposed := nat.PortSet{containerPort: struct{}{}}
-	bindings := nat.PortMap{
+	portMap := nat.PortMap{
 		containerPort: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}},
 	}
 
 	for _, p := range extraPorts {
 		port := nat.Port(p)
 		exposed[port] = struct{}{}
-		bindings[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}
+		portMap[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}
 	}
 
 	createResp, err := m.docker.ContainerCreate(ctx,
@@ -244,7 +245,7 @@ func (m *Manager) RunMultiPort(ctx context.Context, tag string, extraPorts []str
 			ExposedPorts: exposed,
 		},
 		&dockercontainer.HostConfig{
-			PortBindings: bindings,
+			PortBindings: portMap,
 		},
 		nil, nil, "",
 	)
@@ -264,15 +265,14 @@ func (m *Manager) RunMultiPort(ctx context.Context, tag string, extraPorts []str
 		return RunResult{}, nil, fmt.Errorf("container: inspect: %w", err)
 	}
 
-	httpBindings, ok := inspectResp.NetworkSettings.Ports[containerPort]
-	if !ok || len(httpBindings) == 0 {
-		m.stopAndRemove(containerID)
-		return RunResult{}, nil, errNoPortBinding
+	result := RunResult{
+		ExtraPorts: make(map[string]string, len(extraPorts)),
 	}
 
-	result := RunResult{
-		URL:        "http://127.0.0.1:" + httpBindings[0].HostPort,
-		ExtraPorts: make(map[string]string, len(extraPorts)),
+	// HTTP port is optional: populate URL only if 8080 is bound.
+	httpBindings := inspectResp.NetworkSettings.Ports[containerPort]
+	if len(httpBindings) > 0 {
+		result.URL = "http://127.0.0.1:" + httpBindings[0].HostPort
 	}
 
 	for _, p := range extraPorts {
@@ -281,6 +281,12 @@ func (m *Manager) RunMultiPort(ctx context.Context, tag string, extraPorts []str
 		if len(portBindings) > 0 {
 			result.ExtraPorts[p] = net.JoinHostPort(portBindings[0].HostIP, portBindings[0].HostPort)
 		}
+	}
+
+	// Fail only if no ports are bound at all.
+	if result.URL == "" && len(result.ExtraPorts) == 0 {
+		m.stopAndRemove(containerID)
+		return RunResult{}, nil, errNoPortBinding
 	}
 
 	stopFn := func() { m.stopAndRemove(containerID) }
