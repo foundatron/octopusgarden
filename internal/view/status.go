@@ -26,6 +26,7 @@ type RunOutput struct {
 	TotalTokens  int     `json:"total_tokens"`
 	TotalCostUSD float64 `json:"total_cost_usd"`
 	Status       string  `json:"status"`
+	Language     string  `json:"language,omitempty"`
 }
 
 // NewStatusOutput converts domain types into the JSON view.
@@ -44,6 +45,7 @@ func NewStatusOutput(runs []store.Run) StatusOutput {
 			TotalTokens:  r.TotalTokens,
 			TotalCostUSD: r.TotalCostUSD,
 			Status:       r.Status,
+			Language:     r.Language,
 		}
 		if r.FinishedAt != nil {
 			s := r.FinishedAt.Format(time.RFC3339)
