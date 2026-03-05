@@ -121,6 +121,8 @@ type RunOptions struct {
 	PatchMode     bool                 // if true, iteration 2+ sends prev best files + failures
 	ContextBudget int                  // max estimated tokens for spec in system prompt; 0 = unlimited
 	Capabilities  ScenarioCapabilities // detected from loaded scenarios
+	Genes         string               // extracted pattern guide to inject into system prompt (empty = no genes)
+	GeneLanguage  string               // source language of the gene exemplar (for cross-language note)
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -360,7 +362,7 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language),
+		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
 		Messages:     messages,
 		Model:        s.opts.Model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},

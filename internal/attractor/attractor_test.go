@@ -1097,6 +1097,114 @@ func TestContextBudgetSummarizeFailureNonFatal(t *testing.T) {
 	}
 }
 
+func TestAttractorRunWithGenes(t *testing.T) {
+	geneContent := "// Always use the repository pattern\nfunc NewRepo() *Repo { ... }"
+
+	var capturedSystemPrompt string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedSystemPrompt = req.SystemPrompt
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Genes = geneContent
+	opts.GeneLanguage = "go"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !strings.Contains(capturedSystemPrompt, geneContent) {
+		t.Error("system prompt should contain gene content")
+	}
+	if !strings.Contains(capturedSystemPrompt, "PROVEN PATTERNS") {
+		t.Error("system prompt should contain gene section header")
+	}
+}
+
+func TestAttractorRunGenesInSystemPrompt(t *testing.T) {
+	geneContent := "GENE_SENTINEL_MARKER"
+
+	var capturedReq llm.GenerateRequest
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedReq = req
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Genes = geneContent
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	_, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Genes should be in system prompt (benefiting from cache control), not user messages.
+	if !strings.Contains(capturedReq.SystemPrompt, geneContent) {
+		t.Error("genes should be in system prompt")
+	}
+	for _, msg := range capturedReq.Messages {
+		if strings.Contains(msg.Content, geneContent) {
+			t.Error("genes should not be in user messages")
+		}
+	}
+}
+
+func TestAttractorRunGenesPersistAcrossIterations(t *testing.T) {
+	geneContent := "PERSISTENT_GENE_PATTERN"
+
+	var capturedPrompts []string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedPrompts = append(capturedPrompts, req.SystemPrompt)
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n < 3 {
+			return 60, []string{"needs work"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Genes = geneContent
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if len(capturedPrompts) < 3 {
+		t.Fatalf("expected at least 3 iterations, got %d", len(capturedPrompts))
+	}
+	for i, prompt := range capturedPrompts {
+		if !strings.Contains(prompt, geneContent) {
+			t.Errorf("iteration %d system prompt should contain gene content", i+1)
+		}
+	}
+}
+
 func TestExtractFailureStrings(t *testing.T) {
 	history := []iterationFeedback{
 		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 60.0/100\nFailures:\n- missing endpoint"},

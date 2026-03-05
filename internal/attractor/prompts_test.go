@@ -8,14 +8,14 @@ import (
 
 func TestBuildSystemPromptContainsSpec(t *testing.T) {
 	spec := "Build a REST API for managing widgets"
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "")
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
 	if !strings.Contains(prompt, spec) {
 		t.Error("system prompt should contain the spec")
 	}
 }
 
 func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
-	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{}, "go")
+	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{}, "go", "", "")
 
 	checks := []string{
 		"EXAMPLE",
@@ -32,8 +32,8 @@ func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
 
 func TestBuildSystemPromptDeterministic(t *testing.T) {
 	spec := "Build a hello world app"
-	a := buildSystemPrompt(spec, ScenarioCapabilities{}, "")
-	b := buildSystemPrompt(spec, ScenarioCapabilities{}, "")
+	a := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
+	b := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
 	if a != b {
 		t.Error("buildSystemPrompt should produce identical output for the same spec")
 	}
@@ -327,7 +327,7 @@ func TestBuildSystemPromptSuffixSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prompt := buildSystemPrompt(spec, tt.caps, "")
+			prompt := buildSystemPrompt(spec, tt.caps, "", "", "")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("prompt should contain %q", want)
@@ -373,7 +373,7 @@ func TestBuildSystemPromptAutoModeNoLanguageBias(t *testing.T) {
 	}
 
 	for _, c := range caps {
-		prompt := buildSystemPrompt("some spec", c, "")
+		prompt := buildSystemPrompt("some spec", c, "", "", "")
 		lower := strings.ToLower(prompt)
 		for _, term := range biasTerms {
 			if strings.Contains(lower, term) {
@@ -450,7 +450,7 @@ func TestBuildSystemPromptWithLanguage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.lang+"_"+capsSuffix(tt.caps), func(t *testing.T) {
-			prompt := buildSystemPrompt("some spec", tt.caps, tt.lang)
+			prompt := buildSystemPrompt("some spec", tt.caps, tt.lang, "", "")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("prompt should contain %q", want)
@@ -478,7 +478,7 @@ func TestBuildSystemPromptGRPCWithLanguage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.lang, func(t *testing.T) {
-			prompt := buildSystemPrompt("some spec", ScenarioCapabilities{NeedsGRPC: true}, tt.lang)
+			prompt := buildSystemPrompt("some spec", ScenarioCapabilities{NeedsGRPC: true}, tt.lang, "", "")
 			if !strings.Contains(prompt, tt.wantSetup) {
 				t.Errorf("gRPC prompt for %s should contain %q", tt.lang, tt.wantSetup)
 			}
@@ -486,6 +486,106 @@ func TestBuildSystemPromptGRPCWithLanguage(t *testing.T) {
 				t.Errorf("gRPC prompt for %s should contain proto example", tt.lang)
 			}
 		})
+	}
+}
+
+func TestBuildSystemPromptWithGenes(t *testing.T) {
+	spec := "Build a REST API"
+	genes := "// Use repository pattern for data access\nfunc NewRepo() *Repo { ... }"
+
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", genes, "")
+
+	if !strings.Contains(prompt, "PROVEN PATTERNS") {
+		t.Error("prompt with genes should contain PROVEN PATTERNS header")
+	}
+	if !strings.Contains(prompt, "SPECIFICATION always takes precedence") {
+		t.Error("prompt with genes should contain precedence note")
+	}
+	if !strings.Contains(prompt, genes) {
+		t.Error("prompt should contain gene content verbatim")
+	}
+}
+
+func TestBuildSystemPromptNoGenes(t *testing.T) {
+	spec := "Build a REST API"
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
+
+	if strings.Contains(prompt, "PROVEN PATTERNS") {
+		t.Error("empty genes should not include gene section")
+	}
+}
+
+func TestBuildSystemPromptGeneOrdering(t *testing.T) {
+	spec := "Build a REST API"
+	genes := "USE_REPO_PATTERN"
+
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "")
+
+	specIdx := strings.Index(prompt, spec)
+	geneIdx := strings.Index(prompt, "PROVEN PATTERNS")
+	instrIdx := strings.Index(prompt, "INSTRUCTIONS:")
+	depIdx := strings.Index(prompt, "DEPENDENCY RULES:")
+
+	if specIdx >= geneIdx {
+		t.Error("spec should appear before gene section")
+	}
+	if geneIdx >= instrIdx {
+		t.Error("gene section should appear before instructions")
+	}
+	if instrIdx >= depIdx {
+		t.Error("instructions should appear before dep rules")
+	}
+}
+
+func TestBuildSystemPromptGeneCrossLanguage(t *testing.T) {
+	spec := "Build an API"
+	genes := "some patterns"
+
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "python", genes, "go")
+	if !strings.Contains(prompt, "from a go implementation") {
+		t.Error("should contain cross-language source note")
+	}
+	if !strings.Contains(prompt, "adapt idioms to python") {
+		t.Error("should contain cross-language target note")
+	}
+}
+
+func TestBuildSystemPromptGeneSameLanguage(t *testing.T) {
+	spec := "Build an API"
+	genes := "some patterns"
+
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "go")
+	if strings.Contains(prompt, "adapt idioms") {
+		t.Error("same language should not include cross-language note")
+	}
+}
+
+func TestBuildSystemPromptGeneCrossLanguageEmptyLanguage(t *testing.T) {
+	spec := "Build an API"
+	genes := "some patterns"
+
+	// No cross-language note when either language is empty.
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", genes, "go")
+	if strings.Contains(prompt, "adapt idioms") {
+		t.Error("should not include cross-language note when target language is empty")
+	}
+
+	prompt = buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "")
+	if strings.Contains(prompt, "adapt idioms") {
+		t.Error("should not include cross-language note when gene language is empty")
+	}
+}
+
+func TestBuildSystemPromptBackwardsCompat(t *testing.T) {
+	// Verify that empty genes produces identical output to pre-gene implementation.
+	spec := "Build a REST API for widgets"
+	caps := ScenarioCapabilities{NeedsHTTP: true}
+
+	prompt := buildSystemPrompt(spec, caps, "go", "", "")
+	expected := systemPromptPrefix + spec + buildCapabilitySuffix(caps, "go") + buildDepRules("go")
+
+	if prompt != expected {
+		t.Errorf("empty genes should produce identical output to pre-gene construction\ngot:  %s\nwant: %s", prompt, expected)
 	}
 }
 

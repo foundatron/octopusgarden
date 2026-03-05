@@ -482,6 +482,8 @@ type RunOptions struct {
 	PatchMode     bool                 // if true, iteration 2+ sends prev best files + failures
 	ContextBudget int                  // max estimated tokens for spec in system prompt; 0 = unlimited
 	Capabilities  ScenarioCapabilities // detected from loaded scenarios
+	Genes         string               // extracted pattern guide to inject into system prompt (empty = no genes)
+	GeneLanguage  string               // source language of the gene exemplar (for cross-language note)
 }
 ```
 
