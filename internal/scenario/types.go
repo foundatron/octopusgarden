@@ -64,8 +64,16 @@ type Step struct {
 	Exec        *ExecRequest    `yaml:"exec"`
 	Browser     *BrowserRequest `yaml:"browser"`
 	GRPC        *GRPCRequest    `yaml:"grpc"`
+	Retry       *Retry          `yaml:"retry"`
 	Expect      string          `yaml:"expect"` // natural language, judged by LLM
 	Capture     []Capture       `yaml:"capture"`
+}
+
+// Retry configures retry/poll behavior for a step.
+type Retry struct {
+	Attempts int    `yaml:"attempts"` // max attempts (default: 3)
+	Interval string `yaml:"interval"` // delay between retries (default: "1s")
+	Timeout  string `yaml:"timeout"`  // overall timeout cap (optional)
 }
 
 // StepType returns the step type key: "request", "exec", "browser", "grpc", or "" if unknown.

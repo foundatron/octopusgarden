@@ -786,6 +786,99 @@ steps:
 			wantMsg:    "multiple step types",
 		},
 		{
+			name: "valid retry block",
+			yaml: `id: test
+steps:
+  - description: Poll for result
+    request:
+      method: GET
+      path: /items/1
+    retry:
+      attempts: 5
+      interval: 2s
+      timeout: 30s
+    expect: "Status 200"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "retry invalid interval",
+			yaml: `id: test
+steps:
+  - description: Poll
+    request:
+      method: GET
+      path: /items/1
+    retry:
+      attempts: 3
+      interval: notaduration
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "retry interval",
+		},
+		{
+			name: "retry invalid timeout",
+			yaml: `id: test
+steps:
+  - description: Poll
+    request:
+      method: GET
+      path: /items/1
+    retry:
+      attempts: 3
+      timeout: notaduration
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "retry timeout",
+		},
+		{
+			name: "retry negative attempts warning",
+			yaml: `id: test
+steps:
+  - description: Poll
+    request:
+      method: GET
+      path: /items/1
+    retry:
+      attempts: -1
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "retry attempts should be at least 1",
+		},
+		{
+			name: "retry not a mapping",
+			yaml: `id: test
+steps:
+  - description: Poll
+    request:
+      method: GET
+      path: /items/1
+    retry: 5
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "retry must be a mapping",
+		},
+		{
+			name: "retry empty block uses defaults",
+			yaml: `id: test
+steps:
+  - description: Poll
+    request:
+      method: GET
+      path: /items/1
+    retry: {}
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
 			name: "browser and exec on same step",
 			yaml: `id: test
 steps:

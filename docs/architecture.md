@@ -194,8 +194,16 @@ type Step struct {
 	Exec        *ExecRequest    `yaml:"exec"`
 	Browser     *BrowserRequest `yaml:"browser"`
 	GRPC        *GRPCRequest    `yaml:"grpc"`
+	Retry       *Retry          `yaml:"retry"`
 	Expect      string          `yaml:"expect"` // natural language, judged by LLM
 	Capture     []Capture       `yaml:"capture"`
+}
+
+// Retry configures retry/poll behavior for a step.
+type Retry struct {
+	Attempts int    `yaml:"attempts"` // max attempts (default: 3)
+	Interval string `yaml:"interval"` // delay between retries (default: "1s")
+	Timeout  string `yaml:"timeout"`  // overall timeout cap (optional)
 }
 
 // StepType returns the step type key: "request", "exec", "browser", "grpc", or "" if unknown.
@@ -360,6 +368,29 @@ grpc:
 ```
 
 Capture sources for gRPC steps: `status` (gRPC status code) and `headers` (response metadata).
+
+#### Retry / Poll
+
+Steps support an optional `retry` block for eventual-consistency scenarios (polling until a
+background job completes, waiting for a resource to appear). Retries fire only when
+`executor.Execute` returns a non-nil error (transport failures, timeouts). HTTP 4xx/5xx and non-zero
+exit codes are NOT errors — they produce a `StepOutput` for the judge.
+
+```yaml
+steps:
+  - description: "Wait for item to be processed"
+    request:
+      method: GET
+      path: /items/{item_id}
+    retry:
+      attempts: 10     # max attempts (default: 3)
+      interval: "2s"   # delay between retries (default: "1s")
+      timeout: "30s"   # overall timeout cap (optional)
+    expect: "Status 200 with status 'processed'"
+```
+
+`StepResult.Duration` reflects total wall time including retries and sleeps. Captures are applied
+only from the final successful attempt.
 
 ### Variable Capture and Substitution
 
