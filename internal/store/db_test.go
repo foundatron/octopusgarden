@@ -50,6 +50,7 @@ func TestRecordRunAndGetRun(t *testing.T) {
 		TotalTokens:  15000,
 		TotalCostUSD: 0.42,
 		Status:       "converged",
+		Language:     "python",
 	}
 
 	if err := s.RecordRun(ctx, run); err != nil {
@@ -75,6 +76,9 @@ func TestRecordRunAndGetRun(t *testing.T) {
 	}
 	if got.Status != run.Status {
 		t.Errorf("Status = %q, want %q", got.Status, run.Status)
+	}
+	if got.Language != run.Language {
+		t.Errorf("Language = %q, want %q", got.Language, run.Language)
 	}
 	if got.FinishedAt != nil {
 		t.Errorf("FinishedAt = %v, want nil", got.FinishedAt)

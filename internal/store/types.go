@@ -16,6 +16,7 @@ type Run struct {
 	TotalTokens  int
 	TotalCostUSD float64
 	Status       string
+	Language     string
 }
 
 // Iteration represents one iteration within a run.

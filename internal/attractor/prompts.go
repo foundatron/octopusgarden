@@ -57,118 +57,140 @@ const systemPromptPrefix = `You are a code generation agent. Your task is to gen
 SPECIFICATION:
 `
 
-const systemPromptSuffixHTTP = `
+// genericDepRules contains dependency rules that apply regardless of language.
+// Language-specific rules are appended from the LanguageTemplate when a language is specified.
+const genericDepRules = `
 
-INSTRUCTIONS:
-- Generate ALL files needed for a working application
-- Include a Dockerfile that builds and runs the application on port 8080
-- Output each file in this exact format:
+DEPENDENCY RULES:
+- ALWAYS prefer standard library over third-party dependencies
+- NEVER generate lock files or checksum files (go.sum, package-lock.json, yarn.lock, Cargo.lock, etc.) — you cannot compute valid hashes; the build will fail
+- Let the package manager resolve and verify dependencies at build time`
 
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
-
-EXAMPLE (showing correct format with two files):
-
-=== FILE: main.go ===
-package main
-
-import "net/http"
-
-func main() {
-	http.ListenAndServe(":8080", nil)
+// buildSystemPrompt creates the system prompt containing the spec.
+// This prompt is cached across iterations via CacheControl: ephemeral.
+// The suffix is selected based on scenario capabilities and optional language.
+// When language is "" (auto), no language-specific examples or dep rules are emitted.
+func buildSystemPrompt(spec string, caps ScenarioCapabilities, language string) string {
+	var b strings.Builder
+	b.WriteString(systemPromptPrefix)
+	b.WriteString(spec)
+	b.WriteString(buildCapabilitySuffix(caps, language))
+	b.WriteString(buildDepRules(language))
+	return b.String()
 }
-=== END FILE ===
-=== FILE: Dockerfile ===
-FROM golang:1.22-alpine
-WORKDIR /app
-COPY go.mod ./
-COPY . .
-RUN go mod tidy
-RUN go build -o server .
-CMD ["./server"]
-=== END FILE ===
 
-- Generate ONLY the file blocks, minimize explanatory text
-- The application MUST listen on port 8080
-- Include all dependencies and configuration files`
+// buildCapabilitySuffix assembles the instruction text for a given capability set.
+// When a language is specified, a concrete example block is appended.
+func buildCapabilitySuffix(caps ScenarioCapabilities, language string) string {
+	var b strings.Builder
+	b.WriteString("\n\nINSTRUCTIONS:\n")
+	b.WriteString(capabilityInstructions(caps))
+	b.WriteString("\n- Output each file in this exact format:\n\n")
+	b.WriteString("=== FILE: path/to/file ===\nfile content here\n=== END FILE ===\n")
 
-const systemPromptSuffixCLI = `
-
-INSTRUCTIONS:
-- Generate ALL files needed for a working command-line application
-- Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
-- Do NOT start a server or listen on any port. The application is a CLI tool invoked via command-line arguments.
-- Output each file in this exact format:
-
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
-
-EXAMPLE (showing correct format with two files):
-
-=== FILE: main.go ===
-package main
-
-import (
-	"fmt"
-	"os"
-)
-
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: myapp <command>")
-		os.Exit(1)
+	// Append language-specific example if a language is specified.
+	if tmpl, ok := LookupLanguage(language); ok {
+		b.WriteString(buildLanguageExample(tmpl, caps))
 	}
-	fmt.Println("Hello from", os.Args[1])
+
+	b.WriteString("\n- Generate ONLY the file blocks, minimize explanatory text\n")
+	b.WriteString(capabilityTrailingInstructions(caps))
+	return b.String()
 }
-=== END FILE ===
-=== FILE: Dockerfile ===
-FROM golang:1.22-alpine
-WORKDIR /app
-COPY go.mod ./
-COPY . .
-RUN go mod tidy
-RUN go build -o /usr/local/bin/myapp .
-=== END FILE ===
 
-- Generate ONLY the file blocks, minimize explanatory text
-- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)
-- Include all dependencies and configuration files`
-
-const systemPromptSuffixBoth = `
-
-INSTRUCTIONS:
-- Generate ALL files needed for a working application that serves both as an HTTP server AND a command-line tool
-- Include a Dockerfile that builds the application and installs it in PATH
+// capabilityInstructions returns the core instruction text for the given capabilities.
+func capabilityInstructions(caps ScenarioCapabilities) string {
+	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
+	switch {
+	case needsHTTP && caps.NeedsGRPC:
+		return `- Generate ALL files needed for a working application that serves both HTTP and gRPC
+- Include a Dockerfile that builds and runs the application
 - The application MUST listen on port 8080 for HTTP requests
+- The application MUST serve gRPC on port 50051
+- The gRPC server MUST enable server reflection so clients can discover services at runtime
+- Include .proto files defining the service and compile them as part of the Docker build`
+	case caps.NeedsExec && caps.NeedsGRPC:
+		return `- Generate ALL files needed for a working application that serves both as a CLI tool and a gRPC server
+- Include a Dockerfile that builds the application and installs it in PATH
+- The application MUST serve gRPC on port 50051
+- The gRPC server MUST enable server reflection so clients can discover services at runtime
 - The application must also support command-line invocation for CLI operations
-- Output each file in this exact format:
-
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
-
-- Generate ONLY the file blocks, minimize explanatory text
-- Include all dependencies and configuration files`
-
-const systemPromptSuffixGRPC = `
-
-INSTRUCTIONS:
-- Generate ALL files needed for a working gRPC application
+- Include .proto files defining the service and compile them as part of the Docker build`
+	case caps.NeedsGRPC:
+		return `- Generate ALL files needed for a working gRPC application
 - Include a Dockerfile that builds and runs the application with a gRPC server on port 50051
 - The gRPC server MUST enable server reflection so clients can discover services at runtime
 - Include .proto files defining the service and compile them as part of the Docker build
-- Install protoc and any language-specific protobuf/gRPC compiler plugins in the Dockerfile
-- Output each file in this exact format:
+- Install protoc and any language-specific protobuf/gRPC compiler plugins in the Dockerfile`
+	case needsHTTP && caps.NeedsExec:
+		return `- Generate ALL files needed for a working application that serves both as an HTTP server AND a command-line tool
+- Include a Dockerfile that builds the application and installs it in PATH
+- The application MUST listen on port 8080 for HTTP requests
+- The application must also support command-line invocation for CLI operations`
+	case caps.NeedsExec:
+		return `- Generate ALL files needed for a working command-line application
+- Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
+- Do NOT start a server or listen on any port. The application is a CLI tool invoked via command-line arguments.`
+	default:
+		return `- Generate ALL files needed for a working application
+- Include a Dockerfile that builds and runs the application on port 8080`
+	}
+}
 
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
+// capabilityTrailingInstructions returns the closing instructions specific to each capability mode.
+func capabilityTrailingInstructions(caps ScenarioCapabilities) string {
+	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
+	switch {
+	case needsHTTP && caps.NeedsGRPC:
+		return "- Include all .proto files and configuration files"
+	case caps.NeedsExec && caps.NeedsGRPC:
+		return "- Include all .proto files and configuration files"
+	case caps.NeedsGRPC:
+		return "- The application MUST serve gRPC on port 50051\n- Include all .proto files and configuration files"
+	case needsHTTP && caps.NeedsExec:
+		return "- Include all dependencies and configuration files"
+	case caps.NeedsExec:
+		return "- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)\n- Include all dependencies and configuration files"
+	default:
+		return "- The application MUST listen on port 8080\n- Include all dependencies and configuration files"
+	}
+}
 
-EXAMPLE (showing correct format with two files):
+// buildLanguageExample creates the EXAMPLE block for a specific language and capability.
+func buildLanguageExample(tmpl LanguageTemplate, caps ScenarioCapabilities) string {
+	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
 
-=== FILE: proto/service.proto ===
+	// For combined capabilities without clear examples, skip the example block.
+	switch {
+	case needsHTTP && caps.NeedsGRPC,
+		caps.NeedsExec && caps.NeedsGRPC,
+		needsHTTP && caps.NeedsExec:
+		return ""
+	}
+
+	var ex ExampleBlock
+	switch {
+	case caps.NeedsGRPC:
+		// gRPC gets a proto example + Dockerfile with gRPC setup, not the standard example.
+		return buildGRPCExample(tmpl)
+	case caps.NeedsExec:
+		ex = tmpl.CLIExample
+	default:
+		ex = tmpl.HTTPExample
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nEXAMPLE (showing correct format with two files):\n\n")
+	fmt.Fprintf(&b, "=== FILE: %s ===\n%s\n=== END FILE ===\n", ex.EntryFile, ex.EntryContent)
+	fmt.Fprintf(&b, "=== FILE: Dockerfile ===\n%s\n=== END FILE ===\n", ex.Dockerfile)
+	return b.String()
+}
+
+// buildGRPCExample creates a gRPC-specific example block showing proto + Dockerfile structure.
+func buildGRPCExample(tmpl LanguageTemplate) string {
+	var b strings.Builder
+	b.WriteString("\nEXAMPLE (showing correct format with two files):\n\n")
+	b.WriteString(`=== FILE: proto/service.proto ===
 syntax = "proto3";
 package example;
 
@@ -178,90 +200,17 @@ service ExampleService {
 message GetItemRequest { string id = 1; }
 message Item { string id = 1; string name = 2; }
 === END FILE ===
-=== FILE: Dockerfile ===
-FROM <appropriate-base-image>
-RUN <install protoc and language-specific protobuf/gRPC plugins>
-WORKDIR /app
-COPY . .
-RUN <compile .proto files to generate stubs>
-RUN <install dependencies and build the application>
-CMD ["./server"]
-=== END FILE ===
-
-- Generate ONLY the file blocks, minimize explanatory text
-- The application MUST serve gRPC on port 50051
-- Include all .proto files and configuration files`
-
-const systemPromptSuffixHTTPAndGRPC = `
-
-INSTRUCTIONS:
-- Generate ALL files needed for a working application that serves both HTTP and gRPC
-- Include a Dockerfile that builds and runs the application
-- The application MUST listen on port 8080 for HTTP requests
-- The application MUST serve gRPC on port 50051
-- The gRPC server MUST enable server reflection so clients can discover services at runtime
-- Include .proto files defining the service and compile them as part of the Docker build
-- Output each file in this exact format:
-
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
-
-- Generate ONLY the file blocks, minimize explanatory text
-- Include all .proto files and configuration files`
-
-const systemPromptSuffixCLIAndGRPC = `
-
-INSTRUCTIONS:
-- Generate ALL files needed for a working application that serves both as a CLI tool and a gRPC server
-- Include a Dockerfile that builds the application and installs it in PATH
-- The application MUST serve gRPC on port 50051
-- The gRPC server MUST enable server reflection so clients can discover services at runtime
-- The application must also support command-line invocation for CLI operations
-- Include .proto files defining the service and compile them as part of the Docker build
-- Output each file in this exact format:
-
-=== FILE: path/to/file ===
-file content here
-=== END FILE ===
-
-- Generate ONLY the file blocks, minimize explanatory text
-- Include all .proto files and configuration files`
-
-const dependencyRules = `
-
-DEPENDENCY RULES:
-- ALWAYS prefer standard library over third-party dependencies. For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid), etc.
-- NEVER generate lock files or checksum files (go.sum, package-lock.json, yarn.lock, etc.) — you cannot compute valid hashes; the build will fail
-- For Go: generate only go.mod with no "require" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run "go mod tidy" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build
-- For Node.js: generate only package.json; use "npm install" in the Dockerfile
-- For Python: generate only requirements.txt; use "pip install" in the Dockerfile
-- Let the package manager resolve and verify dependencies at build time`
-
-// buildSystemPrompt creates the system prompt containing the spec.
-// This prompt is cached across iterations via CacheControl: ephemeral.
-// The suffix is selected based on scenario capabilities.
-func buildSystemPrompt(spec string, caps ScenarioCapabilities) string {
-	suffix := selectPromptSuffix(caps)
-	return systemPromptPrefix + spec + suffix + dependencyRules
+`)
+	fmt.Fprintf(&b, "=== FILE: Dockerfile ===\nFROM %s\n%s\nWORKDIR /app\nCOPY . .\nRUN <compile .proto files to generate stubs>\nRUN <install dependencies and build the application>\nCMD [\"./server\"]\n=== END FILE ===\n", tmpl.BaseImage, tmpl.GRPCSetup)
+	return b.String()
 }
 
-func selectPromptSuffix(caps ScenarioCapabilities) string {
-	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
-	switch {
-	case needsHTTP && caps.NeedsGRPC:
-		return systemPromptSuffixHTTPAndGRPC
-	case caps.NeedsExec && caps.NeedsGRPC:
-		return systemPromptSuffixCLIAndGRPC
-	case caps.NeedsGRPC:
-		return systemPromptSuffixGRPC
-	case needsHTTP && caps.NeedsExec:
-		return systemPromptSuffixBoth
-	case caps.NeedsExec:
-		return systemPromptSuffixCLI
-	default:
-		return systemPromptSuffixHTTP
+// buildDepRules returns dependency rules: generic rules plus language-specific rules if applicable.
+func buildDepRules(language string) string {
+	if tmpl, ok := LookupLanguage(language); ok {
+		return genericDepRules + "\n" + tmpl.DepRules
 	}
+	return genericDepRules
 }
 
 // buildMessages constructs the user message for the current iteration.

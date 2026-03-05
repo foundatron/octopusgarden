@@ -49,6 +49,7 @@ var (
 	errNoJudgeModelPricing        = errors.New("judge model has no pricing entry")
 	errInvalidFormat              = errors.New("--format must be \"text\" or \"json\"")
 	errInvalidProvider            = errors.New("--provider must be \"anthropic\" or \"openai\"")
+	errInvalidLanguage            = errors.New("--language must be one of: go, python, node, rust, auto")
 	errListModelsUnsupported      = errors.New("provider does not support listing models")
 )
 
@@ -120,6 +121,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	budget := fs.Float64("budget", 5.00, "maximum budget in USD")
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
+	language := fs.String("language", "go", "target language: go, python, node, rust, or auto")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
 	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
 	otelEndpoint := fs.String("otel-endpoint", "", "OTLP/HTTP endpoint for tracing (e.g. localhost:4318); disabled if empty")
@@ -143,6 +145,14 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errInvalidThreshold
 	}
 
+	// Validate language flag.
+	langForOpts := *language
+	if langForOpts == "auto" {
+		langForOpts = ""
+	} else if _, ok := attractor.LookupLanguage(langForOpts); !ok {
+		return errInvalidLanguage
+	}
+
 	// Create LLM client (resolves provider) and apply model defaults.
 	clients, err := newLLMClient(*provider, logger)
 	if err != nil {
@@ -160,10 +170,10 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
 
-	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget, endpoint)
+	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget, endpoint, langForOpts)
 }
 
-func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int, otelEndpoint string) error {
+func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int, otelEndpoint, language string) error {
 	tp, shutdown, err := observability.InitTracer(ctx, otelEndpoint)
 	if err != nil {
 		return fmt.Errorf("init tracer: %w", err)
@@ -242,6 +252,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		Threshold:     threshold,
 		PatchMode:     patchMode,
 		ContextBudget: contextBudget,
+		Language:      language,
 		Progress:      progressFn(),
 		Capabilities:  caps,
 	}
@@ -254,8 +265,8 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	finishedAt := time.Now()
 
 	printRunSummary(result)
-	recordRun(ctx, logger, st, result, specPath, model, threshold, budget, startedAt, finishedAt)
-	printResult(result)
+	recordRun(ctx, logger, st, result, specPath, model, threshold, budget, startedAt, finishedAt, language)
+	printResult(result, language)
 	return nil
 }
 
@@ -310,7 +321,7 @@ func printRunSummary(result *attractor.RunResult) {
 	}
 }
 
-func recordRun(ctx context.Context, logger *slog.Logger, st *store.Store, result *attractor.RunResult, specPath, model string, threshold, budget float64, startedAt, finishedAt time.Time) {
+func recordRun(ctx context.Context, logger *slog.Logger, st *store.Store, result *attractor.RunResult, specPath, model string, threshold, budget float64, startedAt, finishedAt time.Time, language string) {
 	run := store.Run{
 		ID:           result.RunID,
 		SpecPath:     specPath,
@@ -323,6 +334,7 @@ func recordRun(ctx context.Context, logger *slog.Logger, st *store.Store, result
 		Iterations:   result.Iterations,
 		TotalCostUSD: result.CostUSD,
 		Status:       result.Status,
+		Language:     language,
 	}
 	if err := st.RecordRun(ctx, run); err != nil {
 		logger.Warn("failed to record run", "error", err)
@@ -458,11 +470,15 @@ func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%-10s %-16s %-28s %7s %5s %9s  %s\n",
-		"ID", "STATUS", "MODEL", "SCORE", "ITER", "COST", "STARTED")
+	fmt.Printf("%-10s %-16s %-8s %-28s %7s %5s %9s  %s\n",
+		"ID", "STATUS", "LANG", "MODEL", "SCORE", "ITER", "COST", "STARTED")
 	for _, r := range runs {
-		fmt.Printf("%-10s %-16s %-28s %6.1f%% %5d $%7.4f  %s\n",
-			r.ID, r.Status, r.Model, r.Satisfaction, r.Iterations, r.TotalCostUSD,
+		lang := r.Language
+		if lang == "" {
+			lang = "auto"
+		}
+		fmt.Printf("%-10s %-16s %-8s %-28s %6.1f%% %5d $%7.4f  %s\n",
+			r.ID, r.Status, lang, r.Model, r.Satisfaction, r.Iterations, r.TotalCostUSD,
 			r.StartedAt.Format("2006-01-02 15:04"))
 	}
 	return nil
@@ -891,9 +907,14 @@ func defaultJudgeModel(provider string) string {
 	return "claude-haiku-4-5"
 }
 
-func printResult(result *attractor.RunResult) {
+func printResult(result *attractor.RunResult, language string) {
+	displayLang := language
+	if displayLang == "" {
+		displayLang = "auto"
+	}
 	fmt.Printf("\nRun complete: %s\n", result.RunID)
 	fmt.Printf("  Status:       %s\n", result.Status)
+	fmt.Printf("  Language:     %s\n", displayLang)
 	fmt.Printf("  Iterations:   %d\n", result.Iterations)
 	fmt.Printf("  Satisfaction: %.1f%%\n", result.Satisfaction)
 	fmt.Printf("  Cost:         $%.4f\n", result.CostUSD)

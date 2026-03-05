@@ -22,7 +22,10 @@ import (
 	specpkg "github.com/foundatron/octopusgarden/internal/spec"
 )
 
-var errEmptySpec = errors.New("attractor: spec content is empty")
+var (
+	errEmptySpec           = errors.New("attractor: spec content is empty")
+	errUnsupportedLanguage = errors.New("attractor: unsupported language")
+)
 
 // summarizeModel is the cheap model used for spec summarization.
 // Haiku is also the default --judge-model for cost efficiency.
@@ -104,6 +107,7 @@ type Attractor struct {
 // RunOptions configures the attractor loop.
 type RunOptions struct {
 	Model         string
+	Language      string               // language hint: "go", "python", "node", "rust", or "" (auto)
 	BudgetUSD     float64              // 0 = unlimited
 	Threshold     float64              // default 95
 	MaxIterations int                  // default 10
@@ -226,6 +230,11 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 	if strings.TrimSpace(rawSpec) == "" {
 		return nil, errEmptySpec
 	}
+	if opts.Language != "" {
+		if _, ok := LookupLanguage(opts.Language); !ok {
+			return nil, fmt.Errorf("%w: %q (supported: %v)", errUnsupportedLanguage, opts.Language, SupportedLanguages())
+		}
+	}
 
 	if sessionProvider == nil {
 		sessionProvider = func(_ *container.Session) {} // no-op
@@ -342,7 +351,7 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities),
+		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language),
 		Messages:     messages,
 		Model:        s.opts.Model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
