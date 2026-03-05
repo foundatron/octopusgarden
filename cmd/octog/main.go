@@ -285,16 +285,14 @@ func detectCapabilities(scenarios []scenario.Scenario) attractor.ScenarioCapabil
 }
 
 func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
-	if step.Request != nil {
+	switch step.StepType() {
+	case "request":
 		caps.NeedsHTTP = true
-	}
-	if step.Exec != nil {
+	case "exec":
 		caps.NeedsExec = true
-	}
-	if step.Browser != nil {
+	case "browser":
 		caps.NeedsBrowser = true
-	}
-	if step.GRPC != nil {
+	case "grpc":
 		caps.NeedsGRPC = true
 	}
 }

@@ -57,7 +57,7 @@ func (e *BrowserExecutor) ValidCaptureSources() []string {
 func (e *BrowserExecutor) Execute(ctx context.Context, step Step, vars map[string]string) (StepOutput, error) {
 	req := substituteBrowserRequest(*step.Browser, vars)
 
-	timeout, err := parseBrowserTimeout(req.Timeout)
+	timeout, err := parseStepTimeout(req.Timeout, defaultBrowserTimeout)
 	if err != nil {
 		return StepOutput{}, fmt.Errorf("browser: parse timeout: %w", err)
 	}
@@ -340,15 +340,4 @@ func substituteBrowserRequest(req BrowserRequest, vars map[string]string) Browse
 		Count:      req.Count,
 		Timeout:    req.Timeout,
 	}
-}
-
-func parseBrowserTimeout(s string) (time.Duration, error) {
-	if s == "" {
-		return defaultBrowserTimeout, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
-	}
-	return d, nil
 }

@@ -82,7 +82,7 @@ func (e *GRPCExecutor) Execute(ctx context.Context, step Step, vars map[string]s
 		return StepOutput{}, err
 	}
 
-	timeout, err := parseGRPCTimeout(req.Timeout)
+	timeout, err := parseStepTimeout(req.Timeout, defaultGRPCTimeout)
 	if err != nil {
 		return StepOutput{}, fmt.Errorf("grpc: parse timeout: %w", err)
 	}
@@ -229,17 +229,6 @@ func validateGRPCRequest(req GRPCRequest) error {
 	return nil
 }
 
-func parseGRPCTimeout(s string) (time.Duration, error) {
-	if s == "" {
-		return defaultGRPCTimeout, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
-	}
-	return d, nil
-}
-
 func substituteGRPCRequest(req GRPCRequest, vars map[string]string) GRPCRequest {
 	out := GRPCRequest{
 		Service: substituteVars(req.Service, vars),
@@ -356,7 +345,7 @@ func (e *GRPCExecutor) executeForegroundServerStream(ctx context.Context, method
 }
 
 func receiveMessages(ctx context.Context, stream grpc.ClientStream, methodDesc protoreflect.MethodDescriptor, recv *GRPCReceive) ([]string, error) {
-	recvTimeout, err := parseGRPCTimeout(recv.Timeout)
+	recvTimeout, err := parseStepTimeout(recv.Timeout, defaultGRPCTimeout)
 	if err != nil {
 		slog.Warn("grpc: invalid receive timeout, using default",
 			"timeout", recv.Timeout,
@@ -496,7 +485,7 @@ func (e *GRPCExecutor) collectBackground(req GRPCRequest) (StepOutput, error) {
 		recv = &GRPCReceive{Count: 1}
 	}
 
-	recvTimeout, err := parseGRPCTimeout(recv.Timeout)
+	recvTimeout, err := parseStepTimeout(recv.Timeout, defaultGRPCTimeout)
 	if err != nil {
 		slog.Warn("grpc: invalid collect timeout, using default",
 			"timeout", recv.Timeout,

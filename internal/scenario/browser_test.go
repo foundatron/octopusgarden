@@ -73,7 +73,7 @@ func TestParseBrowserTimeout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseBrowserTimeout(tt.input)
+			got, err := parseStepTimeout(tt.input, defaultBrowserTimeout)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error")

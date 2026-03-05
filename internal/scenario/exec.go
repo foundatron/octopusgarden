@@ -43,7 +43,7 @@ func (e *ExecExecutor) Execute(ctx context.Context, step Step, vars map[string]s
 	stdin := substituteVars(step.Exec.Stdin, vars)
 	env := substituteEnv(step.Exec.Env, vars)
 
-	timeout, err := parseTimeout(step.Exec.Timeout)
+	timeout, err := parseStepTimeout(step.Exec.Timeout, defaultExecTimeout)
 	if err != nil {
 		return StepOutput{}, fmt.Errorf("exec: parse timeout: %w", err)
 	}
@@ -116,17 +116,6 @@ func buildExecOutput(exitCode int, stdout, stderr string) StepOutput {
 			ExecSourceExitCode: strconv.Itoa(exitCode),
 		},
 	}
-}
-
-func parseTimeout(s string) (time.Duration, error) {
-	if s == "" {
-		return defaultExecTimeout, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
-	}
-	return d, nil
 }
 
 func substituteEnv(env map[string]string, vars map[string]string) map[string]string {

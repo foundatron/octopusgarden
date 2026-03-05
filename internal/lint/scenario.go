@@ -8,9 +8,12 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/foundatron/octopusgarden/internal/scenario"
 )
 
 var (
@@ -718,11 +721,16 @@ func lintGRPCStream(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 	return diags
 }
 
-// validCaptureSources defines valid source values per step type.
-var validCaptureSources = map[string]map[string]bool{
-	"exec":    {"stdout": true, "stderr": true, "exitcode": true},
-	"browser": {"text": true, "html": true, "count": true, "location": true},
-	"grpc":    {"status": true, "headers": true},
+var (
+	captureSourceOnce sync.Once
+	captureSourceMap  map[string]map[string]bool
+)
+
+func validCaptureSources() map[string]map[string]bool {
+	captureSourceOnce.Do(func() {
+		captureSourceMap = scenario.CaptureSourceMap()
+	})
+	return captureSourceMap
 }
 
 func lintCaptures(path string, node *yaml.Node, cs *captureSet, stepType string) []Diagnostic {
@@ -787,7 +795,7 @@ func lintCaptures(path string, node *yaml.Node, cs *captureSet, stepType string)
 
 func lintCaptureSource(path string, node *yaml.Node, stepType string) []Diagnostic {
 	src := node.Value
-	allowed := validCaptureSources[stepType]
+	allowed := validCaptureSources()[stepType]
 	if allowed == nil {
 		return []Diagnostic{{
 			File:    path,

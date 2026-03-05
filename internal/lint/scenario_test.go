@@ -3,7 +3,6 @@ package lint
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -903,76 +902,47 @@ func TestCheckScenarioFileNotFound(t *testing.T) {
 	}
 }
 
-// TestValidCaptureSourcesSyncWithScenario ensures that the lint package's
-// validCaptureSources map stays in sync with the scenario package's executor
-// ValidCaptureSources methods. If a source is added to exec.go but not here
-// (or vice versa), this test will fail.
-func TestValidCaptureSourcesSyncWithScenario(t *testing.T) {
-	// Exec sources: compare lint's validCaptureSources["exec"] with ExecExecutor.ValidCaptureSources().
-	execExecutor := &scenario.ExecExecutor{}
-	executorSources := execExecutor.ValidCaptureSources()
-	slices.Sort(executorSources)
+// TestCaptureSourceMapContents verifies that CaptureSourceMap returns the
+// expected entries from each executor's ValidCaptureSources method.
+func TestCaptureSourceMapContents(t *testing.T) {
+	m := scenario.CaptureSourceMap()
 
-	lintSources := make([]string, 0, len(validCaptureSources["exec"]))
-	for k := range validCaptureSources["exec"] {
-		lintSources = append(lintSources, k)
-	}
-	slices.Sort(lintSources)
-
-	if len(executorSources) != len(lintSources) {
-		t.Fatalf("exec source count mismatch: scenario.ExecExecutor has %v, lint has %v", executorSources, lintSources)
-	}
-	for i := range executorSources {
-		if executorSources[i] != lintSources[i] {
-			t.Errorf("exec source mismatch at index %d: scenario.ExecExecutor has %q, lint has %q", i, executorSources[i], lintSources[i])
+	// Exec sources.
+	if exec, ok := m["exec"]; !ok {
+		t.Fatal("CaptureSourceMap missing exec entry")
+	} else {
+		for _, s := range []string{"stdout", "stderr", "exitcode"} {
+			if !exec[s] {
+				t.Errorf("exec missing source %q", s)
+			}
 		}
 	}
 
-	// HTTP steps: validCaptureSources has no "request" entry, meaning source is
-	// not supported on request steps. HTTPExecutor has no ValidCaptureSources
-	// method. Verify the lint map has no "request" entry to keep this invariant.
-	if _, ok := validCaptureSources["request"]; ok {
-		t.Error("validCaptureSources should not have a 'request' entry; HTTP steps do not support source captures")
-	}
-
-	// Browser sources: compare lint's validCaptureSources["browser"] with BrowserExecutor.ValidCaptureSources().
-	browserExecutor := &scenario.BrowserExecutor{}
-	browserSources := browserExecutor.ValidCaptureSources()
-	slices.Sort(browserSources)
-
-	browserLintSources := make([]string, 0, len(validCaptureSources["browser"]))
-	for k := range validCaptureSources["browser"] {
-		browserLintSources = append(browserLintSources, k)
-	}
-	slices.Sort(browserLintSources)
-
-	if len(browserSources) != len(browserLintSources) {
-		t.Fatalf("browser source count mismatch: scenario.BrowserExecutor has %v, lint has %v", browserSources, browserLintSources)
-	}
-	for i := range browserSources {
-		if browserSources[i] != browserLintSources[i] {
-			t.Errorf("browser source mismatch at index %d: scenario.BrowserExecutor has %q, lint has %q", i, browserSources[i], browserLintSources[i])
+	// Browser sources.
+	if browser, ok := m["browser"]; !ok {
+		t.Fatal("CaptureSourceMap missing browser entry")
+	} else {
+		for _, s := range []string{"text", "html", "count", "location"} {
+			if !browser[s] {
+				t.Errorf("browser missing source %q", s)
+			}
 		}
 	}
 
-	// gRPC sources: compare lint's validCaptureSources["grpc"] with GRPCExecutor.ValidCaptureSources().
-	grpcExecutor := &scenario.GRPCExecutor{}
-	grpcSources := grpcExecutor.ValidCaptureSources()
-	slices.Sort(grpcSources)
-
-	grpcLintSources := make([]string, 0, len(validCaptureSources["grpc"]))
-	for k := range validCaptureSources["grpc"] {
-		grpcLintSources = append(grpcLintSources, k)
-	}
-	slices.Sort(grpcLintSources)
-
-	if len(grpcSources) != len(grpcLintSources) {
-		t.Fatalf("grpc source count mismatch: scenario.GRPCExecutor has %v, lint has %v", grpcSources, grpcLintSources)
-	}
-	for i := range grpcSources {
-		if grpcSources[i] != grpcLintSources[i] {
-			t.Errorf("grpc source mismatch at index %d: scenario.GRPCExecutor has %q, lint has %q", i, grpcSources[i], grpcLintSources[i])
+	// gRPC sources.
+	if grpc, ok := m["grpc"]; !ok {
+		t.Fatal("CaptureSourceMap missing grpc entry")
+	} else {
+		for _, s := range []string{"status", "headers"} {
+			if !grpc[s] {
+				t.Errorf("grpc missing source %q", s)
+			}
 		}
+	}
+
+	// HTTP (request) returns nil sources, so no entry.
+	if _, ok := m["request"]; ok {
+		t.Error("CaptureSourceMap should not have a 'request' entry; HTTP steps do not support source captures")
 	}
 }
 
