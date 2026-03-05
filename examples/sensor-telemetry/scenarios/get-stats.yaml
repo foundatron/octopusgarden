@@ -1,0 +1,39 @@
+id: get-stats
+description: Record multiple readings and verify aggregated statistics
+type: api
+
+setup:
+  - description: Register a sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "stats-sensor-1", "type": "humidity", "location": "Office"}'
+    capture:
+      - name: sensor_id
+        jsonpath: $.id
+
+  - description: Record first reading
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "{sensor_id}", "value": 40.0, "unit": "percent", "timestamp": "2025-01-15T10:00:00Z"}'
+
+  - description: Record second reading
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "{sensor_id}", "value": 60.0, "unit": "percent", "timestamp": "2025-01-15T10:01:00Z"}'
+
+  - description: Record third reading
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "{sensor_id}", "value": 50.0, "unit": "percent", "timestamp": "2025-01-15T10:02:00Z"}'
+
+steps:
+  - description: Get aggregated stats for the sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: GetStats
+      body: '{"sensor_id": "{sensor_id}"}'
+    expect: "Status OK. Stats show count 3, min 40.0, max 60.0, avg 50.0."

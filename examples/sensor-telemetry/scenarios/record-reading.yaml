@@ -1,0 +1,28 @@
+id: record-reading
+description: Register a sensor, record a reading, and verify the ack
+type: api
+
+setup:
+  - description: Register a sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "lab-p1", "type": "pressure", "location": "Lab 2"}'
+    capture:
+      - name: sensor_id
+        jsonpath: $.id
+
+steps:
+  - description: Record a reading for the sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "{sensor_id}", "value": 101.3, "unit": "kPa", "timestamp": "2025-01-15T10:00:00Z"}'
+    expect: "Status OK. Response contains a reading id or acknowledgment."
+
+  - description: Verify stats reflect the recorded reading
+    grpc:
+      service: telemetry.TelemetryService
+      method: GetStats
+      body: '{"sensor_id": "{sensor_id}"}'
+    expect: "Status OK. Stats show count 1, min 101.3, max 101.3, avg 101.3."

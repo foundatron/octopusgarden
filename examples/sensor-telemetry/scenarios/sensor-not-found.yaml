@@ -1,0 +1,32 @@
+id: sensor-not-found
+description: Verify error responses for unknown sensor IDs
+type: api
+
+steps:
+  - description: Record a reading for a nonexistent sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "nonexistent", "value": 1.0, "unit": "celsius", "timestamp": "2025-01-15T10:00:00Z"}'
+    expect: "gRPC error with NOT_FOUND status code."
+    capture:
+      - name: err_status
+        source: status
+
+  - description: Get stats for a nonexistent sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: GetStats
+      body: '{"sensor_id": "nonexistent"}'
+    expect: "gRPC error with NOT_FOUND status code."
+
+  - description: Watch a nonexistent sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: WatchSensor
+      body: '{"sensor_id": "nonexistent"}'
+      stream:
+        receive:
+          timeout: 5s
+          count: 1
+    expect: "gRPC error with NOT_FOUND status code."

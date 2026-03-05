@@ -38,6 +38,8 @@ Minimize — stdlib first. Allowed exceptions:
 - `modernc.org/sqlite` — run history (pure-Go, no CGO)
 - `github.com/docker/docker/client` — container orchestration
 - `github.com/chromedp/chromedp` — browser automation (pure Go, Chrome DevTools Protocol)
+- `google.golang.org/grpc` + `google.golang.org/protobuf` — gRPC client for scenario steps
+- `github.com/jhump/protoreflect/v2` — dynamic gRPC via server reflection (no compiled protos)
 - `go.opentelemetry.io/otel` + related packages — OpenTelemetry tracing (spans for LLM calls,
   container ops, attractor loop)
 

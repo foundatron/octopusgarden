@@ -1,0 +1,21 @@
+id: invalid-reading
+description: Verify validation of invalid reading values
+type: api
+
+setup:
+  - description: Register a sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "test-sensor-v1", "type": "temperature", "location": "Test"}'
+    capture:
+      - name: sensor_id
+        jsonpath: $.id
+
+steps:
+  - description: Submit a reading with a negative value
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "{sensor_id}", "value": -5.0, "unit": "celsius", "timestamp": "2025-01-15T10:00:00Z"}'
+    expect: "gRPC error with INVALID_ARGUMENT status code. Negative values are rejected."

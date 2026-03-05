@@ -1,0 +1,21 @@
+id: register-sensor
+description: Register a new sensor and verify it receives a generated ID
+type: api
+
+steps:
+  - description: Register a temperature sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "warehouse-t1", "type": "temperature", "location": "Building A"}'
+    expect: "Status OK. Response contains a non-empty id field, name 'warehouse-t1', type 'temperature', and location 'Building A'."
+    capture:
+      - name: sensor_id
+        jsonpath: $.id
+
+  - description: Verify the sensor can be looked up via stats
+    grpc:
+      service: telemetry.TelemetryService
+      method: GetStats
+      body: '{"sensor_id": "{sensor_id}"}'
+    expect: "Status OK. Stats response has count 0 (no readings yet)."

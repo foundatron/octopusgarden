@@ -1,0 +1,43 @@
+id: watch-sensor
+description: Subscribe to a sensor's live reading feed via server-streaming
+type: api
+weight: 2.0
+
+setup:
+  - description: Register a humidity sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "greenhouse-h1", "type": "humidity", "location": "Greenhouse 3"}'
+    capture:
+      - name: sensor_id
+        jsonpath: $.id
+
+steps:
+  - description: Start watching the sensor feed in the background
+    grpc:
+      service: telemetry.TelemetryService
+      method: WatchSensor
+      body: '{"sensor_id": "{sensor_id}"}'
+      stream:
+        receive:
+          timeout: 5s
+          count: 1
+          background: true
+    expect: "Stream opened successfully."
+
+  - description: Record a new reading to trigger the watch stream
+    grpc:
+      service: telemetry.TelemetryService
+      method: RecordReading
+      body: '{"sensor_id": "{sensor_id}", "value": 65.2, "unit": "percent", "timestamp": "2025-01-15T12:00:00Z"}'
+    expect: "Status OK. Reading accepted."
+
+  - description: Collect the reading from the watch stream
+    grpc:
+      stream:
+        id: "0"
+        receive:
+          timeout: 5s
+          count: 1
+    expect: "Received reading with value 65.2 and unit percent."
