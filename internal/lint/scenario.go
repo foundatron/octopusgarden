@@ -270,35 +270,9 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 	var diags []Diagnostic
 	fields := nodeFields(node)
 
-	// Check step type — exactly one of request, exec, or browser must be present.
-	reqFE, hasReq := fields["request"]
-	execFE, hasExec := fields["exec"]
-	browserFE, hasBrowser := fields["browser"]
-
-	typeCount := countTrue(hasReq, hasExec, hasBrowser)
-
-	switch {
-	case typeCount > 1:
-		diags = append(diags, Diagnostic{
-			File:    path,
-			Line:    node.Line,
-			Level:   Error,
-			Message: "step has multiple step types; exactly one of request, exec, or browser is required",
-		})
-	case typeCount == 0:
-		diags = append(diags, Diagnostic{
-			File:    path,
-			Line:    node.Line,
-			Level:   Error,
-			Message: "step missing step type: exactly one of request, exec, or browser is required",
-		})
-	case hasReq:
-		diags = append(diags, lintRequest(path, reqFE.value, cs)...)
-	case hasExec:
-		diags = append(diags, lintExec(path, execFE.value, cs)...)
-	case hasBrowser:
-		diags = append(diags, lintBrowser(path, browserFE.value, cs)...)
-	}
+	// Check step type — exactly one of request, exec, browser, or grpc must be present.
+	stepType, typeDiags := lintStepType(path, node, fields, cs)
+	diags = append(diags, typeDiags...)
 
 	// Check expect (warning only, not required for setup).
 	if !isSetup {
@@ -320,16 +294,6 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 		}
 	}
 
-	// Determine step type for capture source validation.
-	var stepType string
-	if hasReq {
-		stepType = "request"
-	} else if hasExec {
-		stepType = "exec"
-	} else if hasBrowser {
-		stepType = "browser"
-	}
-
 	// Check captures.
 	capFE, hasCap := fields["capture"]
 	if hasCap {
@@ -337,6 +301,42 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 	}
 
 	return diags
+}
+
+func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, cs *captureSet) (string, []Diagnostic) {
+	reqFE, hasReq := fields["request"]
+	execFE, hasExec := fields["exec"]
+	browserFE, hasBrowser := fields["browser"]
+	grpcFE, hasGRPC := fields["grpc"]
+
+	typeCount := countTrue(hasReq, hasExec, hasBrowser, hasGRPC)
+
+	switch {
+	case typeCount > 1:
+		return "", []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "step has multiple step types; exactly one of request, exec, browser, or grpc is required",
+		}}
+	case typeCount == 0:
+		return "", []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "step missing step type: exactly one of request, exec, browser, or grpc is required",
+		}}
+	case hasReq:
+		return "request", lintRequest(path, reqFE.value, cs)
+	case hasExec:
+		return "exec", lintExec(path, execFE.value, cs)
+	case hasBrowser:
+		return "browser", lintBrowser(path, browserFE.value, cs)
+	case hasGRPC:
+		return "grpc", lintGRPC(path, grpcFE.value, cs)
+	default:
+		return "", nil
+	}
 }
 
 func lintExec(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
@@ -592,10 +592,137 @@ func requireBrowserField(path string, node *yaml.Node, fields map[string]*fieldE
 	return checkVarRefs(extractVarRefs(fe.value.Value), cs, path, fe.value.Line)
 }
 
+func lintGRPC(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+	if node.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "grpc must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	// Check service/method (required unless referencing a background stream by ID).
+	_, hasSvc := fields["service"]
+	streamFE, hasStream := fields["stream"]
+	isStreamCollect := hasStream && !hasSvc
+	if !isStreamCollect {
+		diags = append(diags, lintGRPCServiceMethod(path, node, fields, cs)...)
+	}
+
+	// Check optional fields: body, headers, timeout.
+	diags = append(diags, lintGRPCOptionalFields(path, fields, cs)...)
+
+	// Check stream (optional — structural validation).
+	if hasStream && streamFE.value.Kind == yaml.MappingNode {
+		diags = append(diags, lintGRPCStream(path, streamFE.value, cs)...)
+	}
+
+	return diags
+}
+
+func lintGRPCServiceMethod(path string, node *yaml.Node, fields map[string]*fieldEntry, cs *captureSet) []Diagnostic {
+	var diags []Diagnostic
+	svcFE, hasSvc := fields["service"]
+	if !hasSvc || svcFE.value.Value == "" {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "grpc missing required field: service",
+		})
+	} else {
+		diags = append(diags, checkVarRefs(extractVarRefs(svcFE.value.Value), cs, path, svcFE.value.Line)...)
+	}
+
+	methodFE, hasMethod := fields["method"]
+	if !hasMethod || methodFE.value.Value == "" {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "grpc missing required field: method",
+		})
+	} else {
+		diags = append(diags, checkVarRefs(extractVarRefs(methodFE.value.Value), cs, path, methodFE.value.Line)...)
+	}
+	return diags
+}
+
+func lintGRPCOptionalFields(path string, fields map[string]*fieldEntry, cs *captureSet) []Diagnostic {
+	var diags []Diagnostic
+
+	if bodyFE, ok := fields["body"]; ok && bodyFE.value.Kind == yaml.ScalarNode {
+		diags = append(diags, checkVarRefs(extractVarRefs(bodyFE.value.Value), cs, path, bodyFE.value.Line)...)
+	}
+
+	if headersFE, ok := fields["headers"]; ok && headersFE.value.Kind == yaml.MappingNode {
+		for i := 1; i < len(headersFE.value.Content); i += 2 {
+			valNode := headersFE.value.Content[i]
+			diags = append(diags, checkVarRefs(extractVarRefs(valNode.Value), cs, path, valNode.Line)...)
+		}
+	}
+
+	if timeoutFE, ok := fields["timeout"]; ok && timeoutFE.value.Value != "" {
+		if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    timeoutFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("grpc timeout: invalid duration %q", timeoutFE.value.Value),
+			})
+		}
+	}
+
+	return diags
+}
+
+func lintGRPCStream(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	// Check messages (optional — array of strings, check var refs).
+	if msgFE, ok := fields["messages"]; ok {
+		if msgFE.value.Kind != yaml.SequenceNode {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    msgFE.value.Line,
+				Level:   Error,
+				Message: "grpc stream messages must be an array",
+			})
+		} else {
+			for _, m := range msgFE.value.Content {
+				diags = append(diags, checkVarRefs(extractVarRefs(m.Value), cs, path, m.Line)...)
+			}
+		}
+	}
+
+	// Check receive (optional — mapping with timeout, count, background).
+	if recvFE, ok := fields["receive"]; ok && recvFE.value.Kind == yaml.MappingNode {
+		recvFields := nodeFields(recvFE.value)
+		if timeoutFE, ok := recvFields["timeout"]; ok && timeoutFE.value.Value != "" {
+			if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+				diags = append(diags, Diagnostic{
+					File:    path,
+					Line:    timeoutFE.value.Line,
+					Level:   Error,
+					Message: fmt.Sprintf("grpc receive timeout: invalid duration %q", timeoutFE.value.Value),
+				})
+			}
+		}
+	}
+
+	return diags
+}
+
 // validCaptureSources defines valid source values per step type.
 var validCaptureSources = map[string]map[string]bool{
 	"exec":    {"stdout": true, "stderr": true, "exitcode": true},
 	"browser": {"text": true, "html": true, "count": true, "location": true},
+	"grpc":    {"status": true, "headers": true},
 }
 
 func lintCaptures(path string, node *yaml.Node, cs *captureSet, stepType string) []Diagnostic {

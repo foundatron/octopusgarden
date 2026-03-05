@@ -21,7 +21,7 @@ Violations prevent the scenario from being loaded.
 | SC012 | steps must be a non-empty array |
 | SC013 | setup must be an array |
 | SC014 | each step must be a YAML mapping |
-| SC015 | step must have exactly one step type (request, exec, or browser) |
+| SC015 | step must have exactly one step type (request, exec, browser, or grpc) |
 | SC018 | request must be a YAML mapping |
 | SC019 | request must have a method |
 | SC020 | HTTP method must be valid — Allowed: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. |
@@ -51,6 +51,12 @@ Violations prevent the scenario from being loaded.
 | SC046 | browser fill requires value |
 | SC047 | browser assert requires selector |
 | SC049 | browser timeout must be a valid Go duration — Uses same format as exec timeout (e.g. 10s, 30s). |
+| SC050 | grpc must be a YAML mapping |
+| SC051 | grpc service is required |
+| SC052 | grpc method is required |
+| SC053 | grpc timeout must be a valid Go duration |
+| SC054 | grpc stream messages must be an array |
+| SC055 | grpc receive timeout must be a valid Go duration |
 
 ## SHOULD (Warnings)
 

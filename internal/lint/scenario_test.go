@@ -87,7 +87,7 @@ steps:
     expect: "ok"
 `,
 			wantErrors: 1,
-			wantMsg:    "exactly one of request, exec, or browser is required",
+			wantMsg:    "exactly one of request, exec, browser, or grpc is required",
 		},
 		{
 			name: "missing method",
@@ -953,5 +953,179 @@ func TestValidCaptureSourcesSyncWithScenario(t *testing.T) {
 		if browserSources[i] != browserLintSources[i] {
 			t.Errorf("browser source mismatch at index %d: scenario.BrowserExecutor has %q, lint has %q", i, browserSources[i], browserLintSources[i])
 		}
+	}
+
+	// gRPC sources: compare lint's validCaptureSources["grpc"] with GRPCExecutor.ValidCaptureSources().
+	grpcExecutor := &scenario.GRPCExecutor{}
+	grpcSources := grpcExecutor.ValidCaptureSources()
+	slices.Sort(grpcSources)
+
+	grpcLintSources := make([]string, 0, len(validCaptureSources["grpc"]))
+	for k := range validCaptureSources["grpc"] {
+		grpcLintSources = append(grpcLintSources, k)
+	}
+	slices.Sort(grpcLintSources)
+
+	if len(grpcSources) != len(grpcLintSources) {
+		t.Fatalf("grpc source count mismatch: scenario.GRPCExecutor has %v, lint has %v", grpcSources, grpcLintSources)
+	}
+	for i := range grpcSources {
+		if grpcSources[i] != grpcLintSources[i] {
+			t.Errorf("grpc source mismatch at index %d: scenario.GRPCExecutor has %q, lint has %q", i, grpcSources[i], grpcLintSources[i])
+		}
+	}
+}
+
+func TestLintGRPCSteps(t *testing.T) {
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErrors int
+		wantWarns  int
+		wantMsg    string
+	}{
+		{
+			name: "valid grpc unary",
+			yaml: `id: grpc-test
+steps:
+  - description: Register sensor
+    grpc:
+      service: telemetry.TelemetryService
+      method: RegisterSensor
+      body: '{"name": "sensor-1"}'
+    expect: "Status OK"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "grpc missing service",
+			yaml: `id: grpc-test
+steps:
+  - description: Test
+    grpc:
+      method: RegisterSensor
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "grpc missing required field: service",
+		},
+		{
+			name: "grpc missing method",
+			yaml: `id: grpc-test
+steps:
+  - description: Test
+    grpc:
+      service: telemetry.Service
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "grpc missing required field: method",
+		},
+		{
+			name: "grpc invalid timeout",
+			yaml: `id: grpc-test
+steps:
+  - description: Test
+    grpc:
+      service: telemetry.Service
+      method: Register
+      timeout: notaduration
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "grpc timeout",
+		},
+		{
+			name: "grpc with stream messages",
+			yaml: `id: grpc-test
+steps:
+  - description: Stream upload
+    grpc:
+      service: telemetry.Service
+      method: StreamReadings
+      stream:
+        messages:
+          - '{"value": 1}'
+          - '{"value": 2}'
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "grpc stream collect by id (no service)",
+			yaml: `id: grpc-test
+steps:
+  - description: Collect background
+    grpc:
+      stream:
+        id: watch
+        receive:
+          timeout: 5s
+          count: 1
+    expect: "got message"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "grpc capture source status",
+			yaml: `id: grpc-test
+steps:
+  - description: Check status
+    grpc:
+      service: telemetry.Service
+      method: Get
+    expect: "ok"
+    capture:
+      - name: grpc_status
+        source: status
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "grpc invalid receive timeout",
+			yaml: `id: grpc-test
+steps:
+  - description: Watch
+    grpc:
+      service: telemetry.Service
+      method: Watch
+      stream:
+        receive:
+          timeout: badvalue
+          count: 1
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "grpc receive timeout",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diags := lintScenarioContent("test.yaml", []byte(tt.yaml))
+			errs, warns := CountByLevel(diags)
+			if errs != tt.wantErrors {
+				t.Errorf("errors: got %d, want %d; diags: %v", errs, tt.wantErrors, diags)
+			}
+			if tt.wantWarns > 0 && warns != tt.wantWarns {
+				t.Errorf("warnings: got %d, want %d", warns, tt.wantWarns)
+			}
+			if tt.wantMsg != "" {
+				found := false
+				for _, d := range diags {
+					if strings.Contains(d.Message, tt.wantMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected diagnostic containing %q, got: %v", tt.wantMsg, diags)
+				}
+			}
+		})
 	}
 }
