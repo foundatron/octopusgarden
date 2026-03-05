@@ -9,9 +9,16 @@ import (
 	"time"
 )
 
+const (
+	defaultRetryAttempts = 3
+	defaultRetryInterval = time.Second
+)
+
 var (
 	errSetupFailed          = errors.New("runner: setup step failed")
 	errNoExecutorRegistered = errors.New("no executor registered for step type")
+	errRetryInvalidInterval = errors.New("retry: invalid interval")
+	errRetryInvalidTimeout  = errors.New("retry: invalid timeout")
 )
 
 // Runner executes scenario steps by dispatching to registered StepExecutors.
@@ -40,7 +47,7 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
 		}
 
-		output, err := executor.Execute(ctx, step, vars)
+		output, err := r.executeStep(ctx, executor, step, vars)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
 		}
@@ -65,7 +72,7 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 		}
 
 		start := time.Now()
-		output, err := executor.Execute(ctx, step, vars)
+		output, err := r.executeStep(ctx, executor, step, vars)
 		dur := time.Since(start)
 
 		result := StepResult{
@@ -93,6 +100,64 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 		ScenarioID: scenario.ID,
 		Steps:      results,
 	}, nil
+}
+
+func (r *Runner) executeStep(ctx context.Context, executor StepExecutor, step Step, vars map[string]string) (StepOutput, error) {
+	if step.Retry == nil {
+		return executor.Execute(ctx, step, vars)
+	}
+	return r.executeWithRetry(ctx, executor, step, vars, step.Retry)
+}
+
+func (r *Runner) executeWithRetry(ctx context.Context, executor StepExecutor, step Step, vars map[string]string, retry *Retry) (StepOutput, error) {
+	attempts := retry.Attempts
+	if attempts <= 0 {
+		attempts = defaultRetryAttempts
+	}
+
+	interval, err := parseStepTimeout(retry.Interval, defaultRetryInterval)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("%w: %w", errRetryInvalidInterval, err)
+	}
+
+	execCtx := ctx
+	var cancel context.CancelFunc
+	if retry.Timeout != "" {
+		timeout, err := parseStepTimeout(retry.Timeout, 0)
+		if err != nil {
+			return StepOutput{}, fmt.Errorf("%w: %w", errRetryInvalidTimeout, err)
+		}
+		execCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	var lastOutput StepOutput
+	var lastErr error
+	for attempt := range attempts {
+		lastOutput, lastErr = executor.Execute(execCtx, step, vars)
+		if lastErr == nil {
+			return lastOutput, nil
+		}
+
+		r.Logger.Debug("retry: attempt failed",
+			"step", step.Description,
+			"attempt", attempt+1,
+			"maxAttempts", attempts,
+			"error", lastErr,
+		)
+
+		// Don't sleep after the last attempt.
+		if attempt < attempts-1 {
+			timer := time.NewTimer(interval)
+			select {
+			case <-execCtx.Done():
+				timer.Stop()
+				return lastOutput, execCtx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return lastOutput, lastErr
 }
 
 func (r *Runner) resolveExecutor(step Step) (StepExecutor, error) {

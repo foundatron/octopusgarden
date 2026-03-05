@@ -65,10 +65,32 @@
           "type": "string",
           "description": "Natural-language expectation judged by the LLM."
         },
+        "retry": { "$ref": "#/$defs/retry" },
         "capture": {
           "type": "array",
           "items": { "$ref": "#/$defs/capture" },
           "description": "Variables to extract from the response for use in later steps."
+        }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of attempts. Default: 3."
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
+          "description": "Delay between retries as a Go duration (e.g. '1s', '500ms'). Default: 1s."
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
+          "description": "Overall timeout cap for all retry attempts as a Go duration. Optional."
         }
       }
     },
