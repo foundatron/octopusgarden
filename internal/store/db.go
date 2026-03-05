@@ -34,6 +34,11 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("store: pragma wal: %w", err)
 	}
 
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: pragma busy_timeout: %w", err)
+	}
+
 	if err := createTables(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: create tables: %w", err)

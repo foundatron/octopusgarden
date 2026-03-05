@@ -66,6 +66,9 @@ type IterationProgress struct {
 	BudgetUSD        float64
 	Elapsed          time.Duration
 	StallCount       int
+	InputTokens      int
+	OutputTokens     int
+	Failures         []string
 }
 
 // ProgressFunc is called synchronously after each iteration completes.
@@ -151,6 +154,9 @@ type runState struct {
 	scoreHistory         []float64
 	lastOutcome          IterationOutcome
 	lastSatisfaction     float64
+	lastInputTokens      int
+	lastOutputTokens     int
+	lastFailures         []string
 	startTime            time.Time
 	bestFiles            map[string]string       // files from the best-scoring iteration
 	patchActive          bool                    // patch mode currently in effect (may disable on regression)
@@ -190,6 +196,9 @@ func (s *runState) buildProgress(iter int, costBefore float64) IterationProgress
 		BudgetUSD:        s.opts.BudgetUSD,
 		Elapsed:          time.Since(s.startTime),
 		StallCount:       s.stallCount,
+		InputTokens:      s.lastInputTokens,
+		OutputTokens:     s.lastOutputTokens,
+		Failures:         s.lastFailures,
 	}
 }
 
@@ -360,6 +369,9 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 		return nil, fmt.Errorf("attractor: generate iteration %d: %w", iter, err)
 	}
 	s.totalCost += genResp.CostUSD
+	s.lastInputTokens = genResp.InputTokens
+	s.lastOutputTokens = genResp.OutputTokens
+	s.lastFailures = nil
 
 	// Parse files from LLM output.
 	files, err := ParseFiles(genResp.Content)
@@ -462,6 +474,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		return nil, fmt.Errorf("attractor: validate iteration %d: %w", iter, err)
 	}
 	s.totalCost += valCost
+	s.lastFailures = failures
 
 	a.logger.Info("iteration result", "iteration", iter, "satisfaction", satisfaction, "failures", len(failures))
 

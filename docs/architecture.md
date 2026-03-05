@@ -553,6 +553,9 @@ type IterationProgress struct {
 	BudgetUSD        float64
 	Elapsed          time.Duration
 	StallCount       int
+	InputTokens      int
+	OutputTokens     int
+	Failures         []string
 }
 ```
 
