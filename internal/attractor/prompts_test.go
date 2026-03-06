@@ -55,7 +55,7 @@ func TestBuildMessagesIteration1(t *testing.T) {
 func TestBuildMessagesCategorizedHeaders(t *testing.T) {
 	history := []iterationFeedback{
 		{iteration: 1, kind: feedbackBuildError, message: "Docker build failed: syntax error"},
-		{iteration: 2, kind: feedbackValidation, message: "Satisfaction score: 40.0/100\nFailures:\n- missing endpoint"},
+		{iteration: 2, kind: feedbackValidation, message: "Satisfaction score: 40.0/100\nScenario results:\n✗ api (40/100)"},
 	}
 	msgs := buildMessages(3, history)
 	content := msgs[0].Content
@@ -142,11 +142,15 @@ func TestFormatValidationFeedback(t *testing.T) {
 	if !strings.Contains(result, "72.5/100") {
 		t.Error("should contain score")
 	}
-	if !strings.Contains(result, "Failures:") {
-		t.Error("should contain Failures header")
+	if !strings.Contains(result, "Scenario results:") {
+		t.Error("should contain Scenario results header")
 	}
 	if !strings.Contains(result, "missing GET /items") {
 		t.Error("should contain failure detail")
+	}
+	// Entries should not be prefixed with "- "
+	if strings.Contains(result, "- missing GET /items") {
+		t.Error("entries should not have '- ' prefix")
 	}
 }
 
@@ -155,8 +159,23 @@ func TestFormatValidationFeedbackNoFailures(t *testing.T) {
 	if !strings.Contains(result, "95.0/100") {
 		t.Error("should contain score")
 	}
-	if strings.Contains(result, "Failures:") {
-		t.Error("should not contain Failures header when there are no failures")
+	if strings.Contains(result, "Scenario results:") {
+		t.Error("should not contain Scenario results header when there are no failures")
+	}
+}
+
+func TestFormatValidationFeedbackMultiLine(t *testing.T) {
+	// Multi-line entries should pass through verbatim without any "- " prefix added.
+	entry := "✗ my-scenario (45/100)\n  ✗ check health (20/100)\n    Reasoning: timeout\n    Observed: got 500"
+	result := formatValidationFeedback(45.0, []string{entry})
+	if !strings.Contains(result, "Scenario results:") {
+		t.Error("should contain Scenario results header")
+	}
+	if !strings.Contains(result, entry) {
+		t.Errorf("multi-line entry should appear verbatim, got:\n%s", result)
+	}
+	if strings.Contains(result, "- ✗") {
+		t.Error("multi-line entry should not have '- ' prefix")
 	}
 }
 
