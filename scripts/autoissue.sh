@@ -15,7 +15,7 @@ set -euo pipefail
 #   ./scripts/autoissue.sh <issue-number>... [options]
 #
 # Options:
-#   --budget <usd>           Max budget for implementation phase (default: 10)
+#   --budget <usd>           Max budget per phase (default: unlimited)
 #   --plan-model <model>     Model for planning phase (default: opus)
 #   --review-model <model>   Model for review phases (default: opus)
 #   --impl-model <model>     Model for implementation phase (default: sonnet)
@@ -25,7 +25,7 @@ set -euo pipefail
 # Examples:
 #   ./scripts/autoissue.sh 77
 #   ./scripts/autoissue.sh 81 82 83
-#   ./scripts/autoissue.sh 77 --budget 5
+#   ./scripts/autoissue.sh 77 --budget 10
 #   ./scripts/autoissue.sh 81 82 --no-merge
 #   ./scripts/autoissue.sh 77 --review-model sonnet
 #
@@ -35,7 +35,7 @@ set -euo pipefail
 #   - git configured with push access
 
 REPO="foundatron/octopusgarden"
-DEFAULT_BUDGET=10
+BUDGET=""
 PLAN_MODEL=opus
 REVIEW_MODEL=opus
 IMPL_MODEL=sonnet
@@ -52,7 +52,7 @@ usage() {
 [[ $# -lt 1 ]] && usage
 
 ISSUES=()
-BUDGET="$DEFAULT_BUDGET"
+BUDGET=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --budget) BUDGET="$2"; shift 2 ;;
@@ -82,18 +82,21 @@ fi
 log() { echo "==> $*"; }
 
 # --- Helper: run a claude phase with prompt from file ---
-# Usage: run_phase <phase_name> <model> <budget> <output_file> <prompt_file>
+# Usage: run_phase <phase_name> <model> <output_file> <prompt_file>
 run_phase() {
-  local phase_name="$1" model="$2" budget="$3" output_file="$4" prompt_file="$5"
+  local phase_name="$1" model="$2" output_file="$3" prompt_file="$4"
 
-  log "  Running ${phase_name} (model: ${model}, budget: \$${budget})..."
+  log "  Running ${phase_name} (model: ${model})..."
+
+  local budget_args=()
+  if [[ -n "$BUDGET" ]]; then budget_args=(--max-budget-usd "$BUDGET"); fi
 
   local exit_code=0
   claude -p \
     --model "$model" \
     --effort medium \
     --dangerously-skip-permissions \
-    --max-budget-usd "$budget" \
+    "${budget_args[@]}" \
     --output-format text \
     "$(cat "$prompt_file")" > "$output_file" || exit_code=$?
 
@@ -108,18 +111,21 @@ run_phase() {
 }
 
 # --- Helper: run a claude phase without capturing output ---
-# Usage: run_phase_nocapture <phase_name> <model> <budget> <prompt_file>
+# Usage: run_phase_nocapture <phase_name> <model> <prompt_file>
 run_phase_nocapture() {
-  local phase_name="$1" model="$2" budget="$3" prompt_file="$4"
+  local phase_name="$1" model="$2" prompt_file="$3"
 
-  log "  Running ${phase_name} (model: ${model}, budget: \$${budget})..."
+  log "  Running ${phase_name} (model: ${model})..."
+
+  local budget_args=()
+  if [[ -n "$BUDGET" ]]; then budget_args=(--max-budget-usd "$BUDGET"); fi
 
   local exit_code=0
   claude -p \
     --model "$model" \
     --effort medium \
     --dangerously-skip-permissions \
-    --max-budget-usd "$budget" \
+    "${budget_args[@]}" \
     "$(cat "$prompt_file")" || exit_code=$?
 
   if [[ $exit_code -ne 0 ]]; then
@@ -279,7 +285,7 @@ Instructions:
 5. Do NOT push. Do NOT create a PR.
 PUSH_FIX_PROMPT
 
-    run_phase_nocapture "Push Fix (retry ${push_retries})" "$impl_model" 2 "$prompt_file"
+    run_phase_nocapture "Push Fix (retry ${push_retries})" "$impl_model" "$prompt_file"
   done
 }
 
@@ -351,6 +357,14 @@ for IDX in "${!ISSUES[@]}"; do
 
   # --- Git: checkout main, pull, create branch ---
   log "Preparing branch..."
+
+  # Discard any uncommitted changes left by a previous phase (e.g. budget exceeded mid-edit)
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    log "  Cleaning up uncommitted changes from previous issue..."
+    git checkout -- .
+    git clean -fd
+  fi
+
   git checkout main
   git pull --ff-only
 
@@ -365,14 +379,13 @@ for IDX in "${!ISSUES[@]}"; do
 
   if $DRY_RUN; then
     log "[dry-run] 6-phase pipeline for issue #${ISSUE_NUMBER}:"
-    log "[dry-run]   Phase 1: Plan            model=${PLAN_MODEL}    budget=\$1"
-    log "[dry-run]   Phase 2: Review Plan     model=${REVIEW_MODEL}  budget=\$1"
-    log "[dry-run]   Phase 3: Implement       model=adaptive        budget=\$${BUDGET}"
+    log "[dry-run]   Phase 1: Plan            model=${PLAN_MODEL}    budget=${BUDGET:-unlimited}"
+    log "[dry-run]   Phase 2: Review Plan     model=${REVIEW_MODEL}  budget=${BUDGET:-unlimited}"
+    log "[dry-run]   Phase 3: Implement       model=adaptive        budget=${BUDGET:-unlimited}"
     log "[dry-run]     (simple/moderate -> ${IMPL_MODEL}, complex -> ${PLAN_MODEL})"
-    log "[dry-run]   Phase 4: Review Code     model=${REVIEW_MODEL}  budget=\$2"
-    log "[dry-run]   Phase 5: Fix Findings    model=${IMPL_MODEL}    budget=\$2"
-    log "[dry-run]   Phase 6: CI Retry        model=${IMPL_MODEL}    budget=\$2/attempt (max 2)"
-    log "[dry-run]   Total estimated: \$16-20"
+    log "[dry-run]   Phase 4: Review Code     model=${REVIEW_MODEL}  budget=${BUDGET:-unlimited}"
+    log "[dry-run]   Phase 5: Fix Findings    model=${IMPL_MODEL}    budget=${BUDGET:-unlimited}"
+    log "[dry-run]   Phase 6: CI Retry        model=${IMPL_MODEL}    budget=${BUDGET:-unlimited} (max 2 retries)"
     continue
   fi
 
@@ -409,7 +422,7 @@ Output ONLY the final implementation plan with this structure:
 (Bullet list of anything the implementer should watch out for)
 PLAN_PROMPT
 
-  run_phase "Phase 1: Plan" "$PLAN_MODEL" 1 "${ISSUE_WORK_DIR}/plan.md" "$PROMPT_FILE"
+  run_phase "Phase 1: Plan" "$PLAN_MODEL" "${ISSUE_WORK_DIR}/plan.md" "$PROMPT_FILE"
   validate_artifact "${ISSUE_WORK_DIR}/plan.md" 10
 
   # ============================================================
@@ -457,7 +470,7 @@ Output a revised plan incorporating your feedback, using this structure:
 - Reason: (one sentence explaining the rating)
 REVIEW_PLAN_PROMPT
 
-  run_phase "Phase 2: Review Plan" "$REVIEW_MODEL" 1 "${ISSUE_WORK_DIR}/reviewed-plan.md" "$PROMPT_FILE"
+  run_phase "Phase 2: Review Plan" "$REVIEW_MODEL" "${ISSUE_WORK_DIR}/reviewed-plan.md" "$PROMPT_FILE"
   validate_artifact "${ISSUE_WORK_DIR}/reviewed-plan.md" 10 "Complexity"
 
   # Parse complexity rating to select implementation model
@@ -474,7 +487,7 @@ REVIEW_PLAN_PROMPT
   # ============================================================
   # Phase 3: Implement (from reviewed plan, fresh context)
   # ============================================================
-  log "Phase 3: Implement (model: ${PHASE3_MODEL}, budget: \$${BUDGET})..."
+  log "Phase 3: Implement (model: ${PHASE3_MODEL})..."
 
   REVIEWED_PLAN_CONTENT=$(cat "${ISSUE_WORK_DIR}/reviewed-plan.md")
 
@@ -495,7 +508,7 @@ Instructions:
 5. Do NOT push the branch. Do NOT create a PR. Only commit locally.
 IMPLEMENT_PROMPT
 
-  run_phase_nocapture "Phase 3: Implement" "$PHASE3_MODEL" "$BUDGET" "$PROMPT_FILE"
+  run_phase_nocapture "Phase 3: Implement" "$PHASE3_MODEL" "$PROMPT_FILE"
 
   # Validate: at least one new commit on branch
   COMMIT_COUNT=$(git rev-list --count main..HEAD)
@@ -559,7 +572,7 @@ Output your review in this structure:
 (PASS if 0 errors and 0 warnings. NEEDS CHANGES otherwise.)
 REVIEW_CODE_PROMPT
 
-  run_phase "Phase 4: Review Code" "$REVIEW_MODEL" 2 "${ISSUE_WORK_DIR}/review-findings.md" "$PROMPT_FILE"
+  run_phase "Phase 4: Review Code" "$REVIEW_MODEL" "${ISSUE_WORK_DIR}/review-findings.md" "$PROMPT_FILE"
   validate_artifact "${ISSUE_WORK_DIR}/review-findings.md" 3 "Summary"
 
   # Display review summary
@@ -595,7 +608,11 @@ Instructions:
 4. Do NOT push. Do NOT create a PR.
 FIX_PROMPT
 
-    run_phase_nocapture "Phase 5: Fix Findings" "$IMPL_MODEL" 2 "$PROMPT_FILE"
+    if ! run_phase_nocapture "Phase 5: Fix Findings" "$IMPL_MODEL" "$PROMPT_FILE"; then
+      log "  WARNING: Phase 5 failed, discarding partial changes"
+      git checkout -- .
+      git clean -fd
+    fi
   fi
 
   # --- Push and create PR (script-controlled, not Claude) ---
@@ -670,7 +687,7 @@ Instructions:
 5. Do NOT push. Do NOT create a PR.
 CI_FIX_PROMPT
 
-    run_phase_nocapture "Phase 6: CI Fix (retry ${CI_RETRIES})" "$IMPL_MODEL" 2 "$PROMPT_FILE"
+    run_phase_nocapture "Phase 6: CI Fix (retry ${CI_RETRIES})" "$IMPL_MODEL" "$PROMPT_FILE"
 
     # Push the fix (with pre-push hook retry)
     push_with_retry "$BRANCH" "$PROMPT_FILE" "$IMPL_MODEL"
