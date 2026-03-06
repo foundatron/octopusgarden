@@ -3,6 +3,8 @@ package scenario
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -298,6 +300,159 @@ func TestExecContainerSessionPassesOptions(t *testing.T) {
 	}
 	if gotOpts.Timeout != 5*time.Second {
 		t.Errorf("expected timeout 5s, got %v", gotOpts.Timeout)
+	}
+}
+
+func TestExecExecutorFilesLocal(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "hello.txt")
+
+	executor := &ExecExecutor{}
+	step := Step{
+		Exec: &ExecRequest{
+			Command: "cat " + filePath,
+			Files:   map[string]string{filePath: "file content"},
+		},
+	}
+
+	output, err := executor.Execute(context.Background(), step, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output.CaptureSources[ExecSourceStdout], "file content") {
+		t.Errorf("expected file content in stdout, got: %s", output.CaptureSources[ExecSourceStdout])
+	}
+
+	// Verify the file has the expected permissions.
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("expected file mode 0600, got %o", info.Mode().Perm())
+	}
+}
+
+func TestExecExecutorFilesLocalVarSubstitution(t *testing.T) {
+	dir := t.TempDir()
+
+	executor := &ExecExecutor{}
+	vars := map[string]string{
+		"dir":  dir,
+		"name": "world",
+	}
+	step := Step{
+		Exec: &ExecRequest{
+			Command: "cat {dir}/greeting.txt",
+			Files:   map[string]string{"{dir}/greeting.txt": "hello {name}"},
+		},
+	}
+
+	output, err := executor.Execute(context.Background(), step, vars)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output.CaptureSources[ExecSourceStdout], "hello world") {
+		t.Errorf("expected substituted content in stdout, got: %s", output.CaptureSources[ExecSourceStdout])
+	}
+}
+
+func TestExecExecutorFilesContainer(t *testing.T) {
+	type call struct {
+		command string
+		stdin   string
+	}
+	var calls []call
+
+	session := &mockContainerSession{
+		execFn: func(_ context.Context, command string, opts container.ExecOptions) (container.ExecResult, error) {
+			calls = append(calls, call{command: command, stdin: opts.Stdin})
+			return container.ExecResult{ExitCode: 0, Stdout: "ok"}, nil
+		},
+	}
+
+	executor := &ExecExecutor{Session: session}
+	step := Step{
+		Exec: &ExecRequest{
+			Command: "echo done",
+			Files:   map[string]string{"/tmp/config.yaml": "key: value"},
+		},
+	}
+
+	_, err := executor.Execute(context.Background(), step, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expect 2 calls: one for the file write, one for the command.
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 exec calls, got %d", len(calls))
+	}
+	// First call should be the mkdir+cat command.
+	if !strings.Contains(calls[0].command, "mkdir -p") || !strings.Contains(calls[0].command, "cat >") {
+		t.Errorf("expected mkdir+cat command, got: %s", calls[0].command)
+	}
+	if calls[0].stdin != "key: value" {
+		t.Errorf("expected stdin 'key: value', got %q", calls[0].stdin)
+	}
+	// Second call is the actual command.
+	if calls[1].command != "echo done" {
+		t.Errorf("expected command 'echo done', got %q", calls[1].command)
+	}
+}
+
+func TestExecExecutorFilesContainerWriteError(t *testing.T) {
+	callCount := 0
+	session := &mockContainerSession{
+		execFn: func(_ context.Context, _ string, _ container.ExecOptions) (container.ExecResult, error) {
+			callCount++
+			// File write fails with non-zero exit code.
+			return container.ExecResult{ExitCode: 1}, nil
+		},
+	}
+
+	executor := &ExecExecutor{Session: session}
+	step := Step{
+		Exec: &ExecRequest{
+			Command: "echo done",
+			Files:   map[string]string{"/tmp/config.yaml": "content"},
+		},
+	}
+
+	_, err := executor.Execute(context.Background(), step, nil)
+	if err == nil {
+		t.Fatal("expected error from failed file write")
+	}
+	if !errors.Is(err, errWriteFileFailed) {
+		t.Errorf("expected errWriteFileFailed, got: %v", err)
+	}
+	// Command must not have been executed.
+	if callCount != 1 {
+		t.Errorf("expected 1 exec call (file write only), got %d", callCount)
+	}
+}
+
+func TestExecExecutorFilesEmpty(t *testing.T) {
+	executor := &ExecExecutor{}
+
+	// nil files map — no-op.
+	step := Step{Exec: &ExecRequest{Command: "echo hi"}}
+	output, err := executor.Execute(context.Background(), step, nil)
+	if err != nil {
+		t.Fatalf("nil files: unexpected error: %v", err)
+	}
+	if output.CaptureSources[ExecSourceExitCode] != "0" {
+		t.Errorf("nil files: expected exit code 0, got %s", output.CaptureSources[ExecSourceExitCode])
+	}
+
+	// Empty files map — no-op.
+	step.Exec.Files = map[string]string{}
+	output, err = executor.Execute(context.Background(), step, nil)
+	if err != nil {
+		t.Fatalf("empty files: unexpected error: %v", err)
+	}
+	if output.CaptureSources[ExecSourceExitCode] != "0" {
+		t.Errorf("empty files: expected exit code 0, got %s", output.CaptureSources[ExecSourceExitCode])
 	}
 }
 

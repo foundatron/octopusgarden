@@ -241,6 +241,7 @@ type ExecRequest struct {
 	Stdin   string            `yaml:"stdin"`
 	Env     map[string]string `yaml:"env"`
 	Timeout string            `yaml:"timeout"`
+	Files   map[string]string `yaml:"files"` // absolute path → content; written before command execution
 }
 
 // BrowserRequest describes a browser automation action.
