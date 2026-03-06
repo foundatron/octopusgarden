@@ -537,42 +537,114 @@ func TestBuildSystemPromptGeneOrdering(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPromptGeneCrossLanguage(t *testing.T) {
-	spec := "Build an API"
-	genes := "some patterns"
-
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "python", genes, "go")
-	if !strings.Contains(prompt, "from a go implementation") {
-		t.Error("should contain cross-language source note")
-	}
-	if !strings.Contains(prompt, "adapt idioms to python") {
-		t.Error("should contain cross-language target note")
-	}
-}
-
-func TestBuildSystemPromptGeneSameLanguage(t *testing.T) {
-	spec := "Build an API"
-	genes := "some patterns"
-
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "go")
-	if strings.Contains(prompt, "adapt idioms") {
+func TestBuildGeneSectionSameLanguage(t *testing.T) {
+	result := buildGeneSection("some patterns", "go", "go")
+	if strings.Contains(result, "CROSS-LANGUAGE NOTE") {
 		t.Error("same language should not include cross-language note")
 	}
 }
 
-func TestBuildSystemPromptGeneCrossLanguageEmptyLanguage(t *testing.T) {
-	spec := "Build an API"
-	genes := "some patterns"
+func TestBuildGeneSectionCrossLanguage(t *testing.T) {
+	result := buildGeneSection("some patterns", "python", "go")
+	if !strings.Contains(result, "CROSS-LANGUAGE NOTE") {
+		t.Error("cross-language should contain CROSS-LANGUAGE NOTE")
+	}
+}
 
-	// No cross-language note when either language is empty.
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", genes, "go")
-	if strings.Contains(prompt, "adapt idioms") {
+func TestBuildGeneSectionCrossLanguageContent(t *testing.T) {
+	result := buildGeneSection("some patterns", "python", "go")
+	if !strings.Contains(result, "Go") {
+		t.Error("note should mention source display name Go")
+	}
+	if !strings.Contains(result, "Python") {
+		t.Error("note should mention target display name Python")
+	}
+}
+
+func TestBuildGeneSectionCrossLanguagePreserve(t *testing.T) {
+	result := buildGeneSection("some patterns", "python", "go")
+	if !strings.Contains(result, "invariants") {
+		t.Error("note should mention invariants")
+	}
+	if !strings.Contains(result, "structural patterns") {
+		t.Error("note should mention structural patterns")
+	}
+}
+
+func TestBuildGeneSectionNoGeneLanguage(t *testing.T) {
+	result := buildGeneSection("some patterns", "python", "")
+	if strings.Contains(result, "CROSS-LANGUAGE NOTE") {
+		t.Error("should not include cross-language note when gene language is empty")
+	}
+}
+
+func TestBuildGeneSectionNoTargetLanguage(t *testing.T) {
+	result := buildGeneSection("some patterns", "", "go")
+	if strings.Contains(result, "CROSS-LANGUAGE NOTE") {
 		t.Error("should not include cross-language note when target language is empty")
 	}
+}
 
-	prompt = buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "")
-	if strings.Contains(prompt, "adapt idioms") {
-		t.Error("should not include cross-language note when gene language is empty")
+func TestBuildGeneSectionAllCombinations(t *testing.T) {
+	languages := []string{"go", "python", "node", "rust"}
+	displayNames := map[string]string{
+		"go": "Go", "python": "Python", "node": "Node.js", "rust": "Rust",
+	}
+
+	for _, gene := range languages {
+		for _, target := range languages {
+			name := gene + "_to_" + target
+			t.Run(name, func(t *testing.T) {
+				result := buildGeneSection("patterns", target, gene)
+				hasCrossNote := strings.Contains(result, "CROSS-LANGUAGE NOTE")
+				if gene == target && hasCrossNote {
+					t.Error("same language should not include cross-language note")
+				}
+				if gene != target && !hasCrossNote {
+					t.Error("different languages should include cross-language note")
+				}
+				if gene != target && !strings.Contains(result, displayNames[gene]) {
+					t.Errorf("note should mention source display name %s", displayNames[gene])
+				}
+				if gene != target && !strings.Contains(result, displayNames[target]) {
+					t.Errorf("note should mention target display name %s", displayNames[target])
+				}
+			})
+		}
+	}
+}
+
+func TestBuildGeneSectionUnknownLanguage(t *testing.T) {
+	result := buildGeneSection("some patterns", "python", "java")
+	if !strings.Contains(result, "CROSS-LANGUAGE NOTE") {
+		t.Error("unknown gene language should still trigger cross-language note")
+	}
+	if !strings.Contains(result, "java") {
+		t.Error("unknown language should fall back to raw string")
+	}
+	if !strings.Contains(result, "Python") {
+		t.Error("known target language should use display name")
+	}
+}
+
+func TestLanguageDisplayName(t *testing.T) {
+	tests := []struct {
+		lang string
+		want string
+	}{
+		{"go", "Go"},
+		{"python", "Python"},
+		{"node", "Node.js"},
+		{"rust", "Rust"},
+		{"unknown", "unknown"},
+		{"java", "java"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.lang, func(t *testing.T) {
+			if got := languageDisplayName(tt.lang); got != tt.want {
+				t.Errorf("languageDisplayName(%q) = %q, want %q", tt.lang, got, tt.want)
+			}
+		})
 	}
 }
 

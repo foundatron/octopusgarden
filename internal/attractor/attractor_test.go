@@ -1205,6 +1205,47 @@ func TestAttractorRunGenesPersistAcrossIterations(t *testing.T) {
 	}
 }
 
+func TestAttractorCrossLanguagePrompt(t *testing.T) {
+	geneContent := "// Always use handler-per-route\nfunc handleGetItems(w http.ResponseWriter, r *http.Request) { ... }"
+
+	var capturedSystemPrompt string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedSystemPrompt = req.SystemPrompt
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Genes = geneContent
+	opts.GeneLanguage = "go"
+	opts.Language = "python"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !strings.Contains(capturedSystemPrompt, "CROSS-LANGUAGE NOTE") {
+		t.Error("system prompt should contain CROSS-LANGUAGE NOTE")
+	}
+	if !strings.Contains(capturedSystemPrompt, "Go") {
+		t.Error("cross-language note should mention source language Go")
+	}
+	if !strings.Contains(capturedSystemPrompt, "Python") {
+		t.Error("cross-language note should mention target language Python")
+	}
+	if !strings.Contains(capturedSystemPrompt, geneContent) {
+		t.Error("system prompt should contain gene content")
+	}
+}
+
 func TestExtractFailureStrings(t *testing.T) {
 	history := []iterationFeedback{
 		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 60.0/100\nFailures:\n- missing endpoint"},
