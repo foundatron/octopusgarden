@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-go@v6.3.0
         with:
           go-version-file: go.mod
-      - run: make test-integration
+      - run: go test -tags=integration ./...
 
   lint:
     runs-on: ubuntu-latest
