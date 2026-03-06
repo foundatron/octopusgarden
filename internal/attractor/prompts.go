@@ -21,7 +21,9 @@ const (
 
 const (
 	// maxFeedbackBytes is the maximum size of a single feedback entry before truncation.
-	maxFeedbackBytes = 4096
+	// Increased to 12288 to accommodate detailed per-step scenario output; larger prompts
+	// are a deliberate cost tradeoff for richer feedback that drives faster convergence.
+	maxFeedbackBytes = 12288
 	// maxFeedbackEntries is the number of recent feedback entries included in iteration prompts.
 	maxFeedbackEntries = 3
 )
@@ -350,9 +352,9 @@ func formatValidationFeedback(satisfaction float64, failures []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Satisfaction score: %.1f/100\n", satisfaction)
 	if len(failures) > 0 {
-		b.WriteString("Failures:\n")
+		b.WriteString("Scenario results:\n")
 		for _, f := range failures {
-			fmt.Fprintf(&b, "- %s\n", f)
+			fmt.Fprintf(&b, "%s\n", f)
 		}
 	}
 	return b.String()

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 
@@ -35,9 +36,14 @@ import (
 )
 
 // stepPassThreshold is the per-step score below which a step is labeled FAIL
-// in validation output. This is purely cosmetic — the --threshold flag on
-// validateCmd controls the aggregate satisfaction gate.
+// in validation output and considered failing for detailed feedback. This is
+// purely cosmetic — the --threshold flag on validateCmd controls the aggregate
+// satisfaction gate.
 const stepPassThreshold = 80
+
+// maxObservedBytes is the maximum bytes of step observed output included in
+// detailed failure feedback. Longer output is truncated with a … suffix.
+const maxObservedBytes = 500
 
 var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
@@ -914,8 +920,69 @@ func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, judgeM
 		if err != nil {
 			return 0, nil, 0, err
 		}
-		return agg.Satisfaction, agg.Failures, agg.TotalCostUSD, nil
+		return agg.Satisfaction, buildDetailedFailures(agg), agg.TotalCostUSD, nil
 	}
+}
+
+// buildDetailedFailures converts an AggregateResult into a slice of feedback strings
+// for the attractor loop. Passing scenarios produce a single summary line; failing
+// scenarios expand to include per-step detail with reasoning and observed output for
+// failing steps.
+func buildDetailedFailures(agg scenario.AggregateResult) []string {
+	out := make([]string, 0, len(agg.Scenarios))
+	for _, sc := range agg.Scenarios {
+		if sc.Score >= float64(stepPassThreshold) {
+			out = append(out, fmt.Sprintf("✓ %s (%.0f/100)", sc.ScenarioID, sc.Score))
+		} else {
+			out = append(out, formatFailedScenario(sc))
+		}
+	}
+	return out
+}
+
+// formatFailedScenario formats a failing scenario as a multi-line string with
+// per-step detail. Failing steps include reasoning and observed output; passing
+// steps within a failing scenario appear as a single-line summary.
+func formatFailedScenario(s scenario.ScoredScenario) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "✗ %s (%.0f/100)", s.ScenarioID, s.Score)
+	for _, step := range s.Steps {
+		if step.StepScore.Score >= stepPassThreshold {
+			fmt.Fprintf(&b, "\n  ✓ %s (%d/100)", step.StepResult.Description, step.StepScore.Score)
+			continue
+		}
+		fmt.Fprintf(&b, "\n  ✗ %s (%d/100)", step.StepResult.Description, step.StepScore.Score)
+		if step.StepScore.Reasoning != "" {
+			fmt.Fprintf(&b, "\n    Reasoning: %s", step.StepScore.Reasoning)
+		}
+		if step.StepResult.Observed != "" {
+			obs := step.StepResult.Observed
+			label := "Observed"
+			if len(obs) > maxObservedBytes {
+				obs = truncateObserved(obs, maxObservedBytes)
+				label = fmt.Sprintf("Observed (%dB)", maxObservedBytes)
+			}
+			fmt.Fprintf(&b, "\n    %s: %s", label, obs)
+		}
+	}
+	return b.String()
+}
+
+// truncateObserved truncates observed output to max bytes, removing any incomplete
+// UTF-8 rune at the cut point and appending a … suffix.
+func truncateObserved(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	truncated := s[:max]
+	for len(truncated) > 0 {
+		r, size := utf8.DecodeLastRuneInString(truncated)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "…"
 }
 
 //nolint:gosec // G705 false positive: w is os.Stdout or test buffer, not an HTTP response

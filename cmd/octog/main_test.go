@@ -1187,6 +1187,227 @@ func TestLoadGenesEmptyPath(t *testing.T) {
 	}
 }
 
+func TestBuildDetailedFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		agg       scenario.AggregateResult
+		wantLen   int
+		wantCheck func(t *testing.T, out []string)
+	}{
+		{
+			name:    "zero scenarios",
+			agg:     scenario.AggregateResult{},
+			wantLen: 0,
+		},
+		{
+			name: "all passing",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "crud", Score: 95, Steps: []scenario.ScoredStep{
+						{StepScore: scenario.StepScore{Score: 95}, StepResult: scenario.StepResult{Description: "list items"}},
+					}},
+					{ScenarioID: "auth", Score: 100, Steps: []scenario.ScoredStep{
+						{StepScore: scenario.StepScore{Score: 100}, StepResult: scenario.StepResult{Description: "login"}},
+					}},
+				},
+			},
+			wantLen: 2,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if !strings.Contains(out[0], "✓") || !strings.Contains(out[0], "crud") {
+					t.Errorf("passing scenario should start with ✓ and contain name, got %q", out[0])
+				}
+				if !strings.Contains(out[1], "✓") || !strings.Contains(out[1], "auth") {
+					t.Errorf("passing scenario should start with ✓ and contain name, got %q", out[1])
+				}
+				// Passing scenarios: no step detail
+				if strings.Contains(out[0], "list items") {
+					t.Error("passing scenario should not include step detail")
+				}
+			},
+		},
+		{
+			name: "all failing",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "crud", Score: 30, Steps: []scenario.ScoredStep{
+						{StepScore: scenario.StepScore{Score: 90}, StepResult: scenario.StepResult{Description: "list items"}},
+						{StepScore: scenario.StepScore{Score: 20, Reasoning: "wrong status"}, StepResult: scenario.StepResult{Description: "delete item", Observed: "got 500"}},
+					}},
+				},
+			},
+			wantLen: 1,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if !strings.Contains(out[0], "✗") || !strings.Contains(out[0], "crud") {
+					t.Errorf("failing scenario should contain ✗ and name, got %q", out[0])
+				}
+				// Passing step in failing scenario: single-line summary
+				if !strings.Contains(out[0], "✓") || !strings.Contains(out[0], "list items") {
+					t.Errorf("passing step should appear as single-line summary, got %q", out[0])
+				}
+				// Failing step: expanded detail
+				if !strings.Contains(out[0], "delete item") {
+					t.Errorf("failing step should include description, got %q", out[0])
+				}
+				if !strings.Contains(out[0], "wrong status") {
+					t.Errorf("failing step should include reasoning, got %q", out[0])
+				}
+				if !strings.Contains(out[0], "got 500") {
+					t.Errorf("failing step should include observed, got %q", out[0])
+				}
+			},
+		},
+		{
+			name: "mixed passing and failing",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "ok", Score: 85},
+					{ScenarioID: "bad", Score: 50, Steps: []scenario.ScoredStep{
+						{StepScore: scenario.StepScore{Score: 50, Reasoning: "timeout"}, StepResult: scenario.StepResult{Description: "check health"}},
+					}},
+				},
+			},
+			wantLen: 2,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if !strings.Contains(out[0], "✓ ok") {
+					t.Errorf("passing scenario should be ✓, got %q", out[0])
+				}
+				if !strings.Contains(out[1], "✗ bad") {
+					t.Errorf("failing scenario should be ✗, got %q", out[1])
+				}
+				if !strings.Contains(out[1], "timeout") {
+					t.Errorf("failing step reasoning should appear, got %q", out[1])
+				}
+			},
+		},
+		{
+			name: "observed truncation in failing step",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "trunc", Score: 10, Steps: []scenario.ScoredStep{
+						{StepScore: scenario.StepScore{Score: 10}, StepResult: scenario.StepResult{
+							Description: "big output",
+							Observed:    strings.Repeat("x", maxObservedBytes+100),
+						}},
+					}},
+				},
+			},
+			wantLen: 1,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if !strings.Contains(out[0], "Observed (500B)") {
+					t.Errorf("truncated observed should use byte-count label, got %q", out[0])
+				}
+				if !strings.Contains(out[0], "…") {
+					t.Errorf("truncated observed should end with ellipsis, got %q", out[0])
+				}
+			},
+		},
+		{
+			name: "no observed when empty",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "noobs", Score: 10, Steps: []scenario.ScoredStep{
+						{StepScore: scenario.StepScore{Score: 10, Reasoning: "missing"}, StepResult: scenario.StepResult{
+							Description: "check",
+							Observed:    "",
+						}},
+					}},
+				},
+			},
+			wantLen: 1,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if strings.Contains(out[0], "Observed") {
+					t.Errorf("empty observed should not appear in output, got %q", out[0])
+				}
+				if !strings.Contains(out[0], "missing") {
+					t.Errorf("reasoning should still appear, got %q", out[0])
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := buildDetailedFailures(tt.agg)
+			if len(out) != tt.wantLen {
+				t.Fatalf("len = %d, want %d; out = %v", len(out), tt.wantLen, out)
+			}
+			if tt.wantCheck != nil {
+				tt.wantCheck(t, out)
+			}
+		})
+	}
+}
+
+func TestTruncateObserved(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		max        int
+		wantSuffix string
+		wantLen    int // expected len of result, 0 = not checked
+		unchanged  bool
+	}{
+		{
+			name:      "empty string",
+			input:     "",
+			max:       500,
+			unchanged: true,
+		},
+		{
+			name:      "under limit",
+			input:     "short",
+			max:       500,
+			unchanged: true,
+		},
+		{
+			name:      "exact boundary",
+			input:     strings.Repeat("x", 500),
+			max:       500,
+			unchanged: true,
+		},
+		{
+			name:       "over limit",
+			input:      strings.Repeat("x", 600),
+			max:        500,
+			wantSuffix: "…",
+		},
+		{
+			name:       "multi-byte UTF-8 at boundary",
+			input:      strings.Repeat("x", 499) + "\u2603" + "extra", // snowman = 3 bytes
+			max:        500,
+			wantSuffix: "…",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateObserved(tt.input, tt.max)
+			if tt.unchanged {
+				if got != tt.input {
+					t.Errorf("expected unchanged input, got %q", got)
+				}
+				return
+			}
+			if !strings.HasSuffix(got, tt.wantSuffix) {
+				t.Errorf("result should end with %q, got %q", tt.wantSuffix, got)
+			}
+			// Result before the suffix must be valid UTF-8.
+			body := strings.TrimSuffix(got, "…")
+			for i, r := range body {
+				if r == '\uFFFD' {
+					t.Errorf("invalid UTF-8 at position %d in truncated output", i)
+					break
+				}
+			}
+		})
+	}
+}
+
 func TestRunCmdInvalidThreshold(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()
