@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, or grpc)")
+	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, grpc, or ws)")
 	errNoCapture       = errors.New("capture has neither source nor jsonpath")
 )
 
@@ -64,6 +64,7 @@ type Step struct {
 	Exec        *ExecRequest    `yaml:"exec"`
 	Browser     *BrowserRequest `yaml:"browser"`
 	GRPC        *GRPCRequest    `yaml:"grpc"`
+	WS          *WSRequest      `yaml:"ws"`
 	Retry       *Retry          `yaml:"retry"`
 	Expect      string          `yaml:"expect"` // natural language, judged by LLM
 	Capture     []Capture       `yaml:"capture"`
@@ -76,7 +77,7 @@ type Retry struct {
 	Timeout  string `yaml:"timeout"`  // overall timeout cap (optional)
 }
 
-// StepType returns the step type key: "request", "exec", "browser", "grpc", or "" if unknown.
+// StepType returns the step type key: "request", "exec", "browser", "grpc", "ws", or "" if unknown.
 func (s Step) StepType() string {
 	if s.Request != nil {
 		return "request"
@@ -89,6 +90,9 @@ func (s Step) StepType() string {
 	}
 	if s.GRPC != nil {
 		return "grpc"
+	}
+	if s.WS != nil {
+		return "ws"
 	}
 	return ""
 }
@@ -151,4 +155,18 @@ type Capture struct {
 	Name     string `yaml:"name"`     // variable name
 	JSONPath string `yaml:"jsonpath"` // path into response body
 	Source   string `yaml:"source"`   // capture source (e.g. "stdout", "stderr", "exitcode")
+}
+
+// WSRequest describes a WebSocket step: connect, send, and/or receive.
+type WSRequest struct {
+	URL     string     `yaml:"url"`     // path to connect (e.g. /ws/bids); omit to reuse existing conn
+	ID      string     `yaml:"id"`      // connection ID for multi-conn scenarios; defaults to "default"
+	Send    string     `yaml:"send"`    // message to send (optional)
+	Receive *WSReceive `yaml:"receive"` // receive config (optional; nil = send-only)
+}
+
+// WSReceive configures how to receive WebSocket messages.
+type WSReceive struct {
+	Timeout string `yaml:"timeout"` // receive timeout (default: 5s)
+	Count   int    `yaml:"count"`   // number of messages to collect (default: 1)
 }

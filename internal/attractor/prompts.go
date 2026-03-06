@@ -143,9 +143,19 @@ func buildCapabilitySuffix(caps ScenarioCapabilities, language string) string {
 	return b.String()
 }
 
+// wsSupplementaryInstruction returns the extra line appended when WS is needed.
+// It is injected after the primary HTTP instruction, not as a new switch case.
+func wsSupplementaryInstruction(caps ScenarioCapabilities) string {
+	if caps.NeedsWS {
+		return "\n- The HTTP server must also handle WebSocket upgrade requests on port 8080"
+	}
+	return ""
+}
+
 // capabilityInstructions returns the core instruction text for the given capabilities.
 func capabilityInstructions(caps ScenarioCapabilities) string {
 	needsHTTP := caps.NeedsHTTP || caps.NeedsBrowser
+	ws := wsSupplementaryInstruction(caps)
 	switch {
 	case needsHTTP && caps.NeedsGRPC:
 		return `- Generate ALL files needed for a working application that serves both HTTP and gRPC
@@ -153,7 +163,7 @@ func capabilityInstructions(caps ScenarioCapabilities) string {
 - The application MUST listen on port 8080 for HTTP requests
 - The application MUST serve gRPC on port 50051
 - The gRPC server MUST enable server reflection so clients can discover services at runtime
-- Include .proto files defining the service and compile them as part of the Docker build`
+- Include .proto files defining the service and compile them as part of the Docker build` + ws
 	case caps.NeedsExec && caps.NeedsGRPC:
 		return `- Generate ALL files needed for a working application that serves both as a CLI tool and a gRPC server
 - Include a Dockerfile that builds the application and installs it in PATH
@@ -171,14 +181,14 @@ func capabilityInstructions(caps ScenarioCapabilities) string {
 		return `- Generate ALL files needed for a working application that serves both as an HTTP server AND a command-line tool
 - Include a Dockerfile that builds the application and installs it in PATH
 - The application MUST listen on port 8080 for HTTP requests
-- The application must also support command-line invocation for CLI operations`
+- The application must also support command-line invocation for CLI operations` + ws
 	case caps.NeedsExec:
 		return `- Generate ALL files needed for a working command-line application
 - Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
 - Do NOT start a server or listen on any port. The application is a CLI tool invoked via command-line arguments.`
 	default:
 		return `- Generate ALL files needed for a working application
-- Include a Dockerfile that builds and runs the application on port 8080`
+- Include a Dockerfile that builds and runs the application on port 8080` + ws
 	}
 }
 

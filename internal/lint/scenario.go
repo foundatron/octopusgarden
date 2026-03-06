@@ -317,8 +317,9 @@ func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, c
 	execFE, hasExec := fields["exec"]
 	browserFE, hasBrowser := fields["browser"]
 	grpcFE, hasGRPC := fields["grpc"]
+	wsFE, hasWS := fields["ws"]
 
-	typeCount := countTrue(hasReq, hasExec, hasBrowser, hasGRPC)
+	typeCount := countTrue(hasReq, hasExec, hasBrowser, hasGRPC, hasWS)
 
 	switch {
 	case typeCount > 1:
@@ -326,14 +327,14 @@ func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, c
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step has multiple step types; exactly one of request, exec, browser, or grpc is required",
+			Message: "step has multiple step types; exactly one of request, exec, browser, grpc, or ws is required",
 		}}
 	case typeCount == 0:
 		return "", []Diagnostic{{
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step missing step type: exactly one of request, exec, browser, or grpc is required",
+			Message: "step missing step type: exactly one of request, exec, browser, grpc, or ws is required",
 		}}
 	case hasReq:
 		return "request", lintRequest(path, reqFE.value, cs)
@@ -343,6 +344,8 @@ func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, c
 		return "browser", lintBrowser(path, browserFE.value, cs)
 	case hasGRPC:
 		return "grpc", lintGRPC(path, grpcFE.value, cs)
+	case hasWS:
+		return "ws", lintWS(path, wsFE.value, cs)
 	default:
 		return "", nil
 	}
@@ -899,6 +902,85 @@ func lintCaptureName(path string, fields map[string]*fieldEntry, capNode *yaml.N
 		})
 	}
 	cs.add(name, path, nameFE.value.Line)
+	return diags
+}
+
+func lintWS(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+	if node.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "ws must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	// Warn if url is absent (executor will fail at runtime if no prior connection exists).
+	urlFE, hasURL := fields["url"]
+	if !hasURL || urlFE.value.Value == "" {
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Warning,
+			Message: "ws step missing url; connection must have been established in a prior step",
+		})
+	} else {
+		diags = append(diags, checkVarRefs(extractVarRefs(urlFE.value.Value), cs, path, urlFE.value.Line)...)
+	}
+
+	// Check var refs in id and send.
+	if idFE, ok := fields["id"]; ok {
+		diags = append(diags, checkVarRefs(extractVarRefs(idFE.value.Value), cs, path, idFE.value.Line)...)
+	}
+	if sendFE, ok := fields["send"]; ok {
+		diags = append(diags, checkVarRefs(extractVarRefs(sendFE.value.Value), cs, path, sendFE.value.Line)...)
+	}
+
+	// Check receive (optional mapping with timeout and count).
+	if recvFE, ok := fields["receive"]; ok && recvFE.value.Kind == yaml.MappingNode {
+		diags = append(diags, lintWSReceive(path, recvFE.value)...)
+	}
+
+	return diags
+}
+
+func lintWSReceive(path string, node *yaml.Node) []Diagnostic {
+	recvFields := nodeFields(node)
+	var diags []Diagnostic
+
+	if timeoutFE, ok := recvFields["timeout"]; ok && timeoutFE.value.Value != "" {
+		if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    timeoutFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("ws receive timeout: invalid duration %q", timeoutFE.value.Value),
+			})
+		}
+	}
+
+	if countFE, ok := recvFields["count"]; ok {
+		var c int
+		if err := countFE.value.Decode(&c); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    countFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("ws receive count must be a positive integer: %s", err),
+			})
+		} else if c <= 0 {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    countFE.value.Line,
+				Level:   Error,
+				Message: "ws receive count must be a positive integer",
+			})
+		}
+	}
+
 	return diags
 }
 

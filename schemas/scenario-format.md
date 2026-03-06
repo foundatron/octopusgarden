@@ -21,7 +21,7 @@ Violations prevent the scenario from being loaded.
 | SC012 | steps must be a non-empty array |
 | SC013 | setup must be an array |
 | SC014 | each step must be a YAML mapping |
-| SC015 | step must have exactly one step type (request, exec, browser, or grpc) |
+| SC015 | step must have exactly one step type (request, exec, browser, grpc, or ws) |
 | SC018 | request must be a YAML mapping |
 | SC019 | request must have a method |
 | SC020 | HTTP method must be valid — Allowed: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. |
@@ -57,6 +57,9 @@ Violations prevent the scenario from being loaded.
 | SC053 | grpc timeout must be a valid Go duration |
 | SC054 | grpc stream messages must be an array |
 | SC055 | grpc receive timeout must be a valid Go duration |
+| SC060 | ws must be a YAML mapping |
+| SC062 | ws receive timeout must be a valid Go duration |
+| SC063 | ws receive count must be a positive integer |
 
 ## SHOULD (Warnings)
 
@@ -72,6 +75,7 @@ Violations are reported but do not block loading.
 | SC027 | capture name shadows an earlier capture |
 | SC030 | variable reference has no matching capture — Variables use {name} syntax and must be captured in a prior step. |
 | SC048 | browser assert should have assertion fields |
+| SC061 | ws step missing url; no prior connection may exist |
 
 ## Notes
 

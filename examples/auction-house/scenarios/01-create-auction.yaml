@@ -1,0 +1,23 @@
+id: create-auction
+description: Create an auction item and verify it is returned with the starting price
+type: api
+steps:
+  - description: Create a new auction item
+    request:
+      method: POST
+      path: /auctions
+      headers:
+        Content-Type: application/json
+      body:
+        item: "Vintage Clock"
+        starting_price: 100
+    expect: The response includes the auction ID, item name, and starting price
+    capture:
+      - name: auction_id
+        jsonpath: $.id
+
+  - description: Retrieve the auction and verify initial state
+    request:
+      method: GET
+      path: /auctions/{auction_id}
+    expect: The auction shows the correct item and current price equal to the starting price
