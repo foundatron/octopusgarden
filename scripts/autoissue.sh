@@ -247,7 +247,9 @@ push_with_retry() {
   local push_retries=0 max_push_retries=2 push_output
 
   while true; do
-    push_output=$(git push --force-with-lease -u origin "$branch" 2>&1) && return 0
+    local push_exit=0
+    push_output=$(git push --force-with-lease -u origin "$branch" 2>&1) || push_exit=$?
+    if [[ $push_exit -eq 0 ]]; then return 0; fi
 
     push_retries=$((push_retries + 1))
     if [[ $push_retries -gt $max_push_retries ]]; then
@@ -272,7 +274,7 @@ Instructions:
    - lint failures: run \`make lint\` and fix issues.
    - test failures: run \`make test\` and fix issues.
    - trailing whitespace / end-of-file: fix the formatting.
-3. Run \`make build && make test && make lint\` to verify everything passes.
+3. Run \`make build && make test && make lint && make docs\` to verify everything passes.
 4. Stage all fixes and amend the commit: \`git add -A && git commit --amend --no-edit\`
 5. Do NOT push. Do NOT create a PR.
 PUSH_FIX_PROMPT
@@ -488,7 +490,7 @@ ${REVIEWED_PLAN_CONTENT}
 Instructions:
 1. Implement all changes described in the plan. Follow the coding standards in CLAUDE.md.
 2. Write tests as specified in the plan.
-3. Run \`make build && make test && make lint\` and fix any issues.
+3. Run \`make build && make test && make lint && make docs\` and fix any issues.
 4. Stage and commit all changes with a conventional commit message (e.g., feat(package): description).
 5. Do NOT push the branch. Do NOT create a PR. Only commit locally.
 IMPLEMENT_PROMPT
@@ -588,7 +590,7 @@ ${REVIEW_FINDINGS}
 
 Instructions:
 1. Fix ALL errors and warnings listed in the findings. Nits are optional but encouraged.
-2. Run \`make build && make test && make lint\` and fix any issues.
+2. Run \`make build && make test && make lint && make docs\` and fix any issues.
 3. Stage all fixes and amend the previous commit: \`git add -A && git commit --amend --no-edit\`
 4. Do NOT push. Do NOT create a PR.
 FIX_PROMPT
