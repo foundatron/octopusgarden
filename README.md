@@ -106,6 +106,19 @@ octog validate \
   --target http://localhost:8080
 ```
 
+Bootstrap generation with patterns from an existing project:
+
+```bash
+# Extract patterns from an exemplar codebase
+octog extract --source-dir /path/to/exemplar --output genes.json
+
+# Use extracted patterns to guide code generation
+octog run \
+  --spec examples/hello-api/spec.md \
+  --scenarios examples/hello-api/scenarios/ \
+  --genes genes.json
+```
+
 List available models and check past runs:
 
 ```bash
@@ -124,6 +137,7 @@ Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
+  extract    Extract coding patterns from a source directory into a gene file
   models     List available models
   configure  Interactively configure API keys
 ```
@@ -140,6 +154,8 @@ Run `octog models` to list available models.
 | `--judge-model`    | `claude-haiku-4-5`  | LLM model for satisfaction judging                             |
 | `--budget`         | `5.00`              | Maximum spend in USD                                           |
 | `--threshold`      | `95`                | Satisfaction target (0-100)                                    |
+| `--genes`          | *(none)*            | Path to gene file from `octog extract` (bootstraps generation) |
+| `--language`       | `go`                | Target language: `go`, `python`, `node`, `rust`, or `auto`     |
 | `--patch`          | `false`             | Incremental patch mode (iteration 2+ sends only changed files) |
 | `--context-budget` | `0`                 | Max estimated tokens for spec in system prompt; 0 = unlimited  |
 
@@ -152,6 +168,14 @@ Run `octog models` to list available models.
 | `--judge-model` | `claude-haiku-4-5` | LLM model for satisfaction judging                                  |
 | `--threshold`   | `0`                | Minimum satisfaction score; non-zero enables exit code 1 on failure |
 
+### `extract`
+
+| Flag           | Default      | Description                                             |
+| -------------- | ------------ | ------------------------------------------------------- |
+| `--source-dir` | *(required)* | Path to source directory to extract patterns from       |
+| `--output`     | `genes.json` | Output file path (use `-` for stdout)                   |
+| `--model`      | *(auto)*     | LLM model for extraction (defaults to judge-tier model) |
+
 ### `status`
 
 No flags. Shows a table of recent runs with status, model, score, iterations, cost, and timestamp.
@@ -163,11 +187,15 @@ No flags. Shows a table of recent runs with status, model, score, iterations, co
   these during code generation)
 - **Attractor** — The convergence loop: generate -> test -> score -> feedback -> regenerate
 - **Satisfaction** — Probabilistic scoring (0-100) via LLM-as-judge, not boolean pass/fail
+- **Gene Transfusion** — Extract coding patterns from exemplar codebases to bootstrap generation
+  (`octog extract` → `octog run --genes`)
 
 ## Documentation
 
 - [Architecture](docs/architecture.md) — System design, data structures, LLM interfaces, Docker
   strategy
+- [Gene Transfusion](docs/gene-transfusion.md) — Extract and use coding patterns from exemplar
+  codebases
 - [Contributing](CONTRIBUTING.md) — Development setup, coding standards, and how to contribute
 
 ## License

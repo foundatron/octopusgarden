@@ -43,6 +43,7 @@ octopusgarden/
 │   │   ├── json.go               # Shared JSON extraction for judge responses
 │   │   ├── models.go             # Model registry, cost tracking
 │   │   └── prompt.go             # Prompt templates
+│   ├── gene/                     # Gene transfusion (scan, analyze, gene types)
 │   ├── lint/                     # Spec and scenario linting
 │   └── store/                    # SQLite run history (db.go, types.go)
 ├── examples/                     # Example specs and scenarios
@@ -60,6 +61,9 @@ cmd/octog
     │       ├── internal/llm
     │       ├── internal/spec
     │       └── internal/container
+    ├── internal/gene        (scan, analyze, gene types)
+    │       ├── internal/llm
+    │       └── internal/spec
     ├── internal/scenario    (loader, runner, judge)
     │       └── internal/llm
     ├── internal/llm         (client interface, anthropic, openai, models, prompts)
@@ -608,7 +612,8 @@ even after caller context cancellation. `Close()` closes the underlying Docker c
 ## CLI Interface
 
 ```text
-octog run       --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--patch] [--context-budget 0] [--provider anthropic|openai]
+octog run       --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--context-budget 0] [--provider anthropic|openai]
+octog extract   --source-dir <path> [--output genes.json] [--model ...] [--provider anthropic|openai]
 octog validate  --scenarios <dir> --target <url> [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [--provider anthropic|openai]
 octog status    [--format text|json]
 octog lint      --spec <path> --scenarios <dir>
@@ -616,11 +621,42 @@ octog models    [--provider anthropic|openai]
 octog configure
 ```
 
-Subcommands: `run`, `validate`, `status`, `lint`, `models`, `configure`.
+Subcommands: `run`, `validate`, `status`, `extract`, `lint`, `models`, `configure`.
 
 Provider is auto-detected from which API key is set. Use `--provider` to disambiguate when both are
 present. Config file (`~/.octopusgarden/config`) supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`;
 env vars take precedence. `OPENAI_BASE_URL` overrides the OpenAI endpoint for Ollama etc.
+
+## Gene Transfusion
+
+Gene transfusion bootstraps code generation by extracting patterns from an exemplar codebase. The
+pipeline: `gene.Scan` selects high-signal files (markers, README, Dockerfile, entrypoint, handlers,
+models) within a ~20K token budget → `gene.Analyze` sends them to an LLM to produce a structured
+guide → the guide is stored as a `Gene` JSON file.
+
+[embedmd]:# (../internal/gene/gene.go go /^\/\/ Gene represents/ /^}/)
+```go
+// Gene represents an extracted coding guide for a specific language,
+// derived from a source repository's patterns and conventions.
+type Gene struct {
+	Version     int       `json:"version"`
+	Source      string    `json:"source"`
+	Language    string    `json:"language"`
+	ExtractedAt time.Time `json:"extracted_at"`
+	Guide       string    `json:"guide"`
+	TokenCount  int       `json:"token_count"`
+}
+```
+
+At runtime, `--genes genes.json` loads the guide into `RunOptions.Genes`. The attractor's
+`buildSystemPrompt` injects it between the spec and instructions with a "PROVEN PATTERNS" header.
+The spec always takes precedence on conflicts.
+
+Cross-language synthesis: when `Gene.Language` differs from the target `--language`, a
+`CROSS-LANGUAGE NOTE` is appended instructing the LLM to preserve structural patterns while using
+idiomatic target-language constructs.
+
+See [Gene Transfusion](gene-transfusion.md) for the full user guide.
 
 ## SQLite Schema
 
