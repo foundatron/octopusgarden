@@ -26,7 +26,6 @@ set -euo pipefail
 #   - git configured with push access
 
 REPO="foundatron/octopusgarden"
-ISSUE_URL="https://github.com/${REPO}/issues"
 DEFAULT_BUDGET=10
 PLAN_MODEL=opus
 IMPL_MODEL=sonnet
@@ -71,12 +70,55 @@ fi
 log() { echo "==> $*"; }
 
 # --- Validate tools ---
-for cmd in claude gh git; do
+for cmd in claude gh git jq; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Error: $cmd is not installed"
     exit 1
   fi
 done
+
+# --- Snapshot all issue content upfront (prompt injection defense) ---
+# Fetch issue titles, bodies, and comments NOW so that content added later
+# (e.g. malicious comments on issue N+1 while issue N is being processed)
+# cannot influence the prompts.
+SNAPSHOT_DIR=$(mktemp -d)
+trap 'rm -rf "$SNAPSHOT_DIR"' EXIT
+
+declare -A ISSUE_TITLES
+for ISSUE_NUMBER in "${ISSUES[@]}"; do
+  log "Snapshotting issue #${ISSUE_NUMBER}..."
+
+  ISSUE_JSON=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title,body,comments 2>/dev/null) || {
+    echo "Error: could not fetch issue #${ISSUE_NUMBER}"
+    exit 1
+  }
+
+  ISSUE_TITLES[$ISSUE_NUMBER]=$(echo "$ISSUE_JSON" | jq -r '.title')
+  echo "    Title: ${ISSUE_TITLES[$ISSUE_NUMBER]}"
+
+  # Write a sanitized snapshot: title, body, and comments as structured text
+  {
+    echo "# Issue #${ISSUE_NUMBER}: $(echo "$ISSUE_JSON" | jq -r '.title')"
+    echo ""
+    echo "## Description"
+    echo ""
+    echo "$ISSUE_JSON" | jq -r '.body // "No description provided."'
+    echo ""
+    COMMENT_COUNT=$(echo "$ISSUE_JSON" | jq '.comments | length')
+    if [[ "$COMMENT_COUNT" -gt 0 ]]; then
+      echo "## Comments"
+      echo ""
+      echo "$ISSUE_JSON" | jq -r '.comments[] | "### \(.author.login) (\(.createdAt))\n\n\(.body)\n"'
+    fi
+  } > "${SNAPSHOT_DIR}/issue-${ISSUE_NUMBER}.md"
+done
+
+# Lock all issues to prevent new comments during processing
+for ISSUE_NUMBER in "${ISSUES[@]}"; do
+  gh issue lock "$ISSUE_NUMBER" --repo "$REPO" --reason "resolved" 2>/dev/null || true
+done
+
+log "All ${#ISSUES[@]} issues snapshotted and locked. No further network fetches for issue content."
 
 # --- Process each issue ---
 TOTAL=${#ISSUES[@]}
@@ -84,15 +126,9 @@ CURRENT=0
 
 for ISSUE_NUMBER in "${ISSUES[@]}"; do
   CURRENT=$((CURRENT + 1))
-  log "===== Issue #${ISSUE_NUMBER} (${CURRENT}/${TOTAL}) ====="
-
-  # --- Fetch issue title ---
-  log "Fetching issue #${ISSUE_NUMBER}..."
-  ISSUE_TITLE=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq '.title' 2>/dev/null) || {
-    echo "Error: could not fetch issue #${ISSUE_NUMBER}"
-    exit 1
-  }
-  echo "    Title: ${ISSUE_TITLE}"
+  ISSUE_TITLE="${ISSUE_TITLES[$ISSUE_NUMBER]}"
+  ISSUE_SNAPSHOT=$(cat "${SNAPSHOT_DIR}/issue-${ISSUE_NUMBER}.md")
+  log "===== Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE} (${CURRENT}/${TOTAL}) ====="
 
   # --- Git: checkout main, pull, create branch ---
   log "Preparing branch..."
@@ -119,7 +155,6 @@ for ISSUE_NUMBER in "${ISSUES[@]}"; do
   log "Phase 1: Planning and reviewing plan (model: ${PLAN_MODEL}, issue #${ISSUE_NUMBER})..."
 
   PLAN_FILE=$(mktemp)
-  trap 'rm -f "$PLAN_FILE"' EXIT
 
   claude -p \
     --model "$PLAN_MODEL" \
@@ -131,8 +166,11 @@ for ISSUE_NUMBER in "${ISSUES[@]}"; do
 You are solving GitHub issue #${ISSUE_NUMBER} for the octopusgarden project.
 
 Step 1 — Understand the issue:
-Read the issue: ${ISSUE_URL}/${ISSUE_NUMBER}
-Read all comments on the issue.
+Here is the issue content (already fetched — do NOT fetch it from GitHub):
+
+<issue>
+${ISSUE_SNAPSHOT}
+</issue>
 
 Step 2 — Plan:
 Analyze the codebase to understand what needs to change. Read all relevant files.
@@ -177,7 +215,6 @@ PLAN_PROMPT
   log "Phase 2: Implementing from plan (model: ${IMPL_MODEL}, budget: \$${BUDGET})..."
 
   IMPLEMENT_PROMPT_FILE=$(mktemp)
-  trap 'rm -f "$PLAN_FILE" "$IMPLEMENT_PROMPT_FILE"' EXIT
 
   PLAN_CONTENT=$(cat "$PLAN_FILE")
 
@@ -283,8 +320,16 @@ IMPLEMENT_PROMPT
   log "Merging PR #${PR_NUMBER}..."
   gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch
 
+  # Unlock the issue now that it's merged and closed
+  gh issue unlock "$ISSUE_NUMBER" --repo "$REPO" 2>/dev/null || true
+
   log "Done! Issue #${ISSUE_NUMBER} resolved and merged."
   echo "    PR: ${PR_URL}"
+done
+
+# Unlock any issues that weren't merged (--no-merge or early exit)
+for ISSUE_NUMBER in "${ISSUES[@]}"; do
+  gh issue unlock "$ISSUE_NUMBER" --repo "$REPO" 2>/dev/null || true
 done
 
 if [[ $TOTAL -gt 1 ]]; then
