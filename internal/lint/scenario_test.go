@@ -86,7 +86,7 @@ steps:
     expect: "ok"
 `,
 			wantErrors: 1,
-			wantMsg:    "exactly one of request, exec, browser, or grpc is required",
+			wantMsg:    "exactly one of request, exec, browser, grpc, or ws is required",
 		},
 		{
 			name: "missing method",
@@ -1264,6 +1264,94 @@ steps:
 `,
 			wantErrors: 1,
 			wantMsg:    "grpc receive timeout",
+		},
+		{
+			name: "valid ws step with url",
+			yaml: `id: test
+steps:
+  - description: Connect and receive
+    ws:
+      url: /ws/bids
+      receive:
+        timeout: 5s
+        count: 1
+    expect: "Received a bid"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "ws step missing url warns",
+			yaml: `id: test
+steps:
+  - description: Receive only
+    ws:
+      receive:
+        timeout: 1s
+        count: 1
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "ws step missing url",
+		},
+		{
+			name: "ws receive timeout invalid",
+			yaml: `id: test
+steps:
+  - description: Connect
+    ws:
+      url: /ws
+      receive:
+        timeout: notaduration
+        count: 1
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "ws receive timeout: invalid duration",
+		},
+		{
+			name: "ws receive count zero errors",
+			yaml: `id: test
+steps:
+  - description: Connect
+    ws:
+      url: /ws
+      receive:
+        count: 0
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "ws receive count must be a positive integer",
+		},
+		{
+			name: "ws step with multiple types errors",
+			yaml: `id: test
+steps:
+  - description: Both ws and request
+    ws:
+      url: /ws
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "step has multiple step types",
+		},
+		{
+			name: "ws send with undefined var ref warns",
+			yaml: `id: test
+steps:
+  - description: Connect
+    ws:
+      url: /ws
+      send: "{missing_var}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "missing_var",
 		},
 	}
 

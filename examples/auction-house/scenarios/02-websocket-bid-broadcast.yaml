@@ -1,0 +1,40 @@
+id: websocket-bid-broadcast
+description: Place a bid via HTTP and verify the WebSocket subscriber receives the broadcast
+type: api
+weight: 2
+setup:
+  - description: Create an auction to bid on
+    request:
+      method: POST
+      path: /auctions
+      headers:
+        Content-Type: application/json
+      body:
+        item: "Antique Vase"
+        starting_price: 50
+    capture:
+      - name: auction_id
+        jsonpath: $.id
+
+steps:
+  - description: Subscribe to live bid updates via WebSocket
+    ws:
+      url: /ws/auctions/{auction_id}
+    expect: WebSocket connection is established successfully
+
+  - description: Place a winning bid via HTTP
+    request:
+      method: POST
+      path: /auctions/{auction_id}/bid
+      headers:
+        Content-Type: application/json
+      body:
+        amount: 75
+    expect: The bid is accepted with amount 75
+
+  - description: Receive the bid broadcast on the WebSocket connection
+    ws:
+      receive:
+        timeout: 5s
+        count: 1
+    expect: The WebSocket message contains a bid event with amount 75

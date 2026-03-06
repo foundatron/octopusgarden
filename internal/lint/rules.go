@@ -138,8 +138,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC015",
 		Level:       Error,
-		Summary:     "step must have exactly one step type (request, exec, browser, or grpc)",
-		MsgContains: "exactly one of request, exec, browser, or grpc is required",
+		Summary:     "step must have exactly one step type (request, exec, browser, grpc, or ws)",
+		MsgContains: "exactly one of request, exec, browser, grpc, or ws is required",
 	},
 	{
 		ID:          "SC016",
@@ -245,7 +245,7 @@ var ScenarioRules = []Rule{
 		ID:          "SC032",
 		Level:       Error,
 		Summary:     "step must not have multiple step types",
-		MsgContains: "step has multiple step types; exactly one of request, exec, browser, or grpc is required",
+		MsgContains: "step has multiple step types; exactly one of request, exec, browser, grpc, or ws is required",
 	},
 	{
 		ID:          "SC033",
@@ -386,5 +386,30 @@ var ScenarioRules = []Rule{
 		Level:       Error,
 		Summary:     "grpc receive timeout must be a valid Go duration",
 		MsgContains: "grpc receive timeout",
+	},
+	// WebSocket step rules.
+	{
+		ID:          "SC060",
+		Level:       Error,
+		Summary:     "ws must be a YAML mapping",
+		MsgContains: "ws must be a mapping",
+	},
+	{
+		ID:          "SC061",
+		Level:       Warning,
+		Summary:     "ws step missing url; no prior connection may exist",
+		MsgContains: "ws step missing url",
+	},
+	{
+		ID:          "SC062",
+		Level:       Error,
+		Summary:     "ws receive timeout must be a valid Go duration",
+		MsgContains: "ws receive timeout: invalid duration",
+	},
+	{
+		ID:          "SC063",
+		Level:       Error,
+		Summary:     "ws receive count must be a positive integer",
+		MsgContains: "ws receive count must be a positive integer",
 	},
 }

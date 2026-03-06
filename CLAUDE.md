@@ -42,6 +42,7 @@ Minimize — stdlib first. Allowed exceptions:
 - `github.com/jhump/protoreflect/v2` — dynamic gRPC via server reflection (no compiled protos)
 - `go.opentelemetry.io/otel` + related packages — OpenTelemetry tracing (spans for LLM calls,
   container ops, attractor loop)
+- `github.com/coder/websocket` — WebSocket client for scenario ws steps (context-native, pure Go)
 
 ## Design Invariants
 

@@ -84,7 +84,11 @@ func TestRunAndScore(t *testing.T) {
 		},
 	}
 
-	agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil }, false, "")
+	agg, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001")
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -132,7 +136,11 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 
 	mock := &mockLLMClient{}
 	// Use unreachable address to deterministically cause connection errors.
-	agg, err := runAndScore(context.Background(), scenarios, "http://127.0.0.1:1", mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil }, false, "")
+	agg, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     "http://127.0.0.1:1",
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001")
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -304,7 +312,11 @@ func TestValidateThreshold(t *testing.T) {
 				},
 			}
 
-			agg, err := runAndScore(context.Background(), scenarios, srv.URL, mock, testLogger(), "claude-haiku-4-5-20251001", func() *container.Session { return nil }, false, "")
+			agg, err := runAndScore(context.Background(), scenarios, executorOpts{
+				targetURL:     srv.URL,
+				logger:        testLogger(),
+				sessionGetter: func() *container.Session { return nil },
+			}, mock, "claude-haiku-4-5-20251001")
 			if err != nil {
 				t.Fatalf("runAndScore: %v", err)
 			}

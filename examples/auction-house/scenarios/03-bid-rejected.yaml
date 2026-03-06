@@ -1,0 +1,33 @@
+id: bid-rejected
+description: Bids at or below the current price are rejected
+type: api
+setup:
+  - description: Create an auction with a starting price
+    request:
+      method: POST
+      path: /auctions
+      headers:
+        Content-Type: application/json
+      body:
+        item: "Rare Coin"
+        starting_price: 200
+    capture:
+      - name: auction_id
+        jsonpath: $.id
+
+steps:
+  - description: Place a bid equal to the starting price (should be rejected)
+    request:
+      method: POST
+      path: /auctions/{auction_id}/bid
+      headers:
+        Content-Type: application/json
+      body:
+        amount: 200
+    expect: The bid is rejected because it is not strictly greater than the current price
+
+  - description: Verify the current price has not changed
+    request:
+      method: GET
+      path: /auctions/{auction_id}
+    expect: The auction current price is still 200 (the starting price)
