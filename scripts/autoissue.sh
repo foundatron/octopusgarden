@@ -258,7 +258,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-declare -A ISSUE_TITLES
+ISSUE_TITLES=()
 for ISSUE_NUMBER in "${ISSUES[@]}"; do
   log "Snapshotting issue #${ISSUE_NUMBER}..."
 
@@ -267,8 +267,8 @@ for ISSUE_NUMBER in "${ISSUES[@]}"; do
     exit 1
   }
 
-  ISSUE_TITLES[$ISSUE_NUMBER]=$(echo "$ISSUE_JSON" | jq -r '.title')
-  echo "    Title: ${ISSUE_TITLES[$ISSUE_NUMBER]}"
+  ISSUE_TITLES+=("$(echo "$ISSUE_JSON" | jq -r '.title')")
+  echo "    Title: ${ISSUE_TITLES[${#ISSUE_TITLES[@]}-1]}"
 
   {
     echo "# Issue #${ISSUE_NUMBER}: $(echo "$ISSUE_JSON" | jq -r '.title')"
@@ -297,9 +297,10 @@ log "All ${#ISSUES[@]} issues snapshotted and locked. No further network fetches
 TOTAL=${#ISSUES[@]}
 CURRENT=0
 
-for ISSUE_NUMBER in "${ISSUES[@]}"; do
+for IDX in "${!ISSUES[@]}"; do
+  ISSUE_NUMBER="${ISSUES[$IDX]}"
   CURRENT=$((CURRENT + 1))
-  ISSUE_TITLE="${ISSUE_TITLES[$ISSUE_NUMBER]}"
+  ISSUE_TITLE="${ISSUE_TITLES[$IDX]}"
   ISSUE_SNAPSHOT=$(cat "${WORK_DIR}/issue-${ISSUE_NUMBER}.md")
   ISSUE_WORK_DIR="${WORK_DIR}/${ISSUE_NUMBER}"
   mkdir -p "$ISSUE_WORK_DIR"
