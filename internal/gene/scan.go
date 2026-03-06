@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/foundatron/octopusgarden/internal/spec"
 )
 
 var (
@@ -406,10 +408,6 @@ func selectLargest(candidates []fileCandidate) *fileCandidate {
 	return best
 }
 
-func estimateTokens(text string) int {
-	return len(text) / 4
-}
-
 func enforceTokenBudget(files []SelectedFile) []SelectedFile {
 	// Drop in reverse priority: model -> handler -> readme.
 	dropOrder := []string{"model", "handler", "readme"}
@@ -425,7 +423,7 @@ func enforceTokenBudget(files []SelectedFile) []SelectedFile {
 func totalTokens(files []SelectedFile) int {
 	total := 0
 	for _, f := range files {
-		total += estimateTokens(f.Content)
+		total += spec.EstimateTokens(f.Content)
 	}
 	return total
 }

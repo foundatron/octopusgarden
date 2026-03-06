@@ -197,16 +197,3 @@ func TestAnalyzeUsesModel(t *testing.T) {
 		t.Errorf("Model = %q, want %q", mock.captured.Model, "my-custom-model")
 	}
 }
-
-func TestAnalyzeCostLogged(t *testing.T) {
-	mock := &mockClient{resp: llm.GenerateResponse{
-		Content:      cannedGuide,
-		InputTokens:  500,
-		OutputTokens: 200,
-		CostUSD:      0.0035,
-	}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
-	if err != nil {
-		t.Fatalf("Analyze() error = %v", err)
-	}
-}

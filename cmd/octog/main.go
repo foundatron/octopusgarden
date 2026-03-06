@@ -617,7 +617,7 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("extract", flag.ContinueOnError)
 	sourceDir := fs.String("source-dir", "", "path to source directory to extract patterns from (required)")
 	output := fs.String("output", "genes.json", "output file path (use \"-\" for stdout)")
-	model := fs.String("model", "claude-haiku-4-5", "LLM model to use for extraction")
+	model := fs.String("model", "", "LLM model to use for extraction (default: provider-specific)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 
 	fs.Usage = func() {
@@ -655,6 +655,9 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *model == "" {
+		*model = defaultJudgeModel(clients.provider)
+	}
 
 	g, err := gene.Analyze(ctx, logger, clients.client, *model, *sourceDir, scan)
 	if err != nil {
@@ -664,6 +667,9 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fmt.Fprintf(os.Stderr, "Extracted patterns from %s (%s, %d tokens) → %s\n", *sourceDir, g.Language, g.TokenCount, *output) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 
 	if *output == "-" {
+		if err := gene.Validate(g); err != nil {
+			return fmt.Errorf("gene validate: %w", err)
+		}
 		data, err := json.MarshalIndent(g, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal gene: %w", err)

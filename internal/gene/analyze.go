@@ -72,6 +72,7 @@ func Analyze(ctx context.Context, logger *slog.Logger, client llm.Client, model 
 
 func buildAnalyzeUserMessage(sourceDir string, scan ScanResult) string {
 	var b strings.Builder
+	b.Grow(256 * len(scan.Files))
 	fmt.Fprintf(&b, "Source directory: %s\n", sourceDir)
 	fmt.Fprintf(&b, "Detected language: %s\n\n", scan.Language)
 

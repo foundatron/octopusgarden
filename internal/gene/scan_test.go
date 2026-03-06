@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/foundatron/octopusgarden/internal/spec"
 )
 
 func writeTestFile(t *testing.T, dir, rel, content string) {
@@ -247,7 +249,7 @@ func TestScanTokenBudget(t *testing.T) {
 	}
 	total := 0
 	for _, f := range res.Files {
-		total += estimateTokens(f.Content)
+		total += spec.EstimateTokens(f.Content)
 	}
 	if total > tokenBudget {
 		t.Errorf("total tokens = %d, want <= %d", total, tokenBudget)
