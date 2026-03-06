@@ -88,15 +88,15 @@ run_phase() {
 
   log "  Running ${phase_name} (model: ${model}, budget: \$${budget})..."
 
+  local exit_code=0
   claude -p \
     --model "$model" \
     --effort medium \
     --dangerously-skip-permissions \
     --max-budget-usd "$budget" \
     --output-format text \
-    "$(cat "$prompt_file")" > "$output_file"
+    "$(cat "$prompt_file")" > "$output_file" || exit_code=$?
 
-  local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
     log "  ERROR: ${phase_name} failed (exit code ${exit_code})"
     return 1
@@ -114,14 +114,14 @@ run_phase_nocapture() {
 
   log "  Running ${phase_name} (model: ${model}, budget: \$${budget})..."
 
+  local exit_code=0
   claude -p \
     --model "$model" \
     --effort medium \
     --dangerously-skip-permissions \
     --max-budget-usd "$budget" \
-    "$(cat "$prompt_file")"
+    "$(cat "$prompt_file")" || exit_code=$?
 
-  local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
     log "  ERROR: ${phase_name} failed (exit code ${exit_code})"
     return 1
@@ -238,6 +238,47 @@ EOF
 # Reads heredoc from stdin, writes to dest_file
 write_prompt() {
   cat > "$1"
+}
+
+# --- Helper: push with pre-push hook retry ---
+# Usage: push_with_retry <branch> <prompt_file> <impl_model>
+push_with_retry() {
+  local branch="$1" prompt_file="$2" impl_model="$3"
+  local push_retries=0 max_push_retries=2 push_output
+
+  while true; do
+    push_output=$(git push --force-with-lease -u origin "$branch" 2>&1) && return 0
+
+    push_retries=$((push_retries + 1))
+    if [[ $push_retries -gt $max_push_retries ]]; then
+      log "ERROR: Push failed after ${max_push_retries} retries (pre-push hooks keep failing)"
+      echo "$push_output"
+      return 1
+    fi
+
+    log "Push failed (likely pre-push hook). Attempting fix (retry ${push_retries}/${max_push_retries})..."
+
+    cat > "$prompt_file" <<PUSH_FIX_PROMPT
+The git push failed because pre-push hooks found issues in the octopusgarden project.
+
+<push-output>
+${push_output}
+</push-output>
+
+Instructions:
+1. Analyze the hook failure output above.
+2. Fix the issues. Common fixes:
+   - embedmd failures: run \`make docs\` to sync embedded code blocks, then stage the changes.
+   - lint failures: run \`make lint\` and fix issues.
+   - test failures: run \`make test\` and fix issues.
+   - trailing whitespace / end-of-file: fix the formatting.
+3. Run \`make build && make test && make lint\` to verify everything passes.
+4. Stage all fixes and amend the commit: \`git add -A && git commit --amend --no-edit\`
+5. Do NOT push. Do NOT create a PR.
+PUSH_FIX_PROMPT
+
+    run_phase_nocapture "Push Fix (retry ${push_retries})" "$impl_model" 2 "$prompt_file"
+  done
 }
 
 # --- Validate tools ---
@@ -418,7 +459,7 @@ REVIEW_PLAN_PROMPT
   validate_artifact "${ISSUE_WORK_DIR}/reviewed-plan.md" 10 "Complexity"
 
   # Parse complexity rating to select implementation model
-  COMPLEXITY=$(grep -A1 "### Complexity" "${ISSUE_WORK_DIR}/reviewed-plan.md" | grep -i "Rating:" | sed 's/.*Rating:[[:space:]]*//' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  COMPLEXITY=$(grep -A1 "### Complexity" "${ISSUE_WORK_DIR}/reviewed-plan.md" | grep -i "Rating:" | sed 's/.*Rating:[[:space:]]*//' | tr -d '[:space:]' | tr -d '*' | tr '[:upper:]' '[:lower:]')
   log "  Complexity rating: ${COMPLEXITY:-unknown}"
 
   # Adaptive model selection (only if user did not override --impl-model)
@@ -527,7 +568,7 @@ REVIEW_CODE_PROMPT
   # ============================================================
   # Phase 5: Fix Findings (skip if PASS with 0 errors, 0 warnings)
   # ============================================================
-  ASSESSMENT=$(grep -i "Assessment:" "${ISSUE_WORK_DIR}/review-findings.md" | tail -1 | sed 's/.*Assessment:[[:space:]]*//' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  ASSESSMENT=$(grep -i "Assessment:" "${ISSUE_WORK_DIR}/review-findings.md" | tail -1 | sed 's/.*Assessment:[[:space:]]*//' | tr -d '[:space:]' | tr -d '*' | tr '[:upper:]' '[:lower:]')
 
   if [[ "$ASSESSMENT" == "pass" ]]; then
     log "Phase 5: Skipped (review assessment: PASS)"
@@ -557,7 +598,7 @@ FIX_PROMPT
 
   # --- Push and create PR (script-controlled, not Claude) ---
   log "Pushing branch and creating PR..."
-  git push --force-with-lease -u origin "$BRANCH"
+  push_with_retry "$BRANCH" "$PROMPT_FILE" "$IMPL_MODEL"
   create_pr "$BRANCH" "$ISSUE_NUMBER" "$ISSUE_TITLE" "$ISSUE_WORK_DIR"
 
   PR_NUMBER=$(gh pr list --repo "$REPO" --head "$BRANCH" --json number --jq ".[0].number" 2>/dev/null)
@@ -585,8 +626,16 @@ FIX_PROMPT
   MAX_CI_RETRIES=2
 
   while true; do
-    if wait_for_ci "$PR_NUMBER"; then
+    CI_RESULT=0
+    wait_for_ci "$PR_NUMBER" || CI_RESULT=$?
+
+    if [[ $CI_RESULT -eq 0 ]]; then
       break
+    fi
+
+    if [[ $CI_RESULT -eq 2 ]]; then
+      log "ERROR: Timed out waiting for CI. PR: ${PR_URL}"
+      exit 1
     fi
 
     CI_RETRIES=$((CI_RETRIES + 1))
@@ -621,8 +670,8 @@ CI_FIX_PROMPT
 
     run_phase_nocapture "Phase 6: CI Fix (retry ${CI_RETRIES})" "$IMPL_MODEL" 2 "$PROMPT_FILE"
 
-    # Push the fix
-    git push --force-with-lease origin "$BRANCH"
+    # Push the fix (with pre-push hook retry)
+    push_with_retry "$BRANCH" "$PROMPT_FILE" "$IMPL_MODEL"
   done
 
   # --- Merge ---
