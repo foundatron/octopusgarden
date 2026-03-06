@@ -972,6 +972,38 @@ func TestExtractCmdSourceDirIsFile(t *testing.T) {
 	}
 }
 
+func TestExtractFlagParsing(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	t.Run("source_dir_required", func(t *testing.T) {
+		err := extractCmd(ctx, logger, []string{})
+		if !errors.Is(err, errSourceDirRequired) {
+			t.Errorf("got %v, want %v", err, errSourceDirRequired)
+		}
+	})
+
+	t.Run("proceeds_past_flags_with_valid_dir", func(t *testing.T) {
+		// With no API keys set, the command should fail at LLM setup — not at flag
+		// parsing or source-dir validation. This proves flags (including the output
+		// default) are parsed correctly before any LLM work begins.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		err := extractCmd(ctx, logger, []string{"--source-dir", dir})
+		if errors.Is(err, errSourceDirRequired) || errors.Is(err, errSourceDirNotExist) || errors.Is(err, errSourceDirNotDir) {
+			t.Errorf("got unexpected source-dir error: %v", err)
+		}
+		if err == nil {
+			t.Error("expected error (no API key), got nil")
+		}
+	})
+}
+
 func TestRunCmdInvalidThreshold(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()
