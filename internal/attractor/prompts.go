@@ -94,15 +94,34 @@ func buildSystemPrompt(spec string, caps ScenarioCapabilities, language, genes, 
 }
 
 // buildGeneSection formats the gene guide text for inclusion in the system prompt.
-// When geneLanguage differs from language, a cross-language adaptation note is added.
+// When geneLanguage differs from language, a cross-language adaptation note is appended
+// after the gene content, instructing the LLM to preserve invariants while using
+// idiomatic constructs in the target language.
 func buildGeneSection(genes, language, geneLanguage string) string {
 	var b strings.Builder
 	b.WriteString(geneSectionHeader)
-	if geneLanguage != "" && language != "" && geneLanguage != language {
-		fmt.Fprintf(&b, "(These patterns are from a %s implementation — adapt idioms to %s)\n\n", geneLanguage, language)
-	}
 	b.WriteString(genes)
+
+	if geneLanguage != "" && language != "" && geneLanguage != language {
+		sourceName := languageDisplayName(geneLanguage)
+		targetName := languageDisplayName(language)
+		fmt.Fprintf(&b, "\n\nCROSS-LANGUAGE NOTE: The exemplar above is written in %s. "+
+			"You are generating %s. Preserve the invariants, structural patterns, and "+
+			"architectural approach while using idiomatic %s constructs, libraries, and conventions.",
+			sourceName, targetName, targetName)
+	}
+
 	return b.String()
+}
+
+// languageDisplayName returns the human-readable display name for a language key.
+// Known languages use LanguageTemplate.Name (e.g. "go" → "Go", "node" → "Node.js").
+// Unknown languages fall back to the raw key string.
+func languageDisplayName(lang string) string {
+	if tmpl, ok := LookupLanguage(lang); ok {
+		return tmpl.Name
+	}
+	return lang
 }
 
 // buildCapabilitySuffix assembles the instruction text for a given capability set.
