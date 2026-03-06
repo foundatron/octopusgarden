@@ -421,6 +421,39 @@ func lintExec(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 		}
 	}
 
+	// Check files: must be a mapping; keys must be absolute paths; check var refs in keys and values.
+	if filesFE, ok := fields["files"]; ok {
+		diags = append(diags, lintExecFiles(path, filesFE, cs)...)
+	}
+
+	return diags
+}
+
+func lintExecFiles(path string, filesFE *fieldEntry, cs *captureSet) []Diagnostic {
+	if filesFE.value.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    filesFE.value.Line,
+			Level:   Error,
+			Message: "exec files must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	for i := 0; i+1 < len(filesFE.value.Content); i += 2 {
+		keyNode := filesFE.value.Content[i]
+		valNode := filesFE.value.Content[i+1]
+		if !strings.HasPrefix(keyNode.Value, "/") {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    keyNode.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("exec files path %q must be absolute (start with /); paths that begin with a variable reference such as {base_dir}/file must also include a leading /", keyNode.Value),
+			})
+		}
+		diags = append(diags, checkVarRefs(extractVarRefs(keyNode.Value), cs, path, keyNode.Line)...)
+		diags = append(diags, checkVarRefs(extractVarRefs(valNode.Value), cs, path, valNode.Line)...)
+	}
 	return diags
 }
 

@@ -140,6 +140,11 @@
           "type": "string",
           "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
           "description": "Command timeout as a Go duration (e.g. '30s', '5m', '100ms'). Default: 30s."
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Map of absolute file path to content. Written before command execution. Both paths and contents may contain {variable} references."
         }
       }
     },

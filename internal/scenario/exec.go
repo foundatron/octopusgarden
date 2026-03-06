@@ -5,8 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +24,8 @@ const (
 	// Keep in sync with the constant of the same name in internal/container/docker.go.
 	defaultMaxOutputBytes = 10 << 20 // 10MB
 )
+
+var errWriteFileFailed = errors.New("write file failed")
 
 // containerSession provides command execution inside a running container.
 // Satisfied by *container.Session via structural typing.
@@ -48,10 +54,76 @@ func (e *ExecExecutor) Execute(ctx context.Context, step Step, vars map[string]s
 		return StepOutput{}, fmt.Errorf("exec: parse timeout: %w", err)
 	}
 
+	if err := e.writeFiles(ctx, step.Exec.Files, vars); err != nil {
+		return StepOutput{}, err
+	}
+
 	if e.Session != nil {
 		return e.runContainer(ctx, command, stdin, env, timeout)
 	}
 	return e.runLocal(ctx, command, stdin, env, timeout)
+}
+
+// writeFiles writes each file in the files map before command execution.
+// Paths and content may contain {variable} references which are substituted from vars.
+// Files are written in sorted key order for determinism.
+func (e *ExecExecutor) writeFiles(ctx context.Context, files map[string]string, vars map[string]string) error {
+	for _, rawPath := range slices.Sorted(maps.Keys(files)) {
+		filePath := substituteVars(rawPath, vars)
+		content := substituteVars(files[rawPath], vars)
+
+		var err error
+		if e.Session != nil {
+			// Use path.Dir (not filepath.Dir) for container paths: containers always use Linux
+			// path separators regardless of the host OS.
+			err = e.writeFileContainer(ctx, filePath, path.Dir(filePath), content)
+		} else {
+			err = writeFileLocal(filePath, filepath.Dir(filePath), content)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeFileContainer writes a single file inside the container using mkdir+cat.
+// Paths are shell-quoted to prevent command injection.
+func (e *ExecExecutor) writeFileContainer(ctx context.Context, filePath, dir, content string) error {
+	cmd := "mkdir -p " + shellQuote(dir) + " && cat > " + shellQuote(filePath)
+	result, err := e.Session.Exec(ctx, cmd, container.ExecOptions{
+		Stdin:          content,
+		Timeout:        defaultExecTimeout,
+		MaxOutputBytes: defaultMaxOutputBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("write file %q: %w", filePath, err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("write file %q: %w", filePath, errWriteFileFailed)
+	}
+	return nil
+}
+
+// writeFileLocal writes a single file on the local filesystem.
+// Permissions 0o700/0o600 apply only to newly created directories and files; existing files
+// have their content replaced but their permissions are not modified by os.WriteFile.
+// This matches the behavior of local exec steps, which already have full host filesystem access.
+func writeFileLocal(filePath, dir, content string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("write file %q: %w", filePath, err)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write file %q: %w", filePath, err)
+	}
+	return nil
+}
+
+// shellQuote returns a POSIX single-quoted string safe for interpolation in sh -c commands.
+// The '\” idiom ends the single-quoted string, appends a literal single-quote via \', then
+// reopens single-quoting — the standard POSIX escape since \' is not valid inside '...'.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func (e *ExecExecutor) runContainer(ctx context.Context, command, stdin string, env map[string]string, timeout time.Duration) (StepOutput, error) {

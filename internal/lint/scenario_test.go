@@ -893,6 +893,106 @@ steps:
 			wantErrors: 1,
 			wantMsg:    "multiple step types",
 		},
+		{
+			name: "valid exec with files",
+			yaml: `id: test
+steps:
+  - description: Run with config
+    exec:
+      command: cat /tmp/config.yaml
+      files:
+        /tmp/config.yaml: "key: value"
+    expect: "outputs config"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec files relative path",
+			yaml: `id: test
+steps:
+  - description: Bad file path
+    exec:
+      command: echo hello
+      files:
+        relative/path.txt: "content"
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "must be absolute",
+		},
+		{
+			name: "exec files var ref in content",
+			yaml: `id: test
+setup:
+  - description: Get token
+    request:
+      method: POST
+      path: /login
+    capture:
+      - name: token
+        jsonpath: $.token
+steps:
+  - description: Write config with token
+    exec:
+      command: cat /tmp/config
+      files:
+        /tmp/config: "auth: {token}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec files var ref in path key",
+			yaml: `id: test
+setup:
+  - description: Get dir
+    request:
+      method: GET
+      path: /setup
+    capture:
+      - name: base_dir
+        jsonpath: $.dir
+steps:
+  - description: Write to dynamic path
+    exec:
+      command: echo done
+      files:
+        /{base_dir}/config.yaml: "key: value"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "exec files uncaptured var ref in content",
+			yaml: `id: test
+steps:
+  - description: Write file with missing var
+    exec:
+      command: echo done
+      files:
+        /tmp/config.yaml: "auth: {missing_token}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "never captured",
+		},
+		{
+			name: "exec files not a mapping",
+			yaml: `id: test
+steps:
+  - description: Bad files field
+    exec:
+      command: echo hello
+      files: "not a mapping"
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "exec files must be a mapping",
+		},
 	}
 
 	for _, tt := range tests {

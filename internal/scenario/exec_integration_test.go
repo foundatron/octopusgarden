@@ -127,3 +127,33 @@ func TestIntegrationExecContainerStdin(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", out.CaptureSources[ExecSourceStdout], "stdin-input")
 	}
 }
+
+func TestIntegrationExecContainerFiles(t *testing.T) {
+	svc := getSharedService(t)
+	session, stop := startExecSession(t, svc)
+	defer stop()
+
+	execExec := &ExecExecutor{Session: session}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	step := Step{
+		Exec: &ExecRequest{
+			Command: "cat /tmp/octog-test/config.yaml",
+			Files: map[string]string{
+				"/tmp/octog-test/config.yaml": "key: integration-value",
+			},
+		},
+	}
+	out, err := execExec.Execute(ctx, step, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if out.CaptureSources[ExecSourceExitCode] != "0" {
+		t.Errorf("exitcode = %q, want %q", out.CaptureSources[ExecSourceExitCode], "0")
+	}
+	if strings.TrimSpace(out.CaptureSources[ExecSourceStdout]) != "key: integration-value" {
+		t.Errorf("stdout = %q, want %q", out.CaptureSources[ExecSourceStdout], "key: integration-value")
+	}
+}
