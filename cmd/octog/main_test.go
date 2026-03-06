@@ -939,6 +939,39 @@ func TestWriteConfigFile(t *testing.T) {
 	}
 }
 
+func TestExtractCmdMissingSourceDir(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := extractCmd(ctx, logger, []string{})
+	if !errors.Is(err, errSourceDirRequired) {
+		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirRequired)
+	}
+}
+
+func TestExtractCmdSourceDirNotExist(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := extractCmd(ctx, logger, []string{"--source-dir", "/nonexistent-dir-abc123"})
+	if !errors.Is(err, errSourceDirNotExist) {
+		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirNotExist)
+	}
+}
+
+func TestExtractCmdSourceDirIsFile(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	f := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(f, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractCmd(ctx, logger, []string{"--source-dir", f})
+	if !errors.Is(err, errSourceDirNotDir) {
+		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirNotDir)
+	}
+}
+
 func TestRunCmdInvalidThreshold(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()
