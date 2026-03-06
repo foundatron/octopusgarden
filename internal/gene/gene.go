@@ -54,10 +54,10 @@ func Save(path string, g Gene) error {
 	}
 	data, err := json.MarshalIndent(g, "", "  ")
 	if err != nil {
-		return fmt.Errorf("gene: %w", err)
+		return fmt.Errorf("gene save marshal: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("gene: %w", err)
+		return fmt.Errorf("gene save: %w", err)
 	}
 	return nil
 }

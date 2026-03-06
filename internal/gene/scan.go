@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/foundatron/octopusgarden/internal/spec"
 )
 
 var (
@@ -19,6 +21,7 @@ var (
 const (
 	tokenBudget    = 20_000
 	readmeMaxLines = 100
+	maxFileSize    = 1 << 20 // 1 MB
 )
 
 // ScanResult holds the files selected from an exemplar source directory.
@@ -406,10 +409,6 @@ func selectLargest(candidates []fileCandidate) *fileCandidate {
 	return best
 }
 
-func estimateTokens(text string) int {
-	return len(text) / 4
-}
-
 func enforceTokenBudget(files []SelectedFile) []SelectedFile {
 	// Drop in reverse priority: model -> handler -> readme.
 	dropOrder := []string{"model", "handler", "readme"}
@@ -425,7 +424,7 @@ func enforceTokenBudget(files []SelectedFile) []SelectedFile {
 func totalTokens(files []SelectedFile) int {
 	total := 0
 	for _, f := range files {
-		total += estimateTokens(f.Content)
+		total += spec.EstimateTokens(f.Content)
 	}
 	return total
 }
@@ -441,6 +440,13 @@ func removeRole(files []SelectedFile, role string) []SelectedFile {
 }
 
 func readFileContent(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("gene: stat %s: %w", path, err)
+	}
+	if info.Size() > maxFileSize {
+		return "", nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("gene: read %s: %w", path, err)

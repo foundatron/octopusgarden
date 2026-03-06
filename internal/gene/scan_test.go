@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/foundatron/octopusgarden/internal/spec"
 )
 
 func writeTestFile(t *testing.T, dir, rel, content string) {
@@ -247,7 +249,7 @@ func TestScanTokenBudget(t *testing.T) {
 	}
 	total := 0
 	for _, f := range res.Files {
-		total += estimateTokens(f.Content)
+		total += spec.EstimateTokens(f.Content)
 	}
 	if total > tokenBudget {
 		t.Errorf("total tokens = %d, want <= %d", total, tokenBudget)
@@ -333,6 +335,26 @@ func TestScanDockerfileVariants(t *testing.T) {
 	}
 	if df.Path != "docker/Dockerfile" {
 		t.Errorf("dockerfile Path = %q, want %q", df.Path, "docker/Dockerfile")
+	}
+}
+
+func TestScanSkipsLargeFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+
+	// Create a file just over 1MB in a handler directory.
+	bigContent := strings.Repeat("x", maxFileSize+1)
+	writeTestFile(t, dir, "handlers/huge.go", bigContent)
+
+	res, err := Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	h := findRole(res.Files, "handler")
+	if h != nil && h.Content != "" {
+		t.Errorf("large file should have empty content, got %d bytes", len(h.Content))
 	}
 }
 

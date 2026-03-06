@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
+	"github.com/foundatron/octopusgarden/internal/gene"
 	"github.com/foundatron/octopusgarden/internal/lint"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/observability"
@@ -51,6 +53,10 @@ var (
 	errInvalidProvider            = errors.New("--provider must be \"anthropic\" or \"openai\"")
 	errInvalidLanguage            = errors.New("--language must be one of: go, python, node, rust, auto")
 	errListModelsUnsupported      = errors.New("provider does not support listing models")
+	errSourceDirRequired          = errors.New("--source-dir is required")
+	errSourceDirNotExist          = errors.New("--source-dir does not exist")
+	errSourceDirNotDir            = errors.New("--source-dir is not a directory")
+	errNoLanguageDetected         = errors.New("no recognized language in source directory (need go.mod, package.json, Cargo.toml, pyproject.toml, or requirements.txt)")
 )
 
 func main() {
@@ -80,6 +86,8 @@ func main() {
 		err = lintCmd(ctx, logger, os.Args[2:])
 	case "models":
 		err = modelsCmd(ctx, logger, os.Args[2:])
+	case "extract":
+		err = extractCmd(ctx, logger, os.Args[2:])
 	case "configure":
 		err = configureCmd(ctx, logger, os.Args[2:])
 	default:
@@ -105,6 +113,7 @@ Commands:
   validate   Validate a running service against scenarios
   status     Show recent runs, scores, and costs
   lint       Check spec and scenario files for errors
+  extract    Extract coding patterns from a source directory into a gene file
   models     List available models
   configure  Interactively configure API keys
 
@@ -603,6 +612,81 @@ func lintCmd(_ context.Context, _ *slog.Logger, args []string) error {
 		return errLintFailed
 	}
 	return nil
+}
+
+func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("extract", flag.ContinueOnError)
+	sourceDir := fs.String("source-dir", "", "path to source directory to extract patterns from (required)")
+	output := fs.String("output", "genes.json", "output file path (use \"-\" for stdout)")
+	model := fs.String("model", "", "LLM model to use for extraction (default: provider-specific)")
+	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: octog extract [flags]\n\nExtract coding patterns from a source directory.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *sourceDir == "" {
+		fs.Usage()
+		return errSourceDirRequired
+	}
+
+	info, err := os.Stat(*sourceDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errSourceDirNotExist
+		}
+		return fmt.Errorf("stat source-dir: %w", err)
+	}
+	if !info.IsDir() {
+		return errSourceDirNotDir
+	}
+
+	scan, err := gene.Scan(ctx, *sourceDir)
+	if err != nil {
+		return fmt.Errorf("scan: %w", err)
+	}
+	if scan.Language == "" {
+		return errNoLanguageDetected
+	}
+	fmt.Fprintf(os.Stderr, "Scanned %d files (%s)\n", len(scan.Files), scan.Language) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+
+	clients, err := newLLMClient(*provider, logger)
+	if err != nil {
+		return err
+	}
+	if *model == "" {
+		// Use the cheap/judge model for extraction: pattern extraction is a
+		// summarization task that doesn't need the expensive generation model,
+		// and the judge-tier model (e.g. claude-haiku-4-5) provides sufficient
+		// quality at a fraction of the cost.
+		*model = defaultJudgeModel(clients.provider)
+	}
+
+	g, err := gene.Analyze(ctx, logger, clients.client, *model, *sourceDir, scan)
+	if err != nil {
+		return fmt.Errorf("analyze: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Extracted patterns from %s (%s, %d tokens) → %s\n", *sourceDir, g.Language, g.TokenCount, *output) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+
+	if *output == "-" {
+		if err := gene.Validate(g); err != nil {
+			return fmt.Errorf("gene validate: %w", err)
+		}
+		data, err := json.MarshalIndent(g, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal gene: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	return gene.Save(*output, g)
 }
 
 func openStore(ctx context.Context) (*store.Store, error) {

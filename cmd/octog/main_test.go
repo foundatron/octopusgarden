@@ -939,6 +939,79 @@ func TestWriteConfigFile(t *testing.T) {
 	}
 }
 
+func TestExtractCmdSourceDirNotExist(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := extractCmd(ctx, logger, []string{"--source-dir", "/nonexistent-dir-abc123"})
+	if !errors.Is(err, errSourceDirNotExist) {
+		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirNotExist)
+	}
+}
+
+func TestExtractCmdSourceDirIsFile(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	f := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(f, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractCmd(ctx, logger, []string{"--source-dir", f})
+	if !errors.Is(err, errSourceDirNotDir) {
+		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirNotDir)
+	}
+}
+
+func TestExtractCmdNoLanguageDetected(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	// Create a directory with a marker file that has no language mapping
+	// (pom.xml is recognized as a marker but maps to no supported language).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pom.xml"), []byte("<project/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractCmd(ctx, logger, []string{"--source-dir", dir})
+	if !errors.Is(err, errNoLanguageDetected) {
+		t.Errorf("extractCmd() = %v, want %v", err, errNoLanguageDetected)
+	}
+}
+
+func TestExtractFlagParsing(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	t.Run("source_dir_required", func(t *testing.T) {
+		err := extractCmd(ctx, logger, []string{})
+		if !errors.Is(err, errSourceDirRequired) {
+			t.Errorf("got %v, want %v", err, errSourceDirRequired)
+		}
+	})
+
+	t.Run("proceeds_past_flags_with_valid_dir", func(t *testing.T) {
+		// With no API keys set, the command should fail at LLM setup — not at flag
+		// parsing or source-dir validation. This proves flags (including the output
+		// default) are parsed correctly before any LLM work begins.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		err := extractCmd(ctx, logger, []string{"--source-dir", dir})
+		if errors.Is(err, errSourceDirRequired) || errors.Is(err, errSourceDirNotExist) || errors.Is(err, errSourceDirNotDir) || errors.Is(err, errNoLanguageDetected) {
+			t.Errorf("got unexpected early error: %v", err)
+		}
+		if err == nil {
+			t.Error("expected error (no API key), got nil")
+		}
+	})
+}
+
 func TestRunCmdInvalidThreshold(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()

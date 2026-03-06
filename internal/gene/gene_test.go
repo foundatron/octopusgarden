@@ -29,24 +29,27 @@ func TestValidateValid(t *testing.T) {
 func TestValidateZeroVersion(t *testing.T) {
 	g := validGene()
 	g.Version = 0
-	if !errors.Is(Validate(g), errInvalidVersion) {
-		t.Errorf("Validate() = %v, want %v", Validate(g), errInvalidVersion)
+	err := Validate(g)
+	if !errors.Is(err, errInvalidVersion) {
+		t.Errorf("Validate() = %v, want %v", err, errInvalidVersion)
 	}
 }
 
 func TestValidateEmptyGuide(t *testing.T) {
 	g := validGene()
 	g.Guide = ""
-	if !errors.Is(Validate(g), errEmptyGuide) {
-		t.Errorf("Validate() = %v, want %v", Validate(g), errEmptyGuide)
+	err := Validate(g)
+	if !errors.Is(err, errEmptyGuide) {
+		t.Errorf("Validate() = %v, want %v", err, errEmptyGuide)
 	}
 }
 
 func TestValidateUnknownLanguage(t *testing.T) {
 	g := validGene()
 	g.Language = "ruby"
-	if !errors.Is(Validate(g), errUnknownLanguage) {
-		t.Errorf("Validate() = %v, want %v", Validate(g), errUnknownLanguage)
+	err := Validate(g)
+	if !errors.Is(err, errUnknownLanguage) {
+		t.Errorf("Validate() = %v, want %v", err, errUnknownLanguage)
 	}
 }
 
