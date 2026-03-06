@@ -21,6 +21,7 @@ var (
 const (
 	tokenBudget    = 20_000
 	readmeMaxLines = 100
+	maxFileSize    = 1 << 20 // 1 MB
 )
 
 // ScanResult holds the files selected from an exemplar source directory.
@@ -439,6 +440,13 @@ func removeRole(files []SelectedFile, role string) []SelectedFile {
 }
 
 func readFileContent(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("gene: stat %s: %w", path, err)
+	}
+	if info.Size() > maxFileSize {
+		return "", nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("gene: read %s: %w", path, err)

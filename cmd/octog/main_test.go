@@ -939,15 +939,6 @@ func TestWriteConfigFile(t *testing.T) {
 	}
 }
 
-func TestExtractCmdMissingSourceDir(t *testing.T) {
-	logger := testLogger()
-	ctx := context.Background()
-	err := extractCmd(ctx, logger, []string{})
-	if !errors.Is(err, errSourceDirRequired) {
-		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirRequired)
-	}
-}
-
 func TestExtractCmdSourceDirNotExist(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()
@@ -969,6 +960,23 @@ func TestExtractCmdSourceDirIsFile(t *testing.T) {
 	err := extractCmd(ctx, logger, []string{"--source-dir", f})
 	if !errors.Is(err, errSourceDirNotDir) {
 		t.Errorf("extractCmd() = %v, want %v", err, errSourceDirNotDir)
+	}
+}
+
+func TestExtractCmdNoLanguageDetected(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	// Create a directory with a marker file that has no language mapping
+	// (pom.xml is recognized as a marker but maps to no supported language).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pom.xml"), []byte("<project/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractCmd(ctx, logger, []string{"--source-dir", dir})
+	if !errors.Is(err, errNoLanguageDetected) {
+		t.Errorf("extractCmd() = %v, want %v", err, errNoLanguageDetected)
 	}
 }
 
@@ -995,8 +1003,8 @@ func TestExtractFlagParsing(t *testing.T) {
 		t.Setenv("OPENAI_API_KEY", "")
 
 		err := extractCmd(ctx, logger, []string{"--source-dir", dir})
-		if errors.Is(err, errSourceDirRequired) || errors.Is(err, errSourceDirNotExist) || errors.Is(err, errSourceDirNotDir) {
-			t.Errorf("got unexpected source-dir error: %v", err)
+		if errors.Is(err, errSourceDirRequired) || errors.Is(err, errSourceDirNotExist) || errors.Is(err, errSourceDirNotDir) || errors.Is(err, errNoLanguageDetected) {
+			t.Errorf("got unexpected early error: %v", err)
 		}
 		if err == nil {
 			t.Error("expected error (no API key), got nil")

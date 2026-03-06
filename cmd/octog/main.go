@@ -56,6 +56,7 @@ var (
 	errSourceDirRequired          = errors.New("--source-dir is required")
 	errSourceDirNotExist          = errors.New("--source-dir does not exist")
 	errSourceDirNotDir            = errors.New("--source-dir is not a directory")
+	errNoLanguageDetected         = errors.New("no recognized language in source directory (need go.mod, package.json, Cargo.toml, pyproject.toml, or requirements.txt)")
 )
 
 func main() {
@@ -649,6 +650,9 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
+	if scan.Language == "" {
+		return errNoLanguageDetected
+	}
 	fmt.Fprintf(os.Stderr, "Scanned %d files (%s)\n", len(scan.Files), scan.Language) //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
 
 	clients, err := newLLMClient(*provider, logger)
@@ -656,6 +660,10 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 	if *model == "" {
+		// Use the cheap/judge model for extraction: pattern extraction is a
+		// summarization task that doesn't need the expensive generation model,
+		// and the judge-tier model (e.g. claude-haiku-4-5) provides sufficient
+		// quality at a fraction of the cost.
 		*model = defaultJudgeModel(clients.provider)
 	}
 

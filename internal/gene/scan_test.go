@@ -338,6 +338,26 @@ func TestScanDockerfileVariants(t *testing.T) {
 	}
 }
 
+func TestScanSkipsLargeFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+
+	// Create a file just over 1MB in a handler directory.
+	bigContent := strings.Repeat("x", maxFileSize+1)
+	writeTestFile(t, dir, "handlers/huge.go", bigContent)
+
+	res, err := Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	h := findRole(res.Files, "handler")
+	if h != nil && h.Content != "" {
+		t.Errorf("large file should have empty content, got %d bytes", len(h.Content))
+	}
+}
+
 func TestScanNotDir(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "file.txt")
 	if err := os.WriteFile(f, []byte("hi"), 0o644); err != nil {

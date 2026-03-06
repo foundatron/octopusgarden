@@ -13,33 +13,15 @@ import (
 	"testing"
 
 	"github.com/foundatron/octopusgarden/internal/gene"
+	"github.com/foundatron/octopusgarden/internal/testutil"
 )
-
-// repoRoot walks up from the working directory to find the module root.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find repo root with go.mod")
-		}
-		dir = parent
-	}
-}
 
 func TestExtractEndToEnd(t *testing.T) {
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
-	sourceDir := repoRoot(t)
+	sourceDir := testutil.RepoRoot(t)
 	outputFile := filepath.Join(t.TempDir(), "genes.json")
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -75,11 +57,13 @@ func TestExtractStdout(t *testing.T) {
 		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
-	sourceDir := repoRoot(t)
+	sourceDir := testutil.RepoRoot(t)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ctx := context.Background()
 
 	// Capture stdout while extractCmd writes the gene JSON.
+	// This test must not use t.Parallel() because the os.Stdout swap
+	// is not concurrent-safe — it mutates a process-global variable.
 	origStdout := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -182,6 +166,26 @@ def health():
     return {"status": "ok"}
 `,
 				"Dockerfile": "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\",\"app:app\",\"--host\",\"0.0.0.0\",\"--port\",\"8000\"]\n",
+			},
+		},
+		{
+			name:     "rust",
+			wantLang: "rust",
+			files: map[string]string{
+				"Cargo.toml": "[package]\nname = \"example\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+				"src/main.rs": `use std::io::Write;
+use std::net::TcpListener;
+
+fn main() {
+    let listener = TcpListener::bind("0.0.0.0:8080").unwrap();
+    for stream in listener.incoming() {
+        let mut stream = stream.unwrap();
+        let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        stream.write_all(response.as_bytes()).unwrap();
+    }
+}
+`,
+				"Dockerfile": "FROM rust:1.77-slim AS build\nWORKDIR /app\nCOPY . .\nRUN cargo build --release\nFROM debian:bookworm-slim\nCOPY --from=build /app/target/release/example /example\nCMD [\"/example\"]\n",
 			},
 		},
 	}

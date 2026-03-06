@@ -4,27 +4,13 @@ package gene
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/foundatron/octopusgarden/internal/testutil"
 )
 
 func TestScanSelfProject(t *testing.T) {
-	// Find repo root by walking up from this file's directory.
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find repo root with go.mod")
-		}
-		dir = parent
-	}
+	dir := testutil.RepoRoot(t)
 
 	res, err := Scan(context.Background(), dir)
 	if err != nil {

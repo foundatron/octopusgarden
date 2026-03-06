@@ -6,10 +6,10 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/foundatron/octopusgarden/internal/llm"
+	"github.com/foundatron/octopusgarden/internal/testutil"
 )
 
 func TestAnalyzeRealLLM(t *testing.T) {
@@ -18,21 +18,7 @@ func TestAnalyzeRealLLM(t *testing.T) {
 		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
-	// Find repo root.
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find repo root with go.mod")
-		}
-		dir = parent
-	}
+	dir := testutil.RepoRoot(t)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	client := llm.NewAnthropicClient(apiKey, logger)
