@@ -29,6 +29,10 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 
+	// Limit to a single connection so PRAGMAs set below apply to all operations.
+	// SQLite only allows one concurrent writer; WAL mode handles concurrent reads.
+	db.SetMaxOpenConns(1)
+
 	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: pragma wal: %w", err)
