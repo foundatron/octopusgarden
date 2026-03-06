@@ -87,12 +87,10 @@ fi
 
 # --- Phase 1: Plan and implement ---
 log "Phase 1: Planning and implementing (budget: \$${BUDGET})..."
-claude -p \
-  --model opus \
-  --effort medium \
-  --dangerously-skip-permissions \
-  --max-budget-usd "$BUDGET" \
-  "$(cat <<EOF
+
+PROMPT_FILE=$(mktemp)
+trap 'rm -f "$PROMPT_FILE"' EXIT
+cat > "$PROMPT_FILE" <<PROMPT
 You are solving GitHub issue #${ISSUE_NUMBER} for the octopusgarden project.
 
 Step 1 — Understand the issue:
@@ -124,10 +122,16 @@ Implement ALL fixes identified in the review. Re-run \`make build && make test &
 
 Step 6 — Commit and create PR:
 Stage and commit all changes with a conventional commit message (e.g., feat(package): description).
-Push the branch and create a PR that references the issue with "Closes #${ISSUE_NUMBER}" in the body.
+Push the branch and create a PR that references the issue with Closes #${ISSUE_NUMBER} in the body.
 The PR title should be concise. The body should summarize what changed and why.
-EOF
-)"
+PROMPT
+
+claude -p \
+  --model opus \
+  --effort medium \
+  --dangerously-skip-permissions \
+  --max-budget-usd "$BUDGET" \
+  "$(cat "$PROMPT_FILE")"
 
 # --- Phase 2: Wait for CI and optionally merge ---
 log "Implementation complete. Checking PR..."
