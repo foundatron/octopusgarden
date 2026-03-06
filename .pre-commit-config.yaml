@@ -39,13 +39,13 @@ repos:
         additional_dependencies:
           - mdformat-gfm
         args: [--wrap, "100"]
-        exclude: ^(schemas/(spec|scenario)-format\.md|docs/architecture\.md)$
+        exclude: ^(schemas/(spec|scenario)-format\.md|docs/architecture\.md|\.claude/)
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.21.0
     hooks:
       - id: markdownlint-cli2
-        exclude: ^schemas/(spec|scenario)-format\.md$
+        exclude: ^(schemas/(spec|scenario)-format\.md|\.claude/)
 
   # ── Shell scripts (future-proof, dormant until .sh files appear) ────────────
   - repo: https://github.com/shellcheck-py/shellcheck-py
