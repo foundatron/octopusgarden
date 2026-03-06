@@ -163,23 +163,10 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errInvalidLanguage
 	}
 
-	// Load genes if provided.
-	var genesGuide string
-	var genesLanguage string
-	if *genesFlag != "" {
-		g, err := gene.Load(*genesFlag)
-		if err != nil {
-			return fmt.Errorf("load genes: %w", err)
-		}
-		genesGuide = g.Guide
-		genesLanguage = g.Language
-		logger.Info("loaded genes", "source", g.Source, "language", g.Language, "tokens", g.TokenCount)
-
-		// Auto-detect language from genes when --language is not explicitly set.
-		if *language == "go" && !isFlagSet(fs, "language") {
-			langForOpts = g.Language
-			logger.Info("auto-detected language from genes (override with --language)", "language", langForOpts)
-		}
+	// Load genes if provided and optionally override language.
+	genesGuide, genesLanguage, langForOpts, err := loadGenes(*genesFlag, langForOpts, isFlagSet(fs, "language"), logger)
+	if err != nil {
+		return err
 	}
 
 	// Create LLM client (resolves provider) and apply model defaults.
@@ -199,7 +186,41 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
 
-	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget, endpoint, langForOpts, genesGuide, genesLanguage)
+	return runAttractorLoop(ctx, logger, clients.client, runLoopParams{
+		SpecPath:      *specFlag,
+		ScenariosPath: *scenariosFlag,
+		Model:         *model,
+		JudgeModel:    *judgeModel,
+		Budget:        *budget,
+		Threshold:     *threshold,
+		PatchMode:     *patchMode,
+		ContextBudget: *contextBudget,
+		OTELEndpoint:  endpoint,
+		Language:      langForOpts,
+		GenesGuide:    genesGuide,
+		GeneLanguage:  genesLanguage,
+	})
+}
+
+// loadGenes loads a genes file if path is non-empty, returning the guide text,
+// gene language, and the resolved target language. If the language flag was not
+// explicitly set, the gene's language overrides langForOpts.
+func loadGenes(path, langForOpts string, languageExplicit bool, logger *slog.Logger) (guide, geneLang, resolvedLang string, err error) {
+	resolvedLang = langForOpts
+	if path == "" {
+		return "", "", resolvedLang, nil
+	}
+	g, err := gene.Load(path)
+	if err != nil {
+		return "", "", "", fmt.Errorf("load genes: %w", err)
+	}
+	logger.Info("loaded genes", "source", g.Source, "language", g.Language, "tokens", g.TokenCount)
+
+	if !languageExplicit {
+		resolvedLang = g.Language
+		logger.Info("auto-detected language from genes (override with --language)", "language", resolvedLang)
+	}
+	return g.Guide, g.Language, resolvedLang, nil
 }
 
 // isFlagSet reports whether the named flag was explicitly provided on the command line.
@@ -213,8 +234,24 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 	return found
 }
 
-func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int, otelEndpoint, language, genesGuide, genesLanguage string) error {
-	tp, shutdown, err := observability.InitTracer(ctx, otelEndpoint)
+// runLoopParams bundles the parameters for runAttractorLoop.
+type runLoopParams struct {
+	SpecPath      string
+	ScenariosPath string
+	Model         string
+	JudgeModel    string
+	Budget        float64
+	Threshold     float64
+	PatchMode     bool
+	ContextBudget int
+	OTELEndpoint  string
+	Language      string
+	GenesGuide    string
+	GeneLanguage  string
+}
+
+func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, p runLoopParams) error {
+	tp, shutdown, err := observability.InitTracer(ctx, p.OTELEndpoint)
 	if err != nil {
 		return fmt.Errorf("init tracer: %w", err)
 	}
@@ -224,12 +261,12 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		_ = shutdown(shutdownCtx)
 	}()
 
-	parsedSpec, err := spec.ParseFile(specPath)
+	parsedSpec, err := spec.ParseFile(p.SpecPath)
 	if err != nil {
 		return fmt.Errorf("parse spec: %w", err)
 	}
 
-	scenarios, err := scenario.LoadDir(scenariosPath)
+	scenarios, err := scenario.LoadDir(p.ScenariosPath)
 	if err != nil {
 		return fmt.Errorf("load scenarios: %w", err)
 	}
@@ -282,21 +319,21 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 
 	instrumentedLLM := observability.NewTracingLLMClient(llmClient, tp)
 	instrumentedContainer := observability.NewTracingContainerManager(containerMgr, tp)
-	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, judgeModel, sessionGetter, caps.NeedsBrowser, grpcTargetGetter)
+	validateFn := buildValidateFn(scenarios, instrumentedLLM, logger, p.JudgeModel, sessionGetter, caps.NeedsBrowser, grpcTargetGetter)
 	instrumentedValidate := observability.WrapValidateFn(validateFn, tp)
 
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
 	opts := attractor.RunOptions{
-		Model:         model,
-		BudgetUSD:     budget,
-		Threshold:     threshold,
-		PatchMode:     patchMode,
-		ContextBudget: contextBudget,
-		Language:      language,
+		Model:         p.Model,
+		BudgetUSD:     p.Budget,
+		Threshold:     p.Threshold,
+		PatchMode:     p.PatchMode,
+		ContextBudget: p.ContextBudget,
+		Language:      p.Language,
 		Progress:      progressFn(ctx, logger, st),
 		Capabilities:  caps,
-		Genes:         genesGuide,
-		GeneLanguage:  genesLanguage,
+		Genes:         p.GenesGuide,
+		GeneLanguage:  p.GeneLanguage,
 	}
 
 	startedAt := time.Now()
@@ -307,8 +344,8 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	finishedAt := time.Now()
 
 	printRunSummary(result)
-	recordRun(ctx, logger, st, result, specPath, model, threshold, budget, startedAt, finishedAt, language)
-	printResult(result, language)
+	recordRun(ctx, logger, st, result, p.SpecPath, p.Model, p.Threshold, p.Budget, startedAt, finishedAt, p.Language)
+	printResult(result, p.Language)
 	return nil
 }
 
