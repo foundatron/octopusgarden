@@ -1122,56 +1122,56 @@ func writeTestGenes(t *testing.T, language string) string {
 	return path
 }
 
-func TestRunCmdGenesAutoLanguage(t *testing.T) {
-	// With valid genes (language "python") and no explicit --language, runCmd
-	// should auto-detect language from genes. It will fail later (no API key),
-	// but we verify it gets past the genes loading stage.
-	logger := testLogger()
-	ctx := context.Background()
-
+func TestLoadGenesAutoLanguage(t *testing.T) {
 	genesPath := writeTestGenes(t, "python")
+	logger := testLogger()
 
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "")
-
-	err := runCmd(ctx, logger, []string{
-		"--spec", "s.md", "--scenarios", "s/",
-		"--genes", genesPath,
-	})
-	// Should fail at LLM client creation (no API key), not at genes loading.
-	if err == nil {
-		t.Fatal("expected error (no API key)")
+	guide, geneLang, resolvedLang, err := loadGenes(genesPath, "go", false, logger)
+	if err != nil {
+		t.Fatalf("loadGenes: %v", err)
 	}
-	if strings.Contains(err.Error(), "load genes") {
-		t.Errorf("should not fail at genes loading, got: %v", err)
+	if guide != "Use consistent error handling patterns." {
+		t.Errorf("guide = %q, want test guide text", guide)
+	}
+	if geneLang != "python" {
+		t.Errorf("geneLang = %q, want %q", geneLang, "python")
+	}
+	if resolvedLang != "python" {
+		t.Errorf("resolvedLang = %q, want %q (auto-detected from genes)", resolvedLang, "python")
 	}
 }
 
-func TestRunCmdGenesExplicitLanguageWins(t *testing.T) {
-	// With valid genes (language "python") and explicit --language go,
-	// should proceed past genes loading without error.
-	logger := testLogger()
-	ctx := context.Background()
-
+func TestLoadGenesExplicitLanguageWins(t *testing.T) {
 	genesPath := writeTestGenes(t, "python")
+	logger := testLogger()
 
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "")
+	guide, geneLang, resolvedLang, err := loadGenes(genesPath, "go", true, logger)
+	if err != nil {
+		t.Fatalf("loadGenes: %v", err)
+	}
+	if guide != "Use consistent error handling patterns." {
+		t.Errorf("guide = %q, want test guide text", guide)
+	}
+	if geneLang != "python" {
+		t.Errorf("geneLang = %q, want %q", geneLang, "python")
+	}
+	if resolvedLang != "go" {
+		t.Errorf("resolvedLang = %q, want %q (explicit --language should win)", resolvedLang, "go")
+	}
+}
 
-	err := runCmd(ctx, logger, []string{
-		"--spec", "s.md", "--scenarios", "s/",
-		"--genes", genesPath,
-		"--language", "go",
-	})
-	// Should fail at LLM client creation, not at genes/language.
-	if err == nil {
-		t.Fatal("expected error (no API key)")
+func TestLoadGenesEmptyPath(t *testing.T) {
+	logger := testLogger()
+
+	guide, geneLang, resolvedLang, err := loadGenes("", "go", false, logger)
+	if err != nil {
+		t.Fatalf("loadGenes: %v", err)
 	}
-	if strings.Contains(err.Error(), "load genes") {
-		t.Errorf("should not fail at genes loading, got: %v", err)
+	if guide != "" || geneLang != "" {
+		t.Errorf("expected empty guide/geneLang for empty path, got guide=%q geneLang=%q", guide, geneLang)
 	}
-	if errors.Is(err, errInvalidLanguage) {
-		t.Errorf("should not fail at language validation, got: %v", err)
+	if resolvedLang != "go" {
+		t.Errorf("resolvedLang = %q, want %q (unchanged)", resolvedLang, "go")
 	}
 }
 

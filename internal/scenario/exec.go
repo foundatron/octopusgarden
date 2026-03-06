@@ -72,6 +72,7 @@ func (e *ExecExecutor) runLocal(ctx context.Context, command, stdin string, env 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // command is from scenario YAML, not user input
+	cmd.WaitDelay = 3 * time.Second                      // don't block if child processes keep pipes open after kill
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &stdout, remaining: defaultMaxOutputBytes}
 	cmd.Stderr = &limitedWriter{w: &stderr, remaining: defaultMaxOutputBytes}

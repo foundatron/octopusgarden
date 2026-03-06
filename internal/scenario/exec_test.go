@@ -129,7 +129,7 @@ func TestExecExecutorTimeout(t *testing.T) {
 	executor := &ExecExecutor{}
 	step := Step{
 		Exec: &ExecRequest{
-			Command: "sleep 60",
+			Command: "sleep 1",
 			Timeout: "100ms",
 		},
 	}
@@ -194,7 +194,7 @@ func TestExecExecutorContextCancellation(t *testing.T) {
 
 	executor := &ExecExecutor{}
 	step := Step{
-		Exec: &ExecRequest{Command: "sleep 60"},
+		Exec: &ExecRequest{Command: "sleep 1"},
 	}
 
 	_, err := executor.Execute(ctx, step, nil)
