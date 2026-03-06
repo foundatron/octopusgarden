@@ -22,11 +22,11 @@ commit-msg hook. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `tes
 ## Module & Packages
 
 `github.com/foundatron/octopusgarden` — Go 1.24+ — binary `octog` — subcommands: `run`, `validate`,
-`status`
+`status`, `extract`
 
 Internal packages: `spec` (parse markdown specs), `scenario` (load/run/judge YAML scenarios),
 `attractor` (convergence loop, file parsing), `container` (Docker build/run), `llm` (client
-interface, Anthropic + OpenAI backends)
+interface, Anthropic + OpenAI backends), `gene` (scan exemplar codebases, LLM pattern extraction)
 
 ## Dependencies
 

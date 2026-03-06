@@ -82,6 +82,7 @@ internal/
   attractor/          Convergence loop and file parsing
   container/          Docker build and run
   llm/                LLM client interface (Anthropic + OpenAI backends)
+  gene/               Gene transfusion (scan, analyze, gene types)
   store/              SQLite run history
 examples/             Example specs and scenarios (holdout sets)
 ```
