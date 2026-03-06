@@ -2,7 +2,7 @@
 
 BINARY := octog
 
-.PHONY: all help build test lint fmt generate clean docs docs-check
+.PHONY: all help build test test-integration test-browser lint fmt generate clean docs docs-check
 
 all: build
 
@@ -15,6 +15,12 @@ build: ## Build the binary
 
 test: ## Run tests
 	go test ./...
+
+test-integration: ## Run integration tests (no browser)
+	go test -tags=integration ./...
+
+test-browser: ## Run browser integration tests (requires Chrome)
+	go test -tags='integration browser' ./...
 
 lint: ## Run golangci-lint (full module)
 	golangci-lint run ./...

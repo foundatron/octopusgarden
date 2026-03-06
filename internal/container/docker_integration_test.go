@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	dockertypes "github.com/docker/docker/api/types"
 )
 
 const integrationDockerfile = `FROM python:3-alpine
@@ -23,7 +25,17 @@ func TestIntegrationBuildRunWaitHealthy(t *testing.T) {
 	logger := newTestLogger()
 	m, err := NewManager(logger)
 	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+		t.Skipf("Docker not available: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	type pinger interface {
+		Ping(context.Context) (dockertypes.Ping, error)
+	}
+	if p, ok := m.docker.(pinger); ok {
+		if _, err := p.Ping(context.Background()); err != nil {
+			t.Skipf("Docker daemon not available: %v", err)
+		}
 	}
 
 	dir := t.TempDir()

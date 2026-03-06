@@ -4,13 +4,21 @@ set -euo pipefail
 # autoissue.sh — Fully automated GitHub issue solver for OctopusGarden
 #
 # Usage:
-#   ./scripts/autoissue.sh <issue-number>... [--budget <usd>] [--no-merge] [--dry-run]
+#   ./scripts/autoissue.sh <issue-number>... [options]
+#
+# Options:
+#   --budget <usd>         Max budget for implementation phase (default: 10)
+#   --plan-model <model>   Model for planning phase (default: opus)
+#   --impl-model <model>   Model for implementation phase (default: sonnet)
+#   --no-merge             Skip auto-merge after CI passes
+#   --dry-run              Print what would happen without running
 #
 # Examples:
 #   ./scripts/autoissue.sh 77
 #   ./scripts/autoissue.sh 81 82 83
 #   ./scripts/autoissue.sh 77 --budget 5
 #   ./scripts/autoissue.sh 81 82 --no-merge
+#   ./scripts/autoissue.sh 77 --plan-model opus --impl-model opus
 #
 # Prerequisites:
 #   - claude CLI installed and authenticated
@@ -20,11 +28,13 @@ set -euo pipefail
 REPO="foundatron/octopusgarden"
 ISSUE_URL="https://github.com/${REPO}/issues"
 DEFAULT_BUDGET=10
+PLAN_MODEL=opus
+IMPL_MODEL=sonnet
 MERGE=true
 DRY_RUN=false
 
 usage() {
-  echo "Usage: $0 <issue-number>... [--budget <usd>] [--no-merge] [--dry-run]"
+  echo "Usage: $0 <issue-number>... [--budget <usd>] [--plan-model <model>] [--impl-model <model>] [--no-merge] [--dry-run]"
   exit 1
 }
 
@@ -36,6 +46,8 @@ BUDGET="$DEFAULT_BUDGET"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --budget) BUDGET="$2"; shift 2 ;;
+    --plan-model) PLAN_MODEL="$2"; shift 2 ;;
+    --impl-model) IMPL_MODEL="$2"; shift 2 ;;
     --no-merge) MERGE=false; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --*) echo "Unknown option: $1"; usage ;;
@@ -98,18 +110,19 @@ for ISSUE_NUMBER in "${ISSUES[@]}"; do
 
   if $DRY_RUN; then
     log "[dry-run] Would run planning + implementation phases for issue #${ISSUE_NUMBER}"
+    log "[dry-run] Models: plan=${PLAN_MODEL}, implement=${IMPL_MODEL}"
     log "[dry-run] Budget per phase: plan=\$1, implement=\$${BUDGET}"
     continue
   fi
 
   # --- Phase 1: Plan and review the plan (fresh context) ---
-  log "Phase 1: Planning and reviewing plan (issue #${ISSUE_NUMBER})..."
+  log "Phase 1: Planning and reviewing plan (model: ${PLAN_MODEL}, issue #${ISSUE_NUMBER})..."
 
   PLAN_FILE=$(mktemp)
   trap 'rm -f "$PLAN_FILE"' EXIT
 
   claude -p \
-    --model opus \
+    --model "$PLAN_MODEL" \
     --effort medium \
     --dangerously-skip-permissions \
     --max-budget-usd 1 \
@@ -161,7 +174,7 @@ PLAN_PROMPT
   echo "---"
 
   # --- Phase 2: Implement from plan (fresh context) ---
-  log "Phase 2: Implementing from plan (budget: \$${BUDGET})..."
+  log "Phase 2: Implementing from plan (model: ${IMPL_MODEL}, budget: \$${BUDGET})..."
 
   IMPLEMENT_PROMPT_FILE=$(mktemp)
   trap 'rm -f "$PLAN_FILE" "$IMPLEMENT_PROMPT_FILE"' EXIT
@@ -208,7 +221,7 @@ The PR title should be concise. The body should include:
 IMPLEMENT_PROMPT
 
   claude -p \
-    --model opus \
+    --model "$IMPL_MODEL" \
     --effort medium \
     --dangerously-skip-permissions \
     --max-budget-usd "$BUDGET" \

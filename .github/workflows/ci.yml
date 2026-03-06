@@ -13,6 +13,15 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
 
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-go@v6.3.0
+        with:
+          go-version-file: go.mod
+      - run: go test -tags=integration ./...
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && browser
 
 package scenario
 
@@ -9,15 +9,33 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
+
+func skipIfNoBrowser(t *testing.T) {
+	t.Helper()
+	names := []string{
+		"headless-shell", "headless_shell",
+		"google-chrome-stable", "google-chrome", "google-chrome-beta",
+		"chromium-browser", "chromium",
+	}
+	for _, name := range names {
+		if _, err := exec.LookPath(name); err == nil {
+			return
+		}
+	}
+	t.Skip("Chrome/Chromium not found")
+}
 
 func testBrowserLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 func TestBrowserIntegrationNavigate(t *testing.T) {
+	skipIfNoBrowser(t)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<!DOCTYPE html><html><body><h1>Hello Browser</h1><p>Welcome to the test page.</p></body></html>`)
@@ -48,6 +66,8 @@ func TestBrowserIntegrationNavigate(t *testing.T) {
 }
 
 func TestBrowserIntegrationClickAndFill(t *testing.T) {
+	skipIfNoBrowser(t)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<!DOCTYPE html><html><body>
@@ -91,6 +111,8 @@ func TestBrowserIntegrationClickAndFill(t *testing.T) {
 }
 
 func TestBrowserIntegrationAssert(t *testing.T) {
+	skipIfNoBrowser(t)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<!DOCTYPE html><html><body>
