@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -1010,6 +1011,168 @@ func TestExtractFlagParsing(t *testing.T) {
 			t.Error("expected error (no API key), got nil")
 		}
 	})
+}
+
+func TestIsFlagSet(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	_ = fs.String("language", "go", "target language")
+	_ = fs.String("spec", "", "spec path")
+
+	if err := fs.Parse([]string{"--spec", "s.md"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !isFlagSet(fs, "spec") {
+		t.Error("spec should be set")
+	}
+	if isFlagSet(fs, "language") {
+		t.Error("language should not be set")
+	}
+	if isFlagSet(fs, "nonexistent") {
+		t.Error("nonexistent should not be set")
+	}
+}
+
+func TestRunCmdGenesFileNotFound(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	err := runCmd(ctx, logger, []string{
+		"--spec", "s.md", "--scenarios", "s/",
+		"--genes", "/nonexistent/genes.json",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent genes file")
+	}
+	if !strings.Contains(err.Error(), "load genes") {
+		t.Errorf("expected 'load genes' in error, got: %v", err)
+	}
+}
+
+func TestRunCmdGenesInvalidJSON(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte("{invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runCmd(ctx, logger, []string{
+		"--spec", "s.md", "--scenarios", "s/",
+		"--genes", path,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON genes file")
+	}
+	if !strings.Contains(err.Error(), "load genes") {
+		t.Errorf("expected 'load genes' in error, got: %v", err)
+	}
+}
+
+func TestRunCmdGenesEmptyGuide(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+
+	g := map[string]any{
+		"version":      1,
+		"source":       "test",
+		"language":     "go",
+		"extracted_at": "2025-01-01T00:00:00Z",
+		"guide":        "",
+		"token_count":  0,
+	}
+	data, _ := json.Marshal(g)
+	path := filepath.Join(t.TempDir(), "empty-guide.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runCmd(ctx, logger, []string{
+		"--spec", "s.md", "--scenarios", "s/",
+		"--genes", path,
+	})
+	if err == nil {
+		t.Fatal("expected error for empty guide")
+	}
+	if !strings.Contains(err.Error(), "load genes") {
+		t.Errorf("expected 'load genes' in error, got: %v", err)
+	}
+}
+
+// writeTestGenes creates a valid genes.json file and returns its path.
+func writeTestGenes(t *testing.T, language string) string {
+	t.Helper()
+	g := map[string]any{
+		"version":      1,
+		"source":       "/test/project",
+		"language":     language,
+		"extracted_at": "2025-01-01T00:00:00Z",
+		"guide":        "Use consistent error handling patterns.",
+		"token_count":  42,
+	}
+	data, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "genes.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRunCmdGenesAutoLanguage(t *testing.T) {
+	// With valid genes (language "python") and no explicit --language, runCmd
+	// should auto-detect language from genes. It will fail later (no API key),
+	// but we verify it gets past the genes loading stage.
+	logger := testLogger()
+	ctx := context.Background()
+
+	genesPath := writeTestGenes(t, "python")
+
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	err := runCmd(ctx, logger, []string{
+		"--spec", "s.md", "--scenarios", "s/",
+		"--genes", genesPath,
+	})
+	// Should fail at LLM client creation (no API key), not at genes loading.
+	if err == nil {
+		t.Fatal("expected error (no API key)")
+	}
+	if strings.Contains(err.Error(), "load genes") {
+		t.Errorf("should not fail at genes loading, got: %v", err)
+	}
+}
+
+func TestRunCmdGenesExplicitLanguageWins(t *testing.T) {
+	// With valid genes (language "python") and explicit --language go,
+	// should proceed past genes loading without error.
+	logger := testLogger()
+	ctx := context.Background()
+
+	genesPath := writeTestGenes(t, "python")
+
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	err := runCmd(ctx, logger, []string{
+		"--spec", "s.md", "--scenarios", "s/",
+		"--genes", genesPath,
+		"--language", "go",
+	})
+	// Should fail at LLM client creation, not at genes/language.
+	if err == nil {
+		t.Fatal("expected error (no API key)")
+	}
+	if strings.Contains(err.Error(), "load genes") {
+		t.Errorf("should not fail at genes loading, got: %v", err)
+	}
+	if errors.Is(err, errInvalidLanguage) {
+		t.Errorf("should not fail at language validation, got: %v", err)
+	}
 }
 
 func TestRunCmdInvalidThreshold(t *testing.T) {

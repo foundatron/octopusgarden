@@ -131,6 +131,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	budget := fs.Float64("budget", 5.00, "maximum budget in USD")
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
 	language := fs.String("language", "go", "target language: go, python, node, rust, or auto")
+	genesFlag := fs.String("genes", "", "path to genes.json file produced by octog extract")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
 	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
 	otelEndpoint := fs.String("otel-endpoint", "", "OTLP/HTTP endpoint for tracing (e.g. localhost:4318); disabled if empty")
@@ -162,6 +163,25 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return errInvalidLanguage
 	}
 
+	// Load genes if provided.
+	var genesGuide string
+	var genesLanguage string
+	if *genesFlag != "" {
+		g, err := gene.Load(*genesFlag)
+		if err != nil {
+			return fmt.Errorf("load genes: %w", err)
+		}
+		genesGuide = g.Guide
+		genesLanguage = g.Language
+		logger.Info("loaded genes", "source", g.Source, "language", g.Language, "tokens", g.TokenCount)
+
+		// Auto-detect language from genes when --language is not explicitly set.
+		if *language == "go" && !isFlagSet(fs, "language") {
+			langForOpts = g.Language
+			logger.Info("auto-detected language from genes (override with --language)", "language", langForOpts)
+		}
+	}
+
 	// Create LLM client (resolves provider) and apply model defaults.
 	clients, err := newLLMClient(*provider, logger)
 	if err != nil {
@@ -179,10 +199,21 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
 
-	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget, endpoint, langForOpts)
+	return runAttractorLoop(ctx, logger, clients.client, *specFlag, *scenariosFlag, *model, *judgeModel, *budget, *threshold, *patchMode, *contextBudget, endpoint, langForOpts, genesGuide, genesLanguage)
 }
 
-func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int, otelEndpoint, language string) error {
+// isFlagSet reports whether the named flag was explicitly provided on the command line.
+func isFlagSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, specPath, scenariosPath, model, judgeModel string, budget, threshold float64, patchMode bool, contextBudget int, otelEndpoint, language, genesGuide, genesLanguage string) error {
 	tp, shutdown, err := observability.InitTracer(ctx, otelEndpoint)
 	if err != nil {
 		return fmt.Errorf("init tracer: %w", err)
@@ -264,6 +295,8 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		Language:      language,
 		Progress:      progressFn(ctx, logger, st),
 		Capabilities:  caps,
+		Genes:         genesGuide,
+		GeneLanguage:  genesLanguage,
 	}
 
 	startedAt := time.Now()
