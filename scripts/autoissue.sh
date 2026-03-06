@@ -689,3 +689,9 @@ done
 if [[ $TOTAL -gt 1 ]]; then
   log "===== All ${TOTAL} issues processed ====="
 fi
+
+# --- Return to main with latest changes ---
+log "Checking out main and pulling latest..."
+git checkout main
+git pull --ff-only
+log "Ready on main."
