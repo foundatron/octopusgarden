@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -49,9 +50,10 @@ func feedbackHeader(kind string) string {
 
 // iterationFeedback captures what happened in one iteration for building the next prompt.
 type iterationFeedback struct {
-	iteration int
-	kind      string
-	message   string
+	iteration       int
+	kind            string
+	message         string
+	failedScenarios map[string]float64 // populated for feedbackValidation entries; nil otherwise
 }
 
 const systemPromptPrefix = `You are a code generation agent. Your task is to generate a complete, working application based on the following specification.
@@ -283,6 +285,12 @@ func buildMessages(iter int, history []iterationFeedback) []llm.Message {
 	var b strings.Builder
 	b.WriteString("The previous attempt did not fully satisfy the specification. Here is the feedback:\n\n")
 
+	// Inject steering for scenarios stalling across consecutive iterations (full history).
+	if steeringText := buildSteeringText(history); steeringText != "" {
+		b.WriteString(steeringText)
+		b.WriteString("\n")
+	}
+
 	// Include last 3 feedback entries with categorized headers.
 	start := max(len(history)-maxFeedbackEntries, 0)
 	writeCategorizedFeedback(&b, history[start:])
@@ -304,6 +312,12 @@ func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string
 	paths := slices.Sorted(maps.Keys(bestFiles))
 	for _, p := range paths {
 		fmt.Fprintf(&b, "=== FILE: %s ===\n%s=== END FILE ===\n\n", p, bestFiles[p])
+	}
+
+	// Inject steering for scenarios stalling across consecutive iterations (full history).
+	if steeringText := buildSteeringText(history); steeringText != "" {
+		b.WriteString(steeringText)
+		b.WriteString("\n")
 	}
 
 	if len(history) > 0 {
@@ -369,4 +383,98 @@ func extractFailureStrings(history []iterationFeedback) []string {
 		}
 	}
 	return failures
+}
+
+// parseFailedScenarios parses the mixed pass/fail slice returned by ValidateFn into a
+// map of scenario ID → score for failing scenarios only.
+//
+// Each element is a full scenario result string (possibly multi-line). Passing entries
+// start with "✓"; failing entries start with "✗ id (score/100)" on the first line.
+// Indented sub-lines (step detail) are part of the same element and are ignored here.
+//
+// NOTE: The expected format is "✗ id (score/100)" as produced by formatFailedScenario
+// in cmd/octog/main.go. If that format changes, this parser will silently stop matching.
+func parseFailedScenarios(failures []string) map[string]float64 {
+	result := make(map[string]float64, len(failures))
+	for _, entry := range failures {
+		// Take only the first line of each entry (sub-lines are step detail).
+		firstLine, _, _ := strings.Cut(entry, "\n")
+		firstLine = strings.TrimSpace(firstLine)
+
+		// Only parse failing scenarios; skip passing ones.
+		const failPrefix = "✗ "
+		if !strings.HasPrefix(firstLine, failPrefix) {
+			continue
+		}
+
+		rest := firstLine[len(failPrefix):]
+
+		// Split on the last "(" to separate the scenario ID from the score.
+		parenIdx := strings.LastIndex(rest, "(")
+		if parenIdx < 0 {
+			continue
+		}
+		id := strings.TrimSpace(rest[:parenIdx])
+		scoreStr := rest[parenIdx+1:]
+
+		// scoreStr is now "score/100)" — strip the "/100)" suffix.
+		slashIdx := strings.Index(scoreStr, "/100)")
+		if slashIdx < 0 {
+			continue
+		}
+		scoreStr = scoreStr[:slashIdx]
+
+		score, err := strconv.ParseFloat(scoreStr, 64)
+		if err != nil {
+			continue
+		}
+		result[id] = score
+	}
+	return result
+}
+
+// buildSteeringText inspects the full iteration history and returns a steering notice
+// for scenarios that have failed in 2 or more consecutive validation iterations.
+// Non-validation entries (build/health/parse/run errors) do not break failure streaks.
+// Returns an empty string when no stalling scenarios are detected.
+func buildSteeringText(history []iterationFeedback) string {
+	streaks := make(map[string]int)
+	lastScore := make(map[string]float64)
+
+	for _, fb := range history {
+		if fb.kind != feedbackValidation {
+			continue
+		}
+		// Reset streaks for scenarios that did not fail in this validation entry.
+		for id := range streaks {
+			if _, failed := fb.failedScenarios[id]; !failed {
+				streaks[id] = 0
+			}
+		}
+		// Increment streaks for scenarios that failed in this entry.
+		for id, score := range fb.failedScenarios {
+			streaks[id]++
+			lastScore[id] = score
+		}
+	}
+
+	// Collect scenarios stalling across 2+ consecutive iterations.
+	stalling := make([]string, 0, len(streaks))
+	for id, streak := range streaks {
+		if streak >= 2 {
+			stalling = append(stalling, id)
+		}
+	}
+	if len(stalling) == 0 {
+		return ""
+	}
+	slices.Sort(stalling)
+
+	var b strings.Builder
+	b.WriteString("STALL NOTICE: The following scenario(s) have failed in multiple consecutive attempts. ")
+	b.WriteString("Try a fundamentally different implementation approach for each:\n")
+	for _, id := range stalling {
+		fmt.Fprintf(&b, "- %s (score: %.0f/100, failing %d iterations in a row)\n", id, lastScore[id], streaks[id])
+	}
+	return b.String()
 }
