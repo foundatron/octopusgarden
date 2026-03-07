@@ -900,6 +900,23 @@ func TestBuildSteeringText(t *testing.T) {
 	}
 }
 
+func TestBuildSteeringTextTrajectory(t *testing.T) {
+	mkVal := func(failed map[string]float64) iterationFeedback {
+		return iterationFeedback{kind: feedbackValidation, failedScenarios: failed}
+	}
+
+	history := []iterationFeedback{
+		mkVal(map[string]float64{"move-card": 60}),
+		mkVal(map[string]float64{"move-card": 50}),
+		mkVal(map[string]float64{"move-card": 45}),
+	}
+	got := buildSteeringText(history)
+
+	if !strings.Contains(got, "60 → 50 → 45") {
+		t.Errorf("steering text should contain score trajectory, got:\n%s", got)
+	}
+}
+
 func TestBuildMessagesWithSteering(t *testing.T) {
 	// Two consecutive validation failures for the same scenario should inject steering.
 	history := []iterationFeedback{

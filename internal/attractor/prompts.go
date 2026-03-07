@@ -288,6 +288,7 @@ func buildMessages(iter int, history []iterationFeedback) []llm.Message {
 	// Inject steering for scenarios stalling across consecutive iterations (full history).
 	if steeringText := buildSteeringText(history); steeringText != "" {
 		b.WriteString(steeringText)
+		b.WriteString("\n")
 	}
 
 	// Include last 3 feedback entries with categorized headers.
@@ -316,6 +317,7 @@ func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string
 	// Inject steering for scenarios stalling across consecutive iterations (full history).
 	if steeringText := buildSteeringText(history); steeringText != "" {
 		b.WriteString(steeringText)
+		b.WriteString("\n")
 	}
 
 	if len(history) > 0 {
@@ -405,7 +407,7 @@ func FormatScenarioFailureLine(id string, score float64) string {
 // first line, as produced by FormatScenarioFailureLine in cmd/octog.
 // Indented sub-lines (step detail) are part of the same element and are ignored here.
 func parseFailedScenarios(failures []string) map[string]float64 {
-	result := make(map[string]float64)
+	var result map[string]float64
 	for _, entry := range failures {
 		// Take only the first line of each entry (sub-lines are step detail).
 		firstLine, _, _ := strings.Cut(entry, "\n")
@@ -437,6 +439,9 @@ func parseFailedScenarios(failures []string) map[string]float64 {
 		if err != nil {
 			continue
 		}
+		if result == nil {
+			result = make(map[string]float64)
+		}
 		result[id] = score
 	}
 	return result
@@ -448,7 +453,7 @@ func parseFailedScenarios(failures []string) map[string]float64 {
 // Returns an empty string when no stalling scenarios are detected.
 func buildSteeringText(history []iterationFeedback) string {
 	streaks := make(map[string]int)
-	lastScore := make(map[string]float64)
+	scoreHistory := make(map[string][]float64)
 
 	for _, fb := range history {
 		if fb.kind != feedbackValidation {
@@ -458,12 +463,13 @@ func buildSteeringText(history []iterationFeedback) string {
 		for id := range streaks {
 			if _, failed := fb.failedScenarios[id]; !failed {
 				delete(streaks, id)
+				delete(scoreHistory, id)
 			}
 		}
 		// Increment streaks for scenarios that failed in this entry.
 		for id, score := range fb.failedScenarios {
 			streaks[id]++
-			lastScore[id] = score
+			scoreHistory[id] = append(scoreHistory[id], score)
 		}
 	}
 
@@ -483,7 +489,16 @@ func buildSteeringText(history []iterationFeedback) string {
 	b.WriteString("STALL NOTICE: The following scenario(s) have failed in multiple consecutive attempts. ")
 	b.WriteString("Try a fundamentally different implementation approach for each:\n")
 	for _, id := range stalling {
-		fmt.Fprintf(&b, "- %s (score: %.0f/100, failing %d iterations in a row)\n", id, lastScore[id], streaks[id])
+		fmt.Fprintf(&b, "- %s (score: %s/100, failing %d iterations in a row)\n", id, formatScoreTrajectory(scoreHistory[id]), streaks[id])
 	}
 	return b.String()
+}
+
+// formatScoreTrajectory formats a slice of scores as "50 → 45 → 40".
+func formatScoreTrajectory(scores []float64) string {
+	parts := make([]string, len(scores))
+	for i, s := range scores {
+		parts[i] = fmt.Sprintf("%.0f", s)
+	}
+	return strings.Join(parts, " → ")
 }
