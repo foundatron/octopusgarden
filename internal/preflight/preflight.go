@@ -20,6 +20,8 @@ type Result struct {
 	AggregateScore    float64
 	Pass              bool
 	Questions         []string
+	Strengths         map[string][]string
+	Gaps              map[string][]string
 }
 
 // preflightResponse is the expected JSON structure from the preflight LLM call.
@@ -28,6 +30,8 @@ type preflightResponse struct {
 	ConstraintClarity float64             `json:"constraint_clarity"`
 	SuccessClarity    float64             `json:"success_clarity"`
 	Questions         map[string][]string `json:"questions"`
+	Strengths         map[string][]string `json:"strengths"`
+	Gaps              map[string][]string `json:"gaps"`
 }
 
 // computeAggregate returns a weighted aggregate of the three clarity dimensions.
@@ -45,13 +49,27 @@ Evaluate the spec on three dimensions, each scored from 0.0 (completely unclear)
 - constraint_clarity: Does the spec clearly define HOW the software should work? Are technical constraints, interfaces, and non-functional requirements specified?
 - success_clarity: Does the spec clearly define how to verify success? Are acceptance criteria measurable and testable?
 
-For any dimension scoring below the caller's threshold, provide clarifying questions that, if answered, would raise that dimension's score.
+For each dimension, provide:
+- "strengths": 2–4 bullets describing what the spec does well for that dimension
+- "gaps": 0–4 bullets describing specific, actionable gaps that would raise the score if addressed
+
+For any dimension scoring below the caller's threshold, also provide clarifying questions in "questions".
 
 Respond ONLY with valid JSON matching this exact schema:
 {
   "goal_clarity": <float 0.0-1.0>,
   "constraint_clarity": <float 0.0-1.0>,
   "success_clarity": <float 0.0-1.0>,
+  "strengths": {
+    "goal": ["strength1", "strength2"],
+    "constraint": ["strength1"],
+    "success": ["strength1"]
+  },
+  "gaps": {
+    "goal": ["gap1"],
+    "constraint": ["gap1", "gap2"],
+    "success": []
+  },
   "questions": {
     "goal": ["question1", "question2"],
     "constraint": ["question1"],
@@ -64,6 +82,16 @@ Example response for a clear spec:
   "goal_clarity": 0.95,
   "constraint_clarity": 0.88,
   "success_clarity": 0.92,
+  "strengths": {
+    "goal": ["Core user flows are explicitly enumerated", "Problem statement is unambiguous"],
+    "constraint": ["API contract is fully specified", "Performance budget is defined"],
+    "success": ["Acceptance criteria are measurable", "Test scenarios are concrete"]
+  },
+  "gaps": {
+    "goal": [],
+    "constraint": ["Error handling behavior under load is unspecified"],
+    "success": []
+  },
   "questions": {}
 }
 
@@ -72,6 +100,16 @@ Example response for an unclear spec:
   "goal_clarity": 0.4,
   "constraint_clarity": 0.6,
   "success_clarity": 0.3,
+  "strengths": {
+    "goal": ["High-level purpose is stated"],
+    "constraint": ["Technology stack is named", "Deployment target is specified"],
+    "success": ["One passing criterion is given"]
+  },
+  "gaps": {
+    "goal": ["Primary user-facing features are not listed", "Edge cases are absent"],
+    "constraint": ["API request/response shapes are missing"],
+    "success": ["No measurable thresholds defined", "No negative test cases specified"]
+  },
   "questions": {
     "goal": ["What are the primary user-facing features?", "What problem does this software solve?"],
     "success": ["How will success be measured?", "What constitutes a passing test?"]
@@ -154,5 +192,7 @@ func Check(ctx context.Context, client llm.Client, model, specContent string, th
 		AggregateScore:    agg,
 		Pass:              agg >= threshold,
 		Questions:         questions,
+		Strengths:         parsed.Strengths,
+		Gaps:              parsed.Gaps,
 	}, nil
 }
