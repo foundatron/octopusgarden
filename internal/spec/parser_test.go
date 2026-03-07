@@ -27,13 +27,14 @@ Each item has an id, name, description, and created_at timestamp.
 
 func TestParse(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         string
-		wantTitle     string
-		wantDesc      string
-		wantSections  int
-		wantErr       error
-		checkSections func(t *testing.T, sections []Section)
+		name            string
+		input           string
+		wantTitle       string
+		wantDesc        string
+		wantSections    int
+		wantErr         error
+		wantTestCommand string
+		checkSections   func(t *testing.T, sections []Section)
 	}{
 		{
 			name:         "valid spec",
@@ -176,6 +177,30 @@ func TestParse(t *testing.T) {
 			wantTitle:    "",
 			wantSections: 0,
 		},
+		{
+			name:            "test command present",
+			input:           "# My App\n\nA description.\nTest-Command: go test ./...\n\n## Section\n\nContent\n",
+			wantTitle:       "My App",
+			wantDesc:        "A description.\nTest-Command: go test ./...",
+			wantSections:    2,
+			wantTestCommand: "go test ./...",
+		},
+		{
+			name:            "test command absent",
+			input:           "# My App\n\nA description.\n\n## Section\n\nContent\n",
+			wantTitle:       "My App",
+			wantDesc:        "A description.",
+			wantSections:    2,
+			wantTestCommand: "",
+		},
+		{
+			name:            "test command with special chars",
+			input:           "# My App\n\nDescription.\nTest-Command: npm test && exit 0\n",
+			wantTitle:       "My App",
+			wantDesc:        "Description.\nTest-Command: npm test && exit 0",
+			wantSections:    1,
+			wantTestCommand: "npm test && exit 0",
+		},
 	}
 
 	for _, tt := range tests {
@@ -195,6 +220,9 @@ func TestParse(t *testing.T) {
 			}
 			if got.Description != tt.wantDesc {
 				t.Errorf("Description = %q, want %q", got.Description, tt.wantDesc)
+			}
+			if got.TestCommand != tt.wantTestCommand {
+				t.Errorf("TestCommand = %q, want %q", got.TestCommand, tt.wantTestCommand)
 			}
 			if len(got.Sections) != tt.wantSections {
 				t.Errorf("len(Sections) = %d, want %d", len(got.Sections), tt.wantSections)

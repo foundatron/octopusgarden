@@ -50,6 +50,7 @@ const (
 	OutcomeRunFail    IterationOutcome = "run_fail"
 	OutcomeHealthFail IterationOutcome = "health_fail"
 	OutcomeParseFail  IterationOutcome = "parse_fail"
+	OutcomeTestFail   IterationOutcome = "test_fail"
 )
 
 // IterationProgress is passed to the progress callback after each iteration completes.
@@ -90,8 +91,9 @@ type ScenarioCapabilities struct {
 // *container.Manager satisfies this automatically.
 type ContainerManager interface {
 	Build(ctx context.Context, dir, tag string) error
-	Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
+	Run(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error)
 	RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error)
+	RunTest(ctx context.Context, containerID, command string) (container.ExecResult, error)
 	WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
 	WaitPort(ctx context.Context, addr string, timeout time.Duration) error
 	StartSession(ctx context.Context, tag string) (session *container.Session, stop container.StopFunc, err error)
@@ -126,6 +128,7 @@ type RunOptions struct {
 	Capabilities      ScenarioCapabilities // detected from loaded scenarios
 	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
 	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
+	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -438,6 +441,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 
 	caps := s.opts.Capabilities
 	var url string
+	var containerID string
 
 	// When both HTTP and exec capabilities are needed, two containers run from the same image:
 	// - Session container: runs "sleep infinity" for docker exec commands
@@ -467,13 +471,12 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		}
 		defer res.stop()
 		url = res.url
+		containerID = res.containerID
 		s.grpcTargetProvider(res.grpcTarget)
 		defer s.grpcTargetProvider("") // clear after validation
 	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
 		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
-		var stop container.StopFunc
-		var err error
-		url, stop, err = a.containerMgr.Run(ctx, tag)
+		runRes, stop, err := a.containerMgr.Run(ctx, tag)
 		if err != nil {
 			a.logger.Warn("container run failed", "iteration", iter, "error", err)
 			s.lastOutcome = OutcomeRunFail
@@ -482,6 +485,8 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 			return a.checkStalled(iter, s), nil
 		}
 		defer stop()
+		url = runRes.URL
+		containerID = runRes.ContainerID
 
 		if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
 			a.logger.Warn("health check failed", "iteration", iter, "error", err)
@@ -490,6 +495,11 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 			s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
 			return a.checkStalled(iter, s), nil
 		}
+	}
+
+	// Run test command before validation when configured and an HTTP container is available.
+	if skip, stall, err := a.runTestCommand(ctx, iter, containerID, s); err != nil || skip {
+		return stall, err
 	}
 
 	satisfaction, failures, valCost, err := validate(ctx, url)
@@ -504,12 +514,44 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	return a.processValidation(iter, satisfaction, failures, files, s)
 }
 
+// runTestCommand executes the test command against the HTTP container when configured.
+// Returns (skip=true, stall, nil) when the test failed — caller must not call validate.
+// Returns (skip=false, nil, nil) when the test passed or test command is empty.
+// Returns (skip=false, nil, err) on hard error.
+func (a *Attractor) runTestCommand(ctx context.Context, iter int, containerID string, s *runState) (skip bool, stall *RunResult, err error) {
+	if s.opts.TestCommand == "" {
+		return false, nil, nil
+	}
+	if containerID == "" {
+		a.logger.Debug("skipping test command: no HTTP container", "iteration", iter)
+		return false, nil, nil
+	}
+	execRes, execErr := a.containerMgr.RunTest(ctx, containerID, s.opts.TestCommand)
+	if execErr != nil {
+		return false, nil, fmt.Errorf("attractor: run test iteration %d: %w", iter, execErr)
+	}
+	if execRes.ExitCode != 0 {
+		output := execRes.Stdout
+		if output != "" && execRes.Stderr != "" {
+			output += "\n"
+		}
+		output += execRes.Stderr
+		a.logger.Warn("test command failed", "iteration", iter, "exit_code", execRes.ExitCode)
+		s.lastOutcome = OutcomeTestFail
+		s.lastSatisfaction = 0
+		s.recordStall(iter, feedbackTestError, fmt.Sprintf("Test command exited %d:\n%s", execRes.ExitCode, truncateFeedback(output, maxFeedbackBytes)))
+		return true, a.checkStalled(iter, s), nil
+	}
+	return false, nil, nil
+}
+
 // grpcContainerResult holds the outputs of startGRPCContainer.
 type grpcContainerResult struct {
-	url        string
-	stop       container.StopFunc
-	grpcTarget string
-	stalled    *RunResult // non-nil if startup failed (stall, not error)
+	url         string
+	stop        container.StopFunc
+	grpcTarget  string
+	containerID string
+	stalled     *RunResult // non-nil if startup failed (stall, not error)
 }
 
 // startGRPCContainer launches a container with gRPC port exposed and waits for readiness.
@@ -530,7 +572,7 @@ func (a *Attractor) startGRPCContainer(ctx context.Context, iter int, tag string
 		return grpcContainerResult{stalled: stallResult}, nil
 	}
 
-	return grpcContainerResult{url: runResult.URL, stop: stop, grpcTarget: grpcTarget}, nil
+	return grpcContainerResult{url: runResult.URL, stop: stop, grpcTarget: grpcTarget, containerID: runResult.ContainerID}, nil
 }
 
 // waitGRPCHealth waits for either HTTP or gRPC port readiness depending on capabilities.

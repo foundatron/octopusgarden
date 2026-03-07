@@ -33,8 +33,9 @@ func (m *mockLLMClient) Judge(_ context.Context, _ llm.JudgeRequest) (llm.JudgeR
 // mockContainerMgr is a configurable mock for ContainerManager.
 type mockContainerMgr struct {
 	buildFn        func(ctx context.Context, dir, tag string) error
-	runFn          func(ctx context.Context, tag string) (string, container.StopFunc, error)
+	runFn          func(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error)
 	runMultiPortFn func(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error)
+	runTestFn      func(ctx context.Context, containerID, command string) (container.ExecResult, error)
 	waitHealthyFn  func(ctx context.Context, url string, timeout time.Duration) error
 	waitPortFn     func(ctx context.Context, addr string, timeout time.Duration) error
 	startSessionFn func(ctx context.Context, tag string) (*container.Session, container.StopFunc, error)
@@ -47,11 +48,18 @@ func (m *mockContainerMgr) Build(ctx context.Context, dir, tag string) error {
 	return nil
 }
 
-func (m *mockContainerMgr) Run(ctx context.Context, tag string) (string, container.StopFunc, error) {
+func (m *mockContainerMgr) Run(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error) {
 	if m.runFn != nil {
 		return m.runFn(ctx, tag)
 	}
-	return "http://127.0.0.1:9999", func() {}, nil
+	return container.RunResult{URL: "http://127.0.0.1:9999", ContainerID: "mock-container-id"}, func() {}, nil
+}
+
+func (m *mockContainerMgr) RunTest(ctx context.Context, containerID, command string) (container.ExecResult, error) {
+	if m.runTestFn != nil {
+		return m.runTestFn(ctx, containerID, command)
+	}
+	return container.ExecResult{ExitCode: 0}, nil
 }
 
 func (m *mockContainerMgr) RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error) {
@@ -465,12 +473,12 @@ func TestContainerRunFailure(t *testing.T) {
 		},
 	}
 	mgr := &mockContainerMgr{
-		runFn: func(_ context.Context, _ string) (string, container.StopFunc, error) {
+		runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
 			n := runCount.Add(1)
 			if n == 1 {
-				return "", nil, fmt.Errorf("port conflict")
+				return container.RunResult{}, nil, fmt.Errorf("port conflict")
 			}
-			return "http://127.0.0.1:9999", func() {}, nil
+			return container.RunResult{URL: "http://127.0.0.1:9999", ContainerID: "mock-container-id"}, func() {}, nil
 		},
 	}
 	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
@@ -495,9 +503,9 @@ func TestNeedsBrowserTriggersHTTPContainer(t *testing.T) {
 		},
 	}
 	mgr := &mockContainerMgr{
-		runFn: func(_ context.Context, _ string) (string, container.StopFunc, error) {
+		runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
 			runCalled = true
-			return "http://127.0.0.1:9999", func() {}, nil
+			return container.RunResult{URL: "http://127.0.0.1:9999", ContainerID: "mock-container-id"}, func() {}, nil
 		},
 		waitHealthyFn: func(_ context.Context, _ string, _ time.Duration) error {
 			waitHealthyCalled = true
@@ -1663,5 +1671,153 @@ func TestBlockOnRegressionPreventsConvergence(t *testing.T) {
 	}
 	if result.Iterations < 3 {
 		t.Errorf("expected at least 3 iterations (regression blocked iter 2), got %d", result.Iterations)
+	}
+}
+
+func TestTestCommandEmpty_SkipsMechanicalTest(t *testing.T) {
+	var runTestCalled bool
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runTestFn: func(_ context.Context, _, _ string) (container.ExecResult, error) {
+			runTestCalled = true
+			return container.ExecResult{ExitCode: 0}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	// TestCommand is empty — RunTest should never be called.
+	opts.TestCommand = ""
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if runTestCalled {
+		t.Error("RunTest should not be called when TestCommand is empty")
+	}
+}
+
+func TestTestCommandExitZero_ProceedsToJudge(t *testing.T) {
+	var validateCalled bool
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runTestFn: func(_ context.Context, _, _ string) (container.ExecResult, error) {
+			return container.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		validateCalled = true
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.TestCommand = "go test ./..."
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !validateCalled {
+		t.Error("validate should be called when test command exits 0")
+	}
+}
+
+func TestTestCommandExitNonZero_SkipsJudge(t *testing.T) {
+	var validateCalled bool
+	var lastUserMsg string
+	var lastOutcome IterationOutcome
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				lastUserMsg = req.Messages[0].Content
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runTestFn: func(_ context.Context, _, _ string) (container.ExecResult, error) {
+			return container.ExecResult{ExitCode: 1, Stderr: "FAIL: test_foo\n"}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		validateCalled = true
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.TestCommand = "go test ./..."
+	opts.Progress = func(p IterationProgress) {
+		lastOutcome = p.Outcome
+	}
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusStalled {
+		t.Errorf("expected stalled (all test_fail), got %q", result.Status)
+	}
+	if validateCalled {
+		t.Error("validate should NOT be called when test command exits non-zero")
+	}
+	if lastOutcome != OutcomeTestFail {
+		t.Errorf("expected outcome %q, got %q", OutcomeTestFail, lastOutcome)
+	}
+	// Second iteration prompt should contain TEST FAILURE header.
+	if !strings.Contains(lastUserMsg, "TEST FAILURE") {
+		t.Errorf("expected TEST FAILURE in user message, got: %s", lastUserMsg)
+	}
+}
+
+func TestTestCommandOutput_IncludedInFeedback(t *testing.T) {
+	const testOutput = "error: assertion failed in test_bar"
+	var lastUserMsg string
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			if len(req.Messages) > 0 {
+				lastUserMsg = req.Messages[0].Content
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runTestFn: func(_ context.Context, _, _ string) (container.ExecResult, error) {
+			return container.ExecResult{ExitCode: 1, Stdout: testOutput, Stderr: ""}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.TestCommand = "go test ./..."
+
+	a := New(client, mgr, testLogger(), nil)
+	_, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(lastUserMsg, testOutput) {
+		t.Errorf("expected test output %q in user message, got: %s", testOutput, lastUserMsg)
 	}
 }

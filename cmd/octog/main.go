@@ -345,6 +345,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		Capabilities:      caps,
 		Genes:             p.GenesGuide,
 		GeneLanguage:      p.GeneLanguage,
+		TestCommand:       parsedSpec.TestCommand,
 	}
 
 	startedAt := time.Now()

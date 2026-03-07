@@ -10,8 +10,9 @@ import (
 
 type mockContainerMgr struct {
 	buildFn        func(ctx context.Context, dir, tag string) error
-	runFn          func(ctx context.Context, tag string) (string, container.StopFunc, error)
+	runFn          func(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error)
 	runMultiPortFn func(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error)
+	runTestFn      func(ctx context.Context, containerID, command string) (container.ExecResult, error)
 	waitHealthyFn  func(ctx context.Context, url string, timeout time.Duration) error
 	waitPortFn     func(ctx context.Context, addr string, timeout time.Duration) error
 	startSessionFn func(ctx context.Context, tag string) (*container.Session, container.StopFunc, error)
@@ -21,8 +22,15 @@ func (m *mockContainerMgr) Build(ctx context.Context, dir, tag string) error {
 	return m.buildFn(ctx, dir, tag)
 }
 
-func (m *mockContainerMgr) Run(ctx context.Context, tag string) (string, container.StopFunc, error) {
+func (m *mockContainerMgr) Run(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error) {
 	return m.runFn(ctx, tag)
+}
+
+func (m *mockContainerMgr) RunTest(ctx context.Context, containerID, command string) (container.ExecResult, error) {
+	if m.runTestFn != nil {
+		return m.runTestFn(ctx, containerID, command)
+	}
+	return container.ExecResult{ExitCode: 0}, nil
 }
 
 func (m *mockContainerMgr) RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error) {
@@ -103,8 +111,8 @@ func TestTracingContainerRun(t *testing.T) {
 			defer func() { _ = tp.Shutdown(context.Background()) }()
 
 			mgr := &mockContainerMgr{
-				runFn: func(_ context.Context, _ string) (string, container.StopFunc, error) {
-					return tt.url, func() {}, tt.err
+				runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+					return container.RunResult{URL: tt.url, ContainerID: "test-id"}, func() {}, tt.err
 				},
 			}
 
@@ -301,6 +309,49 @@ func TestTracingContainerSession(t *testing.T) {
 			if spans[0].Name != "container.session" {
 				t.Errorf("expected span name container.session, got %q", spans[0].Name)
 			}
+		})
+	}
+}
+
+func TestTracingContainerRunTest(t *testing.T) {
+	tests := []struct {
+		name     string
+		exitCode int
+		err      error
+		wantErr  bool
+	}{
+		{name: "success exit 0", exitCode: 0},
+		{name: "non-zero exit", exitCode: 1},
+		{name: "error", err: errMock, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exp, tp := newTestTP()
+			defer func() { _ = tp.Shutdown(context.Background()) }()
+
+			mgr := &mockContainerMgr{
+				runTestFn: func(_ context.Context, _, _ string) (container.ExecResult, error) {
+					return container.ExecResult{ExitCode: tt.exitCode}, tt.err
+				},
+			}
+
+			traced := NewTracingContainerManager(mgr, tp)
+			_, err := traced.RunTest(context.Background(), "container-abc", "go test ./...")
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("wantErr=%v, got %v", tt.wantErr, err)
+			}
+
+			_ = tp.ForceFlush(context.Background())
+			spans := exp.GetSpans()
+			if len(spans) != 1 {
+				t.Fatalf("expected 1 span, got %d", len(spans))
+			}
+			if spans[0].Name != "container.run_test" {
+				t.Errorf("expected span name container.run_test, got %q", spans[0].Name)
+			}
+			assertHasAttr(t, spans[0].Attributes, "container.id")
 		})
 	}
 }
