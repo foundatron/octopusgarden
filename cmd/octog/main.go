@@ -41,10 +41,6 @@ import (
 // satisfaction gate.
 const stepPassThreshold = 80
 
-// maxObservedBytes is the maximum bytes of step observed output included in
-// detailed failure feedback. Longer output is truncated with a … suffix.
-const maxObservedBytes = 500
-
 var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
 	errScenariosAndTargetRequired = errors.New("--scenarios and --target are required")
@@ -951,19 +947,19 @@ func formatFailedScenario(s scenario.ScoredScenario) string {
 	b.WriteString(attractor.FormatScenarioFailureLine(s.ScenarioID, s.Score))
 	for _, step := range s.Steps {
 		if step.StepScore.Score >= stepPassThreshold {
-			fmt.Fprintf(&b, "\n  ✓ %s (%d/100)", step.StepResult.Description, step.StepScore.Score)
+			fmt.Fprintf(&b, "\n%s %s (%d/100)", attractor.StepPassPrefix, step.StepResult.Description, step.StepScore.Score)
 			continue
 		}
-		fmt.Fprintf(&b, "\n  ✗ %s (%d/100)", step.StepResult.Description, step.StepScore.Score)
+		fmt.Fprintf(&b, "\n%s %s (%d/100)", attractor.StepFailPrefix, step.StepResult.Description, step.StepScore.Score)
 		if step.StepScore.Reasoning != "" {
 			fmt.Fprintf(&b, "\n    Reasoning: %s", step.StepScore.Reasoning)
 		}
 		if step.StepResult.Observed != "" {
 			obs := step.StepResult.Observed
 			label := "Observed"
-			if len(obs) > maxObservedBytes {
-				obs = truncateObserved(obs, maxObservedBytes)
-				label = fmt.Sprintf("Observed (%dB)", maxObservedBytes)
+			if len(obs) > attractor.MaxObservedBytes {
+				obs = truncateObserved(obs, attractor.MaxObservedBytes)
+				label = fmt.Sprintf("Observed (%dB)", attractor.MaxObservedBytes)
 			}
 			fmt.Fprintf(&b, "\n    %s: %s", label, obs)
 		}

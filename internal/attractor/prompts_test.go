@@ -115,12 +115,12 @@ func TestBuildMessagesLimitsHistory(t *testing.T) {
 
 func TestTruncateFeedback(t *testing.T) {
 	short := "short message"
-	if got := truncateFeedback(short); got != short {
+	if got := truncateFeedback(short, maxFeedbackBytes); got != short {
 		t.Errorf("short message should be unchanged, got %q", got)
 	}
 
 	long := strings.Repeat("x", maxFeedbackBytes+100)
-	got := truncateFeedback(long)
+	got := truncateFeedback(long, maxFeedbackBytes)
 	if !strings.HasSuffix(got, "\n[truncated]") {
 		t.Error("long message should end with [truncated]")
 	}
@@ -131,14 +131,14 @@ func TestTruncateFeedback(t *testing.T) {
 
 func TestTruncateFeedbackExactBoundary(t *testing.T) {
 	exact := strings.Repeat("x", maxFeedbackBytes)
-	got := truncateFeedback(exact)
+	got := truncateFeedback(exact, maxFeedbackBytes)
 	if got != exact {
 		t.Error("message at exact boundary should not be truncated")
 	}
 }
 
 func TestFormatValidationFeedback(t *testing.T) {
-	result := formatValidationFeedback(72.5, []string{"missing GET /items", "wrong status code"})
+	result := formatValidationFeedback(72.5, []string{"missing GET /items", "wrong status code"}, fidelityStandard)
 	if !strings.Contains(result, "72.5/100") {
 		t.Error("should contain score")
 	}
@@ -155,7 +155,7 @@ func TestFormatValidationFeedback(t *testing.T) {
 }
 
 func TestFormatValidationFeedbackNoFailures(t *testing.T) {
-	result := formatValidationFeedback(95.0, nil)
+	result := formatValidationFeedback(95.0, nil, fidelityStandard)
 	if !strings.Contains(result, "95.0/100") {
 		t.Error("should contain score")
 	}
@@ -165,9 +165,9 @@ func TestFormatValidationFeedbackNoFailures(t *testing.T) {
 }
 
 func TestFormatValidationFeedbackMultiLine(t *testing.T) {
-	// Multi-line entries should pass through verbatim without any "- " prefix added.
+	// Multi-line entries with only failing steps should pass through verbatim under standard fidelity.
 	entry := "✗ my-scenario (45/100)\n  ✗ check health (20/100)\n    Reasoning: timeout\n    Observed: got 500"
-	result := formatValidationFeedback(45.0, []string{entry})
+	result := formatValidationFeedback(45.0, []string{entry}, fidelityStandard)
 	if !strings.Contains(result, "Scenario results:") {
 		t.Error("should contain Scenario results header")
 	}
@@ -366,7 +366,7 @@ func TestTruncateFeedbackUTF8Safe(t *testing.T) {
 	// U+2603 SNOWMAN = 3 bytes (0xE2 0x98 0x83)
 	prefix := strings.Repeat("x", maxFeedbackBytes-1)
 	input := prefix + "\u2603" + strings.Repeat("y", 100) // rune straddles boundary
-	got := truncateFeedback(input)
+	got := truncateFeedback(input, maxFeedbackBytes)
 	if !strings.HasSuffix(got, "\n[truncated]") {
 		t.Error("should end with [truncated]")
 	}
@@ -1010,6 +1010,199 @@ func TestBuildPatchMessagesWithSteering(t *testing.T) {
 	} else if steerIdx > failIdx {
 		t.Errorf("steering text should appear before 'Failures to fix' section")
 	}
+}
+
+func TestDetermineFidelity(t *testing.T) {
+	tests := []struct {
+		name       string
+		iteration  int
+		stallCount int
+		want       feedbackFidelity
+	}{
+		{"iter1_no_stall", 1, 0, fidelityCompact},
+		{"iter2_no_stall", 2, 0, fidelityCompact},
+		{"iter3_no_stall", 3, 0, fidelityStandard},
+		{"iter4_no_stall", 4, 0, fidelityStandard},
+		{"iter5_no_stall", 5, 0, fidelityFull},
+		{"iter10_no_stall", 10, 0, fidelityFull},
+		{"iter1_stall2_escalates_to_standard", 1, 2, fidelityStandard},
+		{"iter3_stall2_escalates_to_full", 3, 2, fidelityFull},
+		{"iter5_stall2_stays_full", 5, 2, fidelityFull},
+		{"iter1_stall1_no_escalation", 1, 1, fidelityCompact},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := determineFidelity(tt.iteration, tt.stallCount)
+			if got != tt.want {
+				t.Errorf("determineFidelity(%d, %d) = %d, want %d", tt.iteration, tt.stallCount, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaxFeedbackForFidelity(t *testing.T) {
+	tests := []struct {
+		fidelity feedbackFidelity
+		want     int
+	}{
+		{fidelityCompact, 4096},
+		{fidelityStandard, 12288},
+		{fidelityFull, 24576},
+	}
+	for _, tt := range tests {
+		got := maxFeedbackForFidelity(tt.fidelity)
+		if got != tt.want {
+			t.Errorf("maxFeedbackForFidelity(%d) = %d, want %d", tt.fidelity, got, tt.want)
+		}
+	}
+}
+
+func TestFormatValidationFeedbackFidelityCompact(t *testing.T) {
+	entry := "✗ scenario-a (40/100)\n  ✗ step-one (20/100)\n    Reasoning: timeout\n    Observed: response body\n  ✓ step-two (100/100)\n    Reasoning: ok"
+	result := formatValidationFeedback(40.0, []string{entry}, fidelityCompact)
+
+	// Scenario summary line must be present.
+	if !strings.Contains(result, "✗ scenario-a (40/100)") {
+		t.Error("compact: should contain scenario summary line")
+	}
+	// No step detail or sub-detail.
+	if strings.Contains(result, "step-one") {
+		t.Error("compact: should not contain step detail")
+	}
+	if strings.Contains(result, "Reasoning") {
+		t.Error("compact: should not contain Reasoning")
+	}
+	if strings.Contains(result, "Observed") {
+		t.Error("compact: should not contain Observed")
+	}
+}
+
+func TestFormatValidationFeedbackFidelityStandard(t *testing.T) {
+	entry := "✗ scenario-a (40/100)\n  ✗ fail-step (20/100)\n    Reasoning: timeout\n    Observed: observed-data\n  ✓ pass-step (100/100)\n    Reasoning: all good"
+	result := formatValidationFeedback(40.0, []string{entry}, fidelityStandard)
+
+	// Scenario summary present.
+	if !strings.Contains(result, "✗ scenario-a (40/100)") {
+		t.Error("standard: should contain scenario summary")
+	}
+	// Failing step detail present.
+	if !strings.Contains(result, "fail-step") {
+		t.Error("standard: should contain failing step")
+	}
+	if !strings.Contains(result, "Reasoning: timeout") {
+		t.Error("standard: should contain reasoning for failing step")
+	}
+	if !strings.Contains(result, "observed-data") {
+		t.Error("standard: should contain observed content for failing step")
+	}
+	// Passing step and its sub-detail stripped.
+	if strings.Contains(result, "pass-step") {
+		t.Error("standard: should not contain passing step")
+	}
+	if strings.Contains(result, "all good") {
+		t.Error("standard: should not contain passing step reasoning")
+	}
+}
+
+func TestFormatValidationFeedbackFidelityFull(t *testing.T) {
+	entry := "✗ scenario-a (40/100)\n  ✗ fail-step (20/100)\n    Reasoning: bad\n  ✓ pass-step (100/100)\n    Reasoning: ok"
+	result := formatValidationFeedback(40.0, []string{entry}, fidelityFull)
+
+	// Full keeps everything.
+	if !strings.Contains(result, "fail-step") {
+		t.Error("full: should contain failing step")
+	}
+	if !strings.Contains(result, "pass-step") {
+		t.Error("full: should contain passing step")
+	}
+	if !strings.Contains(result, "Reasoning: ok") {
+		t.Error("full: should contain passing step reasoning")
+	}
+}
+
+// TestObservedStandardLimitBelowMax guards the invariant that observedStandardLimit
+// (the re-truncation limit for fidelityStandard) is strictly less than MaxObservedBytes
+// (the limit used by cmd/octog when building observed output). If MaxObservedBytes
+// changes, this test will catch a silent drift before it affects feedback quality.
+func TestObservedStandardLimitBelowMax(t *testing.T) {
+	if observedStandardLimit >= MaxObservedBytes {
+		t.Errorf("observedStandardLimit (%d) must be < MaxObservedBytes (%d); update one of them to restore the invariant",
+			observedStandardLimit, MaxObservedBytes)
+	}
+}
+
+func TestObservedTruncationUTF8Safe(t *testing.T) {
+	// Place a 3-byte UTF-8 rune (SNOWMAN U+2603) at the truncation boundary (500 bytes).
+	obsPrefix := strings.Repeat("x", observedStandardLimit-1)
+	obsContent := obsPrefix + "\u2603" + strings.Repeat("y", 100)
+	entry := "✗ scenario-a (40/100)\n  ✗ fail-step (20/100)\n    Observed: " + obsContent
+	result := formatValidationFeedback(40.0, []string{entry}, fidelityStandard)
+
+	// Result must be valid UTF-8.
+	if !utf8.ValidString(result) {
+		t.Error("standard: observed truncation must produce valid UTF-8")
+	}
+	// The truncation marker must be present.
+	if !strings.Contains(result, "…") {
+		t.Error("standard: truncated observed line should end with …")
+	}
+}
+
+// TestFidelityRoundTrip constructs failure strings in the canonical format produced by
+// cmd/octog (FormatScenarioFailureLine + indented step detail) and verifies that each
+// fidelity level filters as expected. This guards the coupling between filterFailureEntry
+// and the format produced by formatFailedScenario in cmd/octog.
+func TestFidelityRoundTrip(t *testing.T) {
+	// Build a canonical failure entry: one failing step and one passing step.
+	scenarioLine := FormatScenarioFailureLine("round-trip", 50)
+	failStep := "  ✗ failing step (30/100)\n    Reasoning: broke\n    Observed: " + strings.Repeat("a", 100)
+	passStep := "  ✓ passing step (100/100)\n    Reasoning: fine"
+	entry := scenarioLine + "\n" + failStep + "\n" + passStep
+
+	t.Run("compact", func(t *testing.T) {
+		result := formatValidationFeedback(50.0, []string{entry}, fidelityCompact)
+		if !strings.Contains(result, scenarioLine) {
+			t.Error("compact: must contain scenario summary")
+		}
+		if strings.Contains(result, "failing step") {
+			t.Error("compact: must not contain step detail")
+		}
+		if strings.Contains(result, "passing step") {
+			t.Error("compact: must not contain passing step")
+		}
+	})
+
+	t.Run("standard", func(t *testing.T) {
+		result := formatValidationFeedback(50.0, []string{entry}, fidelityStandard)
+		if !strings.Contains(result, scenarioLine) {
+			t.Error("standard: must contain scenario summary")
+		}
+		if !strings.Contains(result, "failing step") {
+			t.Error("standard: must contain failing step detail")
+		}
+		if !strings.Contains(result, "Reasoning: broke") {
+			t.Error("standard: must contain failing step reasoning")
+		}
+		if strings.Contains(result, "passing step") {
+			t.Error("standard: must not contain passing step")
+		}
+		if strings.Contains(result, "Reasoning: fine") {
+			t.Error("standard: must not contain passing step reasoning")
+		}
+	})
+
+	t.Run("full", func(t *testing.T) {
+		result := formatValidationFeedback(50.0, []string{entry}, fidelityFull)
+		if !strings.Contains(result, "failing step") {
+			t.Error("full: must contain failing step")
+		}
+		if !strings.Contains(result, "passing step") {
+			t.Error("full: must contain passing step")
+		}
+		if !strings.Contains(result, "Reasoning: fine") {
+			t.Error("full: must contain passing step reasoning")
+		}
+	})
 }
 
 // capsSuffix returns a short string describing capabilities for test names.

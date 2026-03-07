@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/scenario"
@@ -1289,7 +1290,7 @@ func TestBuildDetailedFailures(t *testing.T) {
 					{ScenarioID: "trunc", Score: 10, Steps: []scenario.ScoredStep{
 						{StepScore: scenario.StepScore{Score: 10}, StepResult: scenario.StepResult{
 							Description: "big output",
-							Observed:    strings.Repeat("x", maxObservedBytes+100),
+							Observed:    strings.Repeat("x", attractor.MaxObservedBytes+100),
 						}},
 					}},
 				},
@@ -1297,7 +1298,7 @@ func TestBuildDetailedFailures(t *testing.T) {
 			wantLen: 1,
 			wantCheck: func(t *testing.T, out []string) {
 				t.Helper()
-				if !strings.Contains(out[0], "Observed (500B)") {
+				if !strings.Contains(out[0], "Observed (2000B)") {
 					t.Errorf("truncated observed should use byte-count label, got %q", out[0])
 				}
 				if !strings.Contains(out[0], "…") {

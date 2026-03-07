@@ -29,6 +29,22 @@ const (
 	maxFeedbackEntries = 3
 )
 
+// MaxObservedBytes is the maximum bytes of observed output included in per-step failure
+// feedback. Longer output is truncated with a … suffix. This is the source of truth
+// shared with cmd/octog, which uses it when building ValidateFn failure output.
+// fidelityFull leaves observed lines at this bound; fidelityStandard re-truncates
+// to observedStandardLimit.
+const MaxObservedBytes = 2000
+
+// StepPassPrefix and StepFailPrefix are the line prefixes used by cmd/octog when
+// formatting per-step feedback and by filterFailureEntry when parsing those lines.
+// Defining them here creates a shared format contract: changing the prefix in one
+// place is automatically reflected in the other.
+const (
+	StepPassPrefix = "  ✓" // 2-space indent + check mark; identifies a passing step line
+	StepFailPrefix = "  ✗" // 2-space indent + cross mark; identifies a failing step line
+)
+
 // feedbackHeader returns the human-readable header for a feedback kind.
 // Unknown kinds fall back to the raw kind string uppercased.
 func feedbackHeader(kind string) string {
@@ -48,11 +64,63 @@ func feedbackHeader(kind string) string {
 	}
 }
 
+// feedbackFidelity controls how much validation detail is included in iteration prompts.
+// Higher fidelity means more detail (more tokens, more signal). Zero is the unset value
+// and means "use the default truncation limit" (non-validation entries).
+type feedbackFidelity int
+
+const (
+	fidelityCompact  feedbackFidelity = 1 // scenario summaries only; iterations 1–2
+	fidelityStandard feedbackFidelity = 2 // failing step detail, no passing steps; iterations 3–4
+	fidelityFull     feedbackFidelity = 3 // all step detail; iterations 5+
+)
+
+// compactMaxIter and standardMaxIter define the iteration boundaries for fidelity selection.
+// Iterations 1..compactMaxIter use compact fidelity; iterations compactMaxIter+1..standardMaxIter
+// use standard fidelity; later iterations use full fidelity.
+const (
+	compactMaxIter  = 2
+	standardMaxIter = 4
+)
+
+// determineFidelity returns the appropriate feedback fidelity for the given iteration
+// and stall count. Early iterations use compact fidelity to keep prompt cost low;
+// stalls escalate one level to provide more debugging signal.
+func determineFidelity(iteration, stallCount int) feedbackFidelity {
+	var f feedbackFidelity
+	switch {
+	case iteration <= compactMaxIter:
+		f = fidelityCompact
+	case iteration <= standardMaxIter:
+		f = fidelityStandard
+	default:
+		f = fidelityFull
+	}
+	if stallCount >= 2 && f < fidelityFull {
+		f++
+	}
+	return f
+}
+
+// maxFeedbackForFidelity returns the maximum bytes for a validation feedback entry
+// at the given fidelity level.
+func maxFeedbackForFidelity(f feedbackFidelity) int {
+	switch f {
+	case fidelityCompact:
+		return 4096
+	case fidelityStandard:
+		return 12288
+	default: // fidelityFull
+		return 24576
+	}
+}
+
 // iterationFeedback captures what happened in one iteration for building the next prompt.
 type iterationFeedback struct {
 	iteration       int
 	kind            string
 	message         string
+	fidelity        feedbackFidelity   // set for feedbackValidation entries; zero for others
 	failedScenarios map[string]float64 // populated for feedbackValidation entries; nil otherwise
 }
 
@@ -337,41 +405,121 @@ func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string
 // writeCategorizedFeedback formats feedback entries with human-readable headers.
 // Each entry is formatted as: HEADER (iteration N):\nmessage\n\n
 // Unknown kinds fall back to the raw kind string uppercased.
+// Validation entries use a fidelity-aware byte limit; all others use maxFeedbackBytes.
 func writeCategorizedFeedback(b *strings.Builder, entries []iterationFeedback) {
 	for _, fb := range entries {
-		fmt.Fprintf(b, "%s (iteration %d):\n%s\n\n", feedbackHeader(fb.kind), fb.iteration, truncateFeedback(fb.message))
+		limit := maxFeedbackBytes
+		if fb.fidelity != 0 {
+			limit = maxFeedbackForFidelity(fb.fidelity)
+		}
+		fmt.Fprintf(b, "%s (iteration %d):\n%s\n\n", feedbackHeader(fb.kind), fb.iteration, truncateFeedback(fb.message, limit))
 	}
 }
 
-// truncateFeedback truncates a feedback message if it exceeds maxFeedbackBytes.
-// Truncation removes any incomplete UTF-8 rune at the cut point.
-func truncateFeedback(s string) string {
-	if len(s) <= maxFeedbackBytes {
+// trimUTF8Boundary trims s to at most limit bytes, removing any incomplete UTF-8
+// rune at the cut point. Returns the trimmed string without any suffix marker.
+func trimUTF8Boundary(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	truncated := s[:maxFeedbackBytes]
-	// Remove any incomplete UTF-8 sequence at the end.
-	for len(truncated) > 0 {
-		r, size := utf8.DecodeLastRuneInString(truncated)
+	trimmed := s[:limit]
+	for len(trimmed) > 0 {
+		r, size := utf8.DecodeLastRuneInString(trimmed)
 		if r != utf8.RuneError || size != 1 {
 			break
 		}
-		truncated = truncated[:len(truncated)-1]
+		trimmed = trimmed[:len(trimmed)-1]
 	}
-	return truncated + "\n[truncated]"
+	return trimmed
+}
+
+// truncateFeedback truncates a feedback message if it exceeds limit bytes.
+// Truncation removes any incomplete UTF-8 rune at the cut point.
+func truncateFeedback(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return trimUTF8Boundary(s, limit) + "\n[truncated]"
 }
 
 // formatValidationFeedback formats validation results into feedback text for the LLM.
-func formatValidationFeedback(satisfaction float64, failures []string) string {
+// Fidelity controls how much per-scenario detail is included:
+//   - compact: scenario summary lines only (cheapest)
+//   - standard: failing step detail, observed truncated to 500 bytes; no passing step lines
+//   - full: all step detail, observed truncated to 2000 bytes
+func formatValidationFeedback(satisfaction float64, failures []string, fidelity feedbackFidelity) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Satisfaction score: %.1f/100\n", satisfaction)
 	if len(failures) > 0 {
 		b.WriteString("Scenario results:\n")
 		for _, f := range failures {
-			fmt.Fprintf(&b, "%s\n", f)
+			fmt.Fprintf(&b, "%s\n", filterFailureEntry(f, fidelity))
 		}
 	}
 	return b.String()
+}
+
+// observedStandardLimit is the observed content byte limit for fidelityStandard.
+// fidelityFull uses maxObservedBytes (2000), but we cannot import it from cmd/octog;
+// the observed content in failure strings is already bounded by cmd/octog's truncateObserved,
+// so fidelityFull leaves lines as-is and only fidelityStandard needs re-truncation here.
+const observedStandardLimit = 500
+
+// filterFailureEntry applies fidelity-based line filtering to a single failure entry string.
+// compact: keep only scenario summary lines (0-indent); strip all indented lines.
+// standard: keep failing step detail; strip passing step lines and their sub-detail;
+//
+//	truncate Observed content to observedStandardLimit.
+//
+// full: keep everything as-is.
+func filterFailureEntry(entry string, fidelity feedbackFidelity) string {
+	if fidelity == fidelityFull {
+		return entry
+	}
+	lines := strings.Split(entry, "\n")
+	out := make([]string, 0, len(lines))
+	inPassingStep := false
+	for _, line := range lines {
+		if !strings.HasPrefix(line, " ") {
+			// Scenario summary line (0-indent) — always keep.
+			out = append(out, line)
+			inPassingStep = false
+			continue
+		}
+		if fidelity == fidelityCompact {
+			continue // strip all indented lines
+		}
+		// fidelityStandard: keep failing step detail; strip passing step lines.
+		if strings.HasPrefix(line, StepPassPrefix) {
+			inPassingStep = true
+			continue
+		}
+		if strings.HasPrefix(line, StepFailPrefix) {
+			inPassingStep = false
+		}
+		if inPassingStep {
+			continue // sub-detail of a passing step
+		}
+		if strings.HasPrefix(line, "    Observed") {
+			line = truncateObservedLine(line, observedStandardLimit)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// truncateObservedLine truncates the content portion of an "    Observed: ..." line to
+// maxBytes, removing any incomplete UTF-8 rune at the cut and appending a … suffix.
+func truncateObservedLine(line string, maxBytes int) string {
+	colonIdx := strings.Index(line, ": ")
+	if colonIdx < 0 {
+		return line
+	}
+	content := line[colonIdx+2:]
+	if len(content) <= maxBytes {
+		return line
+	}
+	return line[:colonIdx+2] + trimUTF8Boundary(content, maxBytes) + "…"
 }
 
 // extractFailureStrings pulls failure messages from history for section matching.
