@@ -135,6 +135,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	language := fs.String("language", "go", "target language: go, python, node, rust, or auto")
 	genesFlag := fs.String("genes", "", "path to genes.json file produced by octog extract")
 	patchMode := fs.Bool("patch", false, "enable incremental patch mode (iteration 2+ sends only changed files)")
+	blockOnRegression := fs.Bool("block-on-regression", false, "block convergence when any scenario regresses below threshold in the current iteration")
 	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
 	otelEndpoint := fs.String("otel-endpoint", "", "OTLP/HTTP endpoint for tracing (e.g. localhost:4318); disabled if empty")
 
@@ -189,18 +190,19 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	}
 
 	return runAttractorLoop(ctx, logger, clients.client, runLoopParams{
-		SpecPath:      *specFlag,
-		ScenariosPath: *scenariosFlag,
-		Model:         *model,
-		JudgeModel:    *judgeModel,
-		Budget:        *budget,
-		Threshold:     *threshold,
-		PatchMode:     *patchMode,
-		ContextBudget: *contextBudget,
-		OTELEndpoint:  endpoint,
-		Language:      langForOpts,
-		GenesGuide:    genesGuide,
-		GeneLanguage:  genesLanguage,
+		SpecPath:          *specFlag,
+		ScenariosPath:     *scenariosFlag,
+		Model:             *model,
+		JudgeModel:        *judgeModel,
+		Budget:            *budget,
+		Threshold:         *threshold,
+		PatchMode:         *patchMode,
+		BlockOnRegression: *blockOnRegression,
+		ContextBudget:     *contextBudget,
+		OTELEndpoint:      endpoint,
+		Language:          langForOpts,
+		GenesGuide:        genesGuide,
+		GeneLanguage:      genesLanguage,
 	})
 }
 
@@ -238,18 +240,19 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 
 // runLoopParams bundles the parameters for runAttractorLoop.
 type runLoopParams struct {
-	SpecPath      string
-	ScenariosPath string
-	Model         string
-	JudgeModel    string
-	Budget        float64
-	Threshold     float64
-	PatchMode     bool
-	ContextBudget int
-	OTELEndpoint  string
-	Language      string
-	GenesGuide    string
-	GeneLanguage  string
+	SpecPath          string
+	ScenariosPath     string
+	Model             string
+	JudgeModel        string
+	Budget            float64
+	Threshold         float64
+	PatchMode         bool
+	BlockOnRegression bool
+	ContextBudget     int
+	OTELEndpoint      string
+	Language          string
+	GenesGuide        string
+	GeneLanguage      string
 }
 
 func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, p runLoopParams) error {
@@ -331,16 +334,17 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
 	opts := attractor.RunOptions{
-		Model:         p.Model,
-		BudgetUSD:     p.Budget,
-		Threshold:     p.Threshold,
-		PatchMode:     p.PatchMode,
-		ContextBudget: p.ContextBudget,
-		Language:      p.Language,
-		Progress:      progressFn(ctx, logger, st),
-		Capabilities:  caps,
-		Genes:         p.GenesGuide,
-		GeneLanguage:  p.GeneLanguage,
+		Model:             p.Model,
+		BudgetUSD:         p.Budget,
+		Threshold:         p.Threshold,
+		PatchMode:         p.PatchMode,
+		BlockOnRegression: p.BlockOnRegression,
+		ContextBudget:     p.ContextBudget,
+		Language:          p.Language,
+		Progress:          progressFn(ctx, logger, st),
+		Capabilities:      caps,
+		Genes:             p.GenesGuide,
+		GeneLanguage:      p.GeneLanguage,
 	}
 
 	startedAt := time.Now()

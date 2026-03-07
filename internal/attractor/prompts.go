@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -16,6 +15,7 @@ const (
 	feedbackBuildError  = "build_error"
 	feedbackHealthError = "health_error"
 	feedbackParseError  = "parse_error"
+	feedbackRegression  = "regression"
 	feedbackRunError    = "run_error"
 	feedbackValidation  = "validation"
 )
@@ -55,6 +55,8 @@ func feedbackHeader(kind string) string {
 		return "HEALTH CHECK FAILURE"
 	case feedbackParseError:
 		return "PARSE ERROR"
+	case feedbackRegression:
+		return "REGRESSIONS"
 	case feedbackRunError:
 		return "RUN FAILURE"
 	case feedbackValidation:
@@ -561,30 +563,13 @@ func parseFailedScenarios(failures []string) map[string]float64 {
 		firstLine, _, _ := strings.Cut(entry, "\n")
 		firstLine = strings.TrimSpace(firstLine)
 
-		// Only parse failing scenarios; skip passing ones.
-		// Use strings.CutPrefix to avoid implicit byte-length arithmetic on the Unicode prefix.
-		rest, ok := strings.CutPrefix(firstLine, failScenarioPrefix)
+		// Parse the line first; malformed or unrecognized entries are skipped.
+		id, score, ok := parseScenarioLine(firstLine)
 		if !ok {
 			continue
 		}
-
-		// Split on the last "(" to separate the scenario ID from the score.
-		parenIdx := strings.LastIndex(rest, "(")
-		if parenIdx < 0 {
-			continue
-		}
-		id := strings.TrimSpace(rest[:parenIdx])
-		scoreStr := rest[parenIdx+1:]
-
-		// scoreStr is now "score/100)" — strip the "/100)" suffix.
-		slashIdx := strings.Index(scoreStr, "/100)")
-		if slashIdx < 0 {
-			continue
-		}
-		scoreStr = scoreStr[:slashIdx]
-
-		score, err := strconv.ParseFloat(scoreStr, 64)
-		if err != nil {
+		// Only collect failing scenarios (✗ prefix); skip passing ones (✓ prefix).
+		if !strings.HasPrefix(firstLine, failScenarioPrefix) {
 			continue
 		}
 		if result == nil {

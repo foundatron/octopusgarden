@@ -493,20 +493,21 @@ type ValidateFn func(ctx context.Context, url string) (satisfaction float64, fai
 ```go
 // RunOptions configures the attractor loop.
 type RunOptions struct {
-	Model         string
-	Language      string               // language hint: "go", "python", "node", "rust", or "" (auto)
-	BudgetUSD     float64              // 0 = unlimited
-	Threshold     float64              // default 95
-	MaxIterations int                  // default 10
-	StallLimit    int                  // default 3
-	WorkspaceDir  string               // default "./workspace"
-	HealthTimeout time.Duration        // default 30s
-	Progress      ProgressFunc         // optional per-iteration callback
-	PatchMode     bool                 // if true, iteration 2+ sends prev best files + failures
-	ContextBudget int                  // max estimated tokens for spec in system prompt; 0 = unlimited
-	Capabilities  ScenarioCapabilities // detected from loaded scenarios
-	Genes         string               // extracted pattern guide to inject into system prompt (empty = no genes)
-	GeneLanguage  string               // source language of the gene exemplar (for cross-language note)
+	Model             string
+	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
+	BudgetUSD         float64              // 0 = unlimited
+	Threshold         float64              // default 95
+	MaxIterations     int                  // default 10
+	StallLimit        int                  // default 3
+	WorkspaceDir      string               // default "./workspace"
+	HealthTimeout     time.Duration        // default 30s
+	Progress          ProgressFunc         // optional per-iteration callback
+	PatchMode         bool                 // if true, iteration 2+ sends prev best files + failures
+	BlockOnRegression bool                 // if true, convergence is blocked when per-scenario regressions are detected
+	ContextBudget     int                  // max estimated tokens for spec in system prompt; 0 = unlimited
+	Capabilities      ScenarioCapabilities // detected from loaded scenarios
+	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
+	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
 }
 ```
 
