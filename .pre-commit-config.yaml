@@ -47,11 +47,13 @@ repos:
       - id: markdownlint-cli2
         exclude: ^(schemas/(spec|scenario)-format\.md|\.claude/)
 
-  # ── Shell scripts (future-proof, dormant until .sh files appear) ────────────
-  - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
+  # ── Python ─────────────────────────────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.5
     hooks:
-      - id: shellcheck
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
 
   # ── GitHub Actions ───────────────────────────────────────────────────────────
   - repo: https://github.com/rhysd/actionlint
