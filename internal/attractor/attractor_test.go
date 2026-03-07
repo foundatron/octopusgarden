@@ -1326,3 +1326,145 @@ func TestStallNoticeAppearsInGenerateByIteration3(t *testing.T) {
 		t.Errorf("iteration 3 Generate call should mention stall-scenario, got: %v", capturedMsgs[2])
 	}
 }
+
+func TestMinimalismPromptAppearsAbove80(t *testing.T) {
+	tests := []struct {
+		name     string
+		score    float64
+		wantMini bool
+	}{
+		{"below threshold", 70, false},
+		{"at threshold boundary", 80, false},
+		{"above threshold", 81, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var reqs []llm.GenerateRequest
+			client := &mockLLMClient{
+				generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+					reqs = append(reqs, req)
+					return llm.GenerateResponse{Content: validLLMOutput()}, nil
+				},
+			}
+			failures := []string{FormatScenarioFailureLine("test-scenario", 50)}
+			var validateCount atomic.Int32
+			validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+				n := validateCount.Add(1)
+				if n == 1 {
+					return tt.score, failures, 0, nil
+				}
+				return 100, nil, 0, nil
+			}
+			a := New(client, &mockContainerMgr{}, testLogger(), nil)
+			_, err := a.Run(context.Background(), "spec", defaultOpts(t), validate, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(reqs) < 2 {
+				t.Fatalf("expected at least 2 generate calls, got %d", len(reqs))
+			}
+			var userContent string
+			for _, msg := range reqs[1].Messages {
+				if msg.Role == "user" {
+					userContent += msg.Content
+				}
+			}
+			hasMini := strings.Contains(userContent, "SMALLEST")
+			if hasMini != tt.wantMini {
+				t.Errorf("score %.0f: SMALLEST in prompt = %v, want %v\ncontent: %s", tt.score, hasMini, tt.wantMini, userContent)
+			}
+		})
+	}
+}
+
+func TestMinimalismPromptIncludesFailingScenarios(t *testing.T) {
+	var reqs []llm.GenerateRequest
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			reqs = append(reqs, req)
+			return llm.GenerateResponse{Content: validLLMOutput()}, nil
+		},
+	}
+	failures := []string{
+		FormatScenarioFailureLine("create-user", 40),
+		FormatScenarioFailureLine("list-items", 55),
+	}
+	var validateCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := validateCount.Add(1)
+		if n == 1 {
+			return 85, failures, 0, nil
+		}
+		return 100, nil, 0, nil
+	}
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	_, err := a.Run(context.Background(), "spec", defaultOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(reqs) < 2 {
+		t.Fatalf("expected at least 2 generate calls, got %d", len(reqs))
+	}
+	var userContent string
+	for _, msg := range reqs[1].Messages {
+		if msg.Role == "user" {
+			userContent += msg.Content
+		}
+	}
+	for _, name := range []string{"create-user", "list-items"} {
+		if !strings.Contains(userContent, name) {
+			t.Errorf("expected prompt to contain scenario name %q:\n%s", name, userContent)
+		}
+	}
+}
+
+func TestMinimalismPromptProgression(t *testing.T) {
+	scores := []float64{60, 85}
+	scenarioFailures := [][]string{
+		{FormatScenarioFailureLine("alpha", 50)},
+		{FormatScenarioFailureLine("alpha", 70)},
+	}
+	var reqs []llm.GenerateRequest
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			reqs = append(reqs, req)
+			return llm.GenerateResponse{Content: validLLMOutput()}, nil
+		},
+	}
+	var validateCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := int(validateCount.Add(1)) - 1
+		if n < len(scores) {
+			return scores[n], scenarioFailures[n], 0, nil
+		}
+		return 100, nil, 0, nil
+	}
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	_, err := a.Run(context.Background(), "spec", defaultOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(reqs) < 3 {
+		t.Fatalf("expected at least 3 generate calls, got %d", len(reqs))
+	}
+
+	// Iterations 1 and 2 should not contain minimalism (scores 0 and 60 are both ≤ 80).
+	for i, req := range reqs[:2] {
+		for _, msg := range req.Messages {
+			if msg.Role == "user" && strings.Contains(msg.Content, "SMALLEST") {
+				t.Errorf("req %d should not contain minimalism prompt, but found SMALLEST", i+1)
+			}
+		}
+	}
+
+	// Iteration 3 should contain minimalism (previous score 85 > 80).
+	var thirdContent string
+	for _, msg := range reqs[2].Messages {
+		if msg.Role == "user" {
+			thirdContent += msg.Content
+		}
+	}
+	if !strings.Contains(thirdContent, "SMALLEST") {
+		t.Errorf("req 3 should contain minimalism prompt (score 85 > 80), got:\n%s", thirdContent)
+	}
+}

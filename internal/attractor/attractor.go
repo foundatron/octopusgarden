@@ -23,8 +23,9 @@ import (
 )
 
 var (
-	errEmptySpec           = errors.New("attractor: spec content is empty")
-	errUnsupportedLanguage = errors.New("attractor: unsupported language")
+	errEmptySpec            = errors.New("attractor: spec content is empty")
+	errUnsupportedLanguage  = errors.New("attractor: unsupported language")
+	errMinimalismNoMessages = errors.New("attractor: minimalism suffix: no messages to append to")
 )
 
 // summarizeModel is the cheap model used for spec summarization.
@@ -361,6 +362,12 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 		messages = buildMessages(iter, s.history)
 	}
 
+	// Inject minimalism suffix when the previous validated score is above the threshold.
+	// This discourages adding complexity when the solution is already close to passing.
+	if err := applyMinimalismSuffix(messages, s.scoreHistory, s.history); err != nil {
+		return nil, err
+	}
+
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
@@ -601,6 +608,45 @@ func (a *Attractor) trackPatchRegression(iter int, satisfaction float64, s *runS
 			"iteration", iter, "regression_count", s.patchRegressionCount)
 		s.patchActive = false
 	}
+}
+
+// lastValidationFailures returns the failedScenarios map from the most recent
+// feedbackValidation entry in history, scanning backwards. Returns nil when no
+// validation entry exists.
+func lastValidationFailures(history []iterationFeedback) map[string]float64 {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].kind == feedbackValidation {
+			return history[i].failedScenarios
+		}
+	}
+	return nil
+}
+
+// applyMinimalismSuffix appends a minimalism instruction to the last message when the
+// most recent validated score exceeds minimalismThreshold. It is a no-op when
+// scoreHistory is empty or the score is at or below the threshold.
+//
+// Invariant: scoreHistory is only appended after a successful validation, which requires
+// at least one prior iteration and therefore a non-empty messages slice. The guard
+// below defends against that invariant ever being violated.
+func applyMinimalismSuffix(messages []llm.Message, scoreHistory []float64, history []iterationFeedback) error {
+	n := len(scoreHistory)
+	if n == 0 {
+		return nil
+	}
+	last := scoreHistory[n-1]
+	if last <= minimalismThreshold {
+		return nil
+	}
+	suffix := buildMinimalismSuffix(last, lastValidationFailures(history))
+	if suffix == "" {
+		return nil
+	}
+	if len(messages) == 0 {
+		return errMinimalismNoMessages
+	}
+	messages[len(messages)-1].Content += suffix
+	return nil
 }
 
 // checkStalled returns a stalled result if the stall limit is reached, nil otherwise.
