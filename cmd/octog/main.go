@@ -29,6 +29,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/lint"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/observability"
+	"github.com/foundatron/octopusgarden/internal/preflight"
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/spec"
 	"github.com/foundatron/octopusgarden/internal/store"
@@ -55,6 +56,8 @@ var (
 	errInvalidProvider            = errors.New("--provider must be \"anthropic\" or \"openai\"")
 	errInvalidLanguage            = errors.New("--language must be one of: go, python, node, rust, auto")
 	errListModelsUnsupported      = errors.New("provider does not support listing models")
+	errPreflightFailed            = errors.New("preflight: spec clarity below threshold")
+	errInvalidPreflightThreshold  = errors.New("preflight threshold must be between 0.0 and 1.0")
 	errSourceDirRequired          = errors.New("--source-dir is required")
 	errSourceDirNotExist          = errors.New("--source-dir does not exist")
 	errSourceDirNotDir            = errors.New("--source-dir is not a directory")
@@ -90,6 +93,8 @@ func main() {
 		err = modelsCmd(ctx, logger, os.Args[2:])
 	case "extract":
 		err = extractCmd(ctx, logger, os.Args[2:])
+	case "preflight":
+		err = preflightCmd(ctx, logger, os.Args[2:])
 	case "configure":
 		err = configureCmd(ctx, logger, os.Args[2:])
 	default:
@@ -113,6 +118,7 @@ func printUsage() {
 Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
+  preflight  Assess spec clarity before running the attractor loop
   status     Show recent runs, scores, and costs
   lint       Check spec and scenario files for errors
   extract    Extract coding patterns from a source directory into a gene file
@@ -138,6 +144,8 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	blockOnRegression := fs.Bool("block-on-regression", false, "block convergence when any scenario regresses below threshold in the current iteration")
 	contextBudget := fs.Int("context-budget", 0, "max estimated tokens for spec in system prompt; 0 = unlimited")
 	otelEndpoint := fs.String("otel-endpoint", "", "OTLP/HTTP endpoint for tracing (e.g. localhost:4318); disabled if empty")
+	skipPreflight := fs.Bool("skip-preflight", false, "skip the spec clarity preflight check")
+	preflightThreshold := fs.Float64("preflight-threshold", 0.8, "aggregate clarity score threshold for preflight (0.0–1.0)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
@@ -157,7 +165,6 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	if *threshold < 0 || *threshold > 100 {
 		return errInvalidThreshold
 	}
-
 	// Validate language flag.
 	langForOpts := *language
 	if langForOpts == "auto" {
@@ -183,6 +190,12 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 
+	// Parse spec and run preflight check (validates threshold, parses, and checks clarity).
+	parsedSpec, err := parseAndCheckPreflight(ctx, logger, clients.client, *specFlag, *judgeModel, *preflightThreshold, *skipPreflight)
+	if err != nil {
+		return err
+	}
+
 	// Resolve OTEL endpoint: flag → env → empty (disabled).
 	endpoint := *otelEndpoint
 	if endpoint == "" {
@@ -191,6 +204,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 
 	return runAttractorLoop(ctx, logger, clients.client, runLoopParams{
 		SpecPath:          *specFlag,
+		ParsedSpec:        parsedSpec,
 		ScenariosPath:     *scenariosFlag,
 		Model:             *model,
 		JudgeModel:        *judgeModel,
@@ -241,6 +255,7 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 // runLoopParams bundles the parameters for runAttractorLoop.
 type runLoopParams struct {
 	SpecPath          string
+	ParsedSpec        spec.Spec
 	ScenariosPath     string
 	Model             string
 	JudgeModel        string
@@ -266,10 +281,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		_ = shutdown(shutdownCtx)
 	}()
 
-	parsedSpec, err := spec.ParseFile(p.SpecPath)
-	if err != nil {
-		return fmt.Errorf("parse spec: %w", err)
-	}
+	parsedSpec := p.ParsedSpec
 
 	scenarios, err := scenario.LoadDir(p.ScenariosPath)
 	if err != nil {
@@ -780,6 +792,110 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	}
 
 	return gene.Save(*output, g)
+}
+
+// parseAndCheckPreflight parses the spec file and optionally runs a preflight clarity check.
+// It validates the preflight threshold, parses the spec, and (if !skip) checks clarity.
+// Returns the parsed spec for use by the attractor loop.
+func parseAndCheckPreflight(ctx context.Context, logger *slog.Logger, client llm.Client, specPath, judgeModel string, threshold float64, skip bool) (spec.Spec, error) {
+	if threshold < 0 || threshold > 1 {
+		return spec.Spec{}, errInvalidPreflightThreshold
+	}
+	parsedSpec, err := spec.ParseFile(specPath)
+	if err != nil {
+		return spec.Spec{}, fmt.Errorf("parse spec: %w", err)
+	}
+	if !skip {
+		if err := runPreflightCheck(ctx, logger, client, parsedSpec.RawContent, judgeModel, threshold); err != nil {
+			return spec.Spec{}, err
+		}
+	}
+	return parsedSpec, nil
+}
+
+// runPreflightCheck runs a preflight clarity assessment on the given spec content.
+// Returns an error (wrapping errPreflightFailed) if the spec does not pass.
+func runPreflightCheck(ctx context.Context, logger *slog.Logger, client llm.Client, specContent, model string, threshold float64) error {
+	result, err := preflight.Check(ctx, client, model, specContent, threshold, logger)
+	if err != nil {
+		return fmt.Errorf("preflight check: %w", err)
+	}
+	if !result.Pass {
+		fmt.Fprintf(os.Stderr, "Preflight: spec clarity below threshold (%.2f < %.2f)\n", //nolint:gosec // G705 false positive: writing to stderr
+			result.AggregateScore, threshold)
+		for _, q := range result.Questions {
+			fmt.Fprintf(os.Stderr, "  ? %s\n", q) //nolint:gosec // G705 false positive: writing to stderr
+		}
+		return fmt.Errorf("%w (%.2f < %.2f)", errPreflightFailed, result.AggregateScore, threshold)
+	}
+	logger.Info("preflight passed", "score", result.AggregateScore)
+	return nil
+}
+
+var errPreflightSpecRequired = errors.New("spec path argument is required")
+
+func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("preflight", flag.ContinueOnError)
+	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+	judgeModel := fs.String("judge-model", "", "LLM model for clarity assessment (default: provider-specific)")
+	threshold := fs.Float64("threshold", 0.8, "aggregate clarity score threshold (0.0–1.0)")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: octog preflight [flags] <spec-path>\n\nAssess spec clarity before running the attractor loop.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		return errPreflightSpecRequired
+	}
+	specPath := fs.Arg(0)
+
+	if *threshold < 0 || *threshold > 1 {
+		return errInvalidPreflightThreshold
+	}
+
+	parsedSpec, err := spec.ParseFile(specPath)
+	if err != nil {
+		return fmt.Errorf("parse spec: %w", err)
+	}
+
+	clients, err := newLLMClient(*provider, logger)
+	if err != nil {
+		return err
+	}
+	if *judgeModel == "" {
+		*judgeModel = defaultJudgeModel(clients.provider)
+	}
+
+	result, err := preflight.Check(ctx, clients.client, *judgeModel, parsedSpec.RawContent, *threshold, logger)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Preflight results for: %s\n", specPath)
+	fmt.Printf("  Goal clarity:       %.2f\n", result.GoalClarity)
+	fmt.Printf("  Constraint clarity: %.2f\n", result.ConstraintClarity)
+	fmt.Printf("  Success clarity:    %.2f\n", result.SuccessClarity)
+	fmt.Printf("  Aggregate score:    %.2f (threshold: %.2f)\n", result.AggregateScore, *threshold)
+
+	if result.Pass {
+		fmt.Printf("  Status: PASS\n")
+		return nil
+	}
+
+	fmt.Printf("  Status: WARN — spec clarity below threshold\n")
+	if len(result.Questions) > 0 {
+		fmt.Printf("\nSuggested clarifications:\n")
+		for _, q := range result.Questions {
+			fmt.Printf("  ? %s\n", q)
+		}
+	}
+	return errPreflightFailed
 }
 
 func openStore(ctx context.Context) (*store.Store, error) {
