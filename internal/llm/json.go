@@ -9,9 +9,9 @@ type judgeResult struct {
 	Failures  []string `json:"failures"`
 }
 
-// extractJSON strips markdown code fences from LLM output to get raw JSON.
+// ExtractJSON strips markdown code fences from LLM output to get raw JSON.
 // Handles ```json\n...\n``` and ```\n...\n``` patterns.
-func extractJSON(s string) string {
+func ExtractJSON(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
 		// Strip opening fence (with optional language tag).

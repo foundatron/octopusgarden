@@ -15,6 +15,7 @@ type GenerateRequest struct {
 	MaxTokens    int
 	Model        string
 	CacheControl *CacheControl
+	Temperature  *float64 // nil = provider default
 }
 
 // CacheControl configures prompt caching behavior.

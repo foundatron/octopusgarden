@@ -118,6 +118,9 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		Messages:  messages,
 		System:    system,
 	}
+	if req.Temperature != nil {
+		params.Temperature = anthropic.Float(*req.Temperature)
+	}
 
 	resp, err := c.client.Messages.New(ctx, params)
 	if err != nil {
@@ -208,7 +211,7 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 	m := c.logUsage("anthropic judge", req.Model, resp.Usage)
 
 	// Parse JSON response — strip markdown code fences if present.
-	cleaned := extractJSON(content)
+	cleaned := ExtractJSON(content)
 	var result judgeResult
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 		// On malformed JSON: return Score=0 with raw text as reasoning, not an error.
