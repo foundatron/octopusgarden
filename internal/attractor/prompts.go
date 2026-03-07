@@ -288,7 +288,6 @@ func buildMessages(iter int, history []iterationFeedback) []llm.Message {
 	// Inject steering for scenarios stalling across consecutive iterations (full history).
 	if steeringText := buildSteeringText(history); steeringText != "" {
 		b.WriteString(steeringText)
-		b.WriteString("\n")
 	}
 
 	// Include last 3 feedback entries with categorized headers.
@@ -317,7 +316,6 @@ func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string
 	// Inject steering for scenarios stalling across consecutive iterations (full history).
 	if steeringText := buildSteeringText(history); steeringText != "" {
 		b.WriteString(steeringText)
-		b.WriteString("\n")
 	}
 
 	if len(history) > 0 {
@@ -385,29 +383,40 @@ func extractFailureStrings(history []iterationFeedback) []string {
 	return failures
 }
 
+// failScenarioPrefix is the prefix that identifies a failing scenario summary line.
+// FormatScenarioFailureLine produces lines with this prefix;
+// parseFailedScenarios expects it. Both must agree on this constant.
+const failScenarioPrefix = "✗ "
+
+// FormatScenarioFailureLine returns the first-line summary of a failing scenario
+// in the canonical format "✗ id (score/100)" that parseFailedScenarios can parse.
+// cmd/octog uses this when building ValidateFn failure output so that the formatter
+// and the parser share a single definition — changing one without the other is caught
+// by TestScenarioFormatRoundTrip.
+func FormatScenarioFailureLine(id string, score float64) string {
+	return fmt.Sprintf("%s%s (%.0f/100)", failScenarioPrefix, id, score)
+}
+
 // parseFailedScenarios parses the mixed pass/fail slice returned by ValidateFn into a
 // map of scenario ID → score for failing scenarios only.
 //
 // Each element is a full scenario result string (possibly multi-line). Passing entries
-// start with "✓"; failing entries start with "✗ id (score/100)" on the first line.
+// start with "✓"; failing entries start with the canonical failScenarioPrefix on the
+// first line, as produced by FormatScenarioFailureLine in cmd/octog.
 // Indented sub-lines (step detail) are part of the same element and are ignored here.
-//
-// NOTE: The expected format is "✗ id (score/100)" as produced by formatFailedScenario
-// in cmd/octog/main.go. If that format changes, this parser will silently stop matching.
 func parseFailedScenarios(failures []string) map[string]float64 {
-	result := make(map[string]float64, len(failures))
+	result := make(map[string]float64)
 	for _, entry := range failures {
 		// Take only the first line of each entry (sub-lines are step detail).
 		firstLine, _, _ := strings.Cut(entry, "\n")
 		firstLine = strings.TrimSpace(firstLine)
 
 		// Only parse failing scenarios; skip passing ones.
-		const failPrefix = "✗ "
-		if !strings.HasPrefix(firstLine, failPrefix) {
+		// Use strings.CutPrefix to avoid implicit byte-length arithmetic on the Unicode prefix.
+		rest, ok := strings.CutPrefix(firstLine, failScenarioPrefix)
+		if !ok {
 			continue
 		}
-
-		rest := firstLine[len(failPrefix):]
 
 		// Split on the last "(" to separate the scenario ID from the score.
 		parenIdx := strings.LastIndex(rest, "(")
@@ -448,7 +457,7 @@ func buildSteeringText(history []iterationFeedback) string {
 		// Reset streaks for scenarios that did not fail in this validation entry.
 		for id := range streaks {
 			if _, failed := fb.failedScenarios[id]; !failed {
-				streaks[id] = 0
+				delete(streaks, id)
 			}
 		}
 		// Increment streaks for scenarios that failed in this entry.

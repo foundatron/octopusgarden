@@ -754,6 +754,35 @@ func TestParseFailedScenariosScores(t *testing.T) {
 	}
 }
 
+// TestScenarioFormatRoundTrip locks the contract between FormatScenarioFailureLine
+// (used by cmd/octog to build ValidateFn output) and parseFailedScenarios (used by
+// the attractor loop for stall detection). If the format changes in one without
+// updating the other, this test catches the regression before it silently degrades
+// stall steering to a no-op.
+func TestScenarioFormatRoundTrip(t *testing.T) {
+	tests := []struct {
+		id    string
+		score float64
+	}{
+		{"move-card", 45},
+		{"add-task", 30},
+		{"scenario with spaces", 0},
+		{"edge-case", 100},
+	}
+	for _, tt := range tests {
+		line := FormatScenarioFailureLine(tt.id, tt.score)
+		got := parseFailedScenarios([]string{line})
+		score, ok := got[tt.id]
+		if !ok {
+			t.Errorf("id=%q: FormatScenarioFailureLine output %q not parsed by parseFailedScenarios", tt.id, line)
+			continue
+		}
+		if score != tt.score {
+			t.Errorf("id=%q: score round-trip: got %v, want %v", tt.id, score, tt.score)
+		}
+	}
+}
+
 func TestBuildSteeringText(t *testing.T) {
 	mkFeedback := func(kind string, failed map[string]float64) iterationFeedback {
 		return iterationFeedback{kind: kind, failedScenarios: failed}
@@ -900,7 +929,9 @@ func TestBuildMessagesWithSteering(t *testing.T) {
 	// Steering should appear before the categorized feedback.
 	steerIdx := strings.Index(content, "STALL NOTICE")
 	feedbackIdx := strings.Index(content, "VALIDATION FAILURES")
-	if steerIdx > feedbackIdx {
+	if steerIdx < 0 || feedbackIdx < 0 {
+		t.Errorf("expected both STALL NOTICE and VALIDATION FAILURES in content, got:\n%s", content)
+	} else if steerIdx > feedbackIdx {
 		t.Errorf("steering text should appear before categorized feedback")
 	}
 }
@@ -957,7 +988,9 @@ func TestBuildPatchMessagesWithSteering(t *testing.T) {
 	// Steering should appear before "Failures to fix".
 	steerIdx := strings.Index(content, "STALL NOTICE")
 	failIdx := strings.Index(content, "Failures to fix")
-	if steerIdx > failIdx {
+	if steerIdx < 0 || failIdx < 0 {
+		t.Errorf("expected both STALL NOTICE and 'Failures to fix' in content, got:\n%s", content)
+	} else if steerIdx > failIdx {
 		t.Errorf("steering text should appear before 'Failures to fix' section")
 	}
 }

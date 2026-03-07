@@ -944,12 +944,11 @@ func buildDetailedFailures(agg scenario.AggregateResult) []string {
 // per-step detail. Failing steps include reasoning and observed output; passing
 // steps within a failing scenario appear as a single-line summary.
 //
-// NOTE: The first line format "✗ id (score/100)" is parsed by
-// internal/attractor.parseFailedScenarios. If this format changes, update that
-// parser accordingly.
+// The first line is produced by attractor.FormatScenarioFailureLine so that the
+// format is defined in a single place shared with internal/attractor.parseFailedScenarios.
 func formatFailedScenario(s scenario.ScoredScenario) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "✗ %s (%.0f/100)", s.ScenarioID, s.Score)
+	b.WriteString(attractor.FormatScenarioFailureLine(s.ScenarioID, s.Score))
 	for _, step := range s.Steps {
 		if step.StepScore.Score >= stepPassThreshold {
 			fmt.Fprintf(&b, "\n  ✓ %s (%d/100)", step.StepResult.Description, step.StepScore.Score)

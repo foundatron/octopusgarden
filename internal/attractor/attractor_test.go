@@ -1264,3 +1264,65 @@ func TestExtractFailureStrings(t *testing.T) {
 		t.Errorf("expected second failure to mention syntax error, got %q", failures[1])
 	}
 }
+
+// TestStallNoticeAppearsInGenerateByIteration3 exercises the full cross-file wiring:
+// processValidation → failedScenarios → buildSteeringText → buildMessages → Generate.
+// It verifies that STALL NOTICE appears in the Generate request by iteration 3 when the
+// same scenario fails in consecutive validation iterations.
+func TestStallNoticeAppearsInGenerateByIteration3(t *testing.T) {
+	var capturedMsgs [][]llm.Message
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedMsgs = append(capturedMsgs, req.Messages)
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	// ValidateFn always returns the same failing scenario in the format parsed by parseFailedScenarios.
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 45, []string{"✗ stall-scenario (45/100)"}, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusStalled {
+		t.Errorf("expected stalled status, got %q", result.Status)
+	}
+
+	// Iteration 1 sets best (45 > 0, stallCount=0); iterations 2, 3, 4 stall (stallCount 1, 2, 3).
+	// With StallLimit=3 the run terminates after iteration 4, producing 4 Generate calls.
+	if len(capturedMsgs) < 3 {
+		t.Fatalf("expected at least 3 Generate calls, got %d", len(capturedMsgs))
+	}
+
+	// msgsContain returns true if any message in the slice contains the substring.
+	msgsContain := func(msgs []llm.Message, sub string) bool {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, sub) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Iteration 1 (index 0): empty history → simple "Generate" prompt, no STALL NOTICE.
+	if msgsContain(capturedMsgs[0], "STALL NOTICE") {
+		t.Error("iteration 1 Generate call should not contain STALL NOTICE")
+	}
+
+	// Iteration 2 (index 1): only 1 consecutive validation failure → no STALL NOTICE.
+	if msgsContain(capturedMsgs[1], "STALL NOTICE") {
+		t.Error("iteration 2 Generate call should not contain STALL NOTICE")
+	}
+
+	// Iteration 3 (index 2): 2 consecutive failures for stall-scenario → STALL NOTICE required.
+	if !msgsContain(capturedMsgs[2], "STALL NOTICE") {
+		t.Errorf("iteration 3 Generate call should contain STALL NOTICE, got: %v", capturedMsgs[2])
+	}
+	if !msgsContain(capturedMsgs[2], "stall-scenario") {
+		t.Errorf("iteration 3 Generate call should mention stall-scenario, got: %v", capturedMsgs[2])
+	}
+}
