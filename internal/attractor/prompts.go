@@ -642,6 +642,27 @@ func buildSteeringText(history []iterationFeedback) string {
 	return b.String()
 }
 
+// minimalismThreshold is the score above which the minimalism suffix is injected.
+// When the previous iteration scored above this level, the LLM is instructed to
+// implement the SMALLEST possible fix rather than adding new complexity.
+const minimalismThreshold = 80.0
+
+// buildMinimalismSuffix returns an instruction suffix that discourages over-engineering
+// when the solution is already scoring above minimalismThreshold. Returns "" when
+// failedScenarios is nil or empty (no suffix needed).
+func buildMinimalismSuffix(score float64, failedScenarios map[string]float64) string {
+	if len(failedScenarios) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\nMINIMALISM REQUIREMENT: Current score is %.0f%%. Implement the SMALLEST possible change to fix these failing scenarios:\n", score)
+	names := slices.Sorted(maps.Keys(failedScenarios))
+	for _, name := range names {
+		fmt.Fprintf(&b, "- %s: %.0f%%\n", name, failedScenarios[name])
+	}
+	return b.String()
+}
+
 // formatScoreTrajectory formats a slice of scores as "50 → 45 → 40".
 func formatScoreTrajectory(scores []float64) string {
 	parts := make([]string, len(scores))

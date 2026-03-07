@@ -1205,6 +1205,57 @@ func TestFidelityRoundTrip(t *testing.T) {
 	})
 }
 
+func TestBuildMinimalismSuffix(t *testing.T) {
+	tests := []struct {
+		name            string
+		score           float64
+		failedScenarios map[string]float64
+		wantEmpty       bool
+		wantContains    []string
+	}{
+		{
+			name:            "normal case with two failing scenarios",
+			score:           85,
+			failedScenarios: map[string]float64{"auth": 60, "health": 40},
+			wantContains:    []string{"85%", "SMALLEST", "auth", "health", "60%", "40%"},
+		},
+		{
+			name:            "nil failedScenarios",
+			score:           85,
+			failedScenarios: nil,
+			wantEmpty:       true,
+		},
+		{
+			name:            "empty failedScenarios map",
+			score:           85,
+			failedScenarios: map[string]float64{},
+			wantEmpty:       true,
+		},
+		{
+			name:            "score exactly 80 with failures",
+			score:           80,
+			failedScenarios: map[string]float64{"create": 70},
+			wantContains:    []string{"80%", "SMALLEST", "create"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildMinimalismSuffix(tt.score, tt.failedScenarios)
+			if tt.wantEmpty {
+				if got != "" {
+					t.Errorf("expected empty string, got %q", got)
+				}
+				return
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("expected suffix to contain %q, got:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // capsSuffix returns a short string describing capabilities for test names.
 func capsSuffix(caps ScenarioCapabilities) string {
 	switch {
