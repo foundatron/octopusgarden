@@ -158,6 +158,7 @@ const (
 	BrowserSourceHTML     = "html"
 	BrowserSourceCount    = "count"
 	BrowserSourceLocation = "location"
+	BrowserSourceValue    = "value"
 )
 
 // GRPC capture source constants.

@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/scenario"
+	"github.com/foundatron/octopusgarden/internal/store"
 )
 
 // mockLLMClient implements llm.Client for testing.
@@ -1426,6 +1428,141 @@ func TestRunCmdInvalidThreshold(t *testing.T) {
 			err := runCmd(ctx, logger, tt.args)
 			if !errors.Is(err, errInvalidThreshold) {
 				t.Errorf("runCmd(%v) = %v, want %v", tt.args, err, errInvalidThreshold)
+			}
+		})
+	}
+}
+
+func TestProgressFnVerbosity(t *testing.T) {
+	ctx := context.Background()
+	logger := testLogger()
+	st, err := store.NewStore(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	progress := attractor.IterationProgress{
+		RunID:         "test-run",
+		Iteration:     1,
+		MaxIterations: 5,
+		Outcome:       attractor.OutcomeValidated,
+		Satisfaction:  72.5,
+		Threshold:     95.0,
+		TotalCostUSD:  0.01,
+		Elapsed:       2 * time.Second,
+		Failures: []string{
+			"✗ scenario-a (45/100)\n  ✗ step one (40/100)\n    Reasoning: not working\n    Observed: got 404",
+			"✓ scenario-b (95/100)",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		verbosity int
+		wantLines []string
+		noLines   []string
+	}{
+		{
+			name:      "v0 shows summary only",
+			verbosity: 0,
+			wantLines: []string{"iter 1/5  satisfaction: 72.5/95.0"},
+			noLines:   []string{"scenario-a", "scenario-b"},
+		},
+		{
+			name:      "v1 shows first line of each failure",
+			verbosity: 1,
+			wantLines: []string{"iter 1/5  satisfaction: 72.5/95.0", "✗ scenario-a (45/100)", "✓ scenario-b (95/100)"},
+			noLines:   []string{"Reasoning: not working"},
+		},
+		{
+			name:      "v2 shows full failure detail",
+			verbosity: 2,
+			wantLines: []string{"iter 1/5  satisfaction: 72.5/95.0", "✗ scenario-a (45/100)", "Reasoning: not working", "✓ scenario-b (95/100)"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			fn := progressFn(ctx, logger, st, &buf, tt.verbosity)
+			fn(progress)
+			out := buf.String()
+			for _, want := range tt.wantLines {
+				if !strings.Contains(out, want) {
+					t.Errorf("output missing %q\nfull output:\n%s", want, out)
+				}
+			}
+			for _, noWant := range tt.noLines {
+				if strings.Contains(out, noWant) {
+					t.Errorf("output should not contain %q\nfull output:\n%s", noWant, out)
+				}
+			}
+		})
+	}
+}
+
+func TestOutputValidationVerbosity(t *testing.T) {
+	agg := scenario.AggregateResult{
+		Satisfaction: 55.0,
+		TotalCostUSD: 0.001,
+		Scenarios: []scenario.ScoredScenario{
+			{
+				ScenarioID: "failing-scenario",
+				Score:      55,
+				Weight:     1.0,
+				Steps: []scenario.ScoredStep{
+					{
+						StepResult: scenario.StepResult{Description: "get items", Observed: "HTTP 404"},
+						StepScore:  scenario.StepScore{Score: 55, Reasoning: "expected 200 got 404"},
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		verbosity int
+		wantLines []string
+		noLines   []string
+	}{
+		{
+			name:      "v0 shows summary only",
+			verbosity: 0,
+			wantLines: []string{"failing-scenario", "Aggregate satisfaction: 55.0/100"},
+			noLines:   []string{"Step detail:", "expected 200 got 404"},
+		},
+		{
+			name:      "v1 shows per-scenario summary line",
+			verbosity: 1,
+			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "failing-scenario"},
+			noLines:   []string{"expected 200 got 404"},
+		},
+		{
+			name:      "v2 shows full step detail with reasoning",
+			verbosity: 2,
+			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "expected 200 got 404"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := outputValidation(agg, "http://localhost", 0, "text", tt.verbosity, &buf)
+			if err != nil {
+				t.Fatalf("outputValidation: %v", err)
+			}
+			out := buf.String()
+			for _, want := range tt.wantLines {
+				if !strings.Contains(out, want) {
+					t.Errorf("output missing %q\nfull output:\n%s", want, out)
+				}
+			}
+			for _, noWant := range tt.noLines {
+				if strings.Contains(out, noWant) {
+					t.Errorf("output should not contain %q\nfull output:\n%s", noWant, out)
+				}
 			}
 		})
 	}

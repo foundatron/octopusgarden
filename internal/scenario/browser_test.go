@@ -94,7 +94,7 @@ func TestBrowserValidCaptureSources(t *testing.T) {
 	exec := &BrowserExecutor{}
 	sources := exec.ValidCaptureSources()
 	want := map[string]bool{
-		"text": true, "html": true, "count": true, "location": true,
+		"text": true, "html": true, "count": true, "location": true, "value": true,
 	}
 	if len(sources) != len(want) {
 		t.Fatalf("got %d sources, want %d", len(sources), len(want))

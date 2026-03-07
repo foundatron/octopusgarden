@@ -147,6 +147,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	otelEndpoint := fs.String("otel-endpoint", "", "OTLP/HTTP endpoint for tracing (e.g. localhost:4318); disabled if empty")
 	skipPreflight := fs.Bool("skip-preflight", false, "skip the spec clarity preflight check")
 	preflightThreshold := fs.Float64("preflight-threshold", 0.8, "aggregate clarity score threshold for preflight (0.0–1.0)")
+	verbose := fs.Int("v", 0, "verbosity level: 0=quiet, 1=per-scenario summary after each iteration, 2=full step detail with reasoning")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
@@ -219,6 +220,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		Language:          langForOpts,
 		GenesGuide:        genesGuide,
 		GeneLanguage:      genesLanguage,
+		Verbosity:         *verbose,
 	})
 }
 
@@ -271,6 +273,7 @@ type runLoopParams struct {
 	Language          string
 	GenesGuide        string
 	GeneLanguage      string
+	Verbosity         int
 }
 
 func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, p runLoopParams) error {
@@ -358,7 +361,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		BlockOnRegression: p.BlockOnRegression,
 		ContextBudget:     p.ContextBudget,
 		Language:          p.Language,
-		Progress:          progressFn(ctx, logger, st),
+		Progress:          progressFn(ctx, logger, st, os.Stderr, p.Verbosity),
 		Capabilities:      caps,
 		Genes:             p.GenesGuide,
 		GeneLanguage:      p.GeneLanguage,
@@ -408,16 +411,29 @@ func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
 	}
 }
 
-func progressFn(ctx context.Context, logger *slog.Logger, st *store.Store) func(attractor.IterationProgress) {
+func progressFn(ctx context.Context, logger *slog.Logger, st *store.Store, w io.Writer, verbosity int) func(attractor.IterationProgress) {
 	return func(p attractor.IterationProgress) {
 		if p.Outcome != attractor.OutcomeValidated {
-			fmt.Fprintf(os.Stderr, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+			_, _ = fmt.Fprintf(w, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
 				p.Iteration, p.MaxIterations, p.Outcome,
 				p.TotalCostUSD, p.Elapsed.Truncate(time.Second))
 		} else {
-			fmt.Fprintf(os.Stderr, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to stderr, not an HTTP response
+			_, _ = fmt.Fprintf(w, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
 				p.Iteration, p.MaxIterations, p.Satisfaction, p.Threshold,
 				p.TotalCostUSD, p.Trend, p.Elapsed.Truncate(time.Second))
+		}
+
+		// p.Failures holds per-scenario feedback strings (both passing and failing scenarios);
+		// they are only populated after the validation phase, so we gate on OutcomeValidated.
+		if verbosity > 0 && p.Outcome == attractor.OutcomeValidated && len(p.Failures) > 0 {
+			for _, f := range p.Failures {
+				if verbosity >= 2 {
+					_, _ = fmt.Fprintf(w, "  %s\n", f) //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
+				} else {
+					line, _, _ := strings.Cut(f, "\n")
+					_, _ = fmt.Fprintf(w, "  %s\n", line) //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
+				}
+			}
 		}
 
 		it := store.Iteration{
@@ -483,6 +499,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
 	format := fs.String("format", "text", "output format: text or json")
+	verbose := fs.Int("v", 0, "verbosity level: 0=standard, 1=per-scenario summary, 2=full step detail with judge reasoning")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog validate [flags]\n\nFlags:\n")
@@ -538,18 +555,32 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		return fmt.Errorf("validate: %w", err)
 	}
 
-	return outputValidation(agg, *target, *threshold, *format)
+	return outputValidation(agg, *target, *threshold, *format, *verbose, os.Stdout)
 }
 
-func outputValidation(agg scenario.AggregateResult, target string, threshold float64, format string) error {
+func outputValidation(agg scenario.AggregateResult, target string, threshold float64, format string, verbosity int, w io.Writer) error {
 	switch format {
 	case "json":
 		out := view.NewValidateOutput(agg, target, threshold, stepPassThreshold)
-		if err := view.WriteJSON(os.Stdout, out); err != nil {
+		if err := view.WriteJSON(w, out); err != nil {
 			return fmt.Errorf("write json: %w", err)
 		}
 	default:
-		fprintValidationResult(os.Stdout, agg)
+		fprintValidationResult(w, agg)
+		if verbosity >= 1 {
+			failures := buildDetailedFailures(agg)
+			if len(failures) > 0 {
+				_, _ = fmt.Fprintln(w, "\nStep detail:")
+				for _, f := range failures {
+					if verbosity >= 2 {
+						_, _ = fmt.Fprintf(w, "  %s\n", f) //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
+					} else {
+						line, _, _ := strings.Cut(f, "\n")
+						_, _ = fmt.Fprintf(w, "  %s\n", line) //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
+					}
+				}
+			}
+		}
 	}
 
 	if threshold > 0 && agg.Satisfaction < threshold {
@@ -1073,12 +1104,12 @@ func formatFailedScenario(s scenario.ScoredScenario) string {
 	b.WriteString(attractor.FormatScenarioFailureLine(s.ScenarioID, s.Score))
 	for _, step := range s.Steps {
 		if step.StepScore.Score >= stepPassThreshold {
-			fmt.Fprintf(&b, "\n%s %s (%d/100)", attractor.StepPassPrefix, step.StepResult.Description, step.StepScore.Score)
+			fmt.Fprintf(&b, "\n%s %s (%d/100)", attractor.StepPassPrefix, step.StepResult.Description, step.StepScore.Score) //nolint:gosec // G705 false positive: writing to strings.Builder, not an HTTP response
 			continue
 		}
-		fmt.Fprintf(&b, "\n%s %s (%d/100)", attractor.StepFailPrefix, step.StepResult.Description, step.StepScore.Score)
+		fmt.Fprintf(&b, "\n%s %s (%d/100)", attractor.StepFailPrefix, step.StepResult.Description, step.StepScore.Score) //nolint:gosec // G705 false positive: writing to strings.Builder, not an HTTP response
 		if step.StepScore.Reasoning != "" {
-			fmt.Fprintf(&b, "\n    Reasoning: %s", step.StepScore.Reasoning)
+			fmt.Fprintf(&b, "\n    Reasoning: %s", step.StepScore.Reasoning) //nolint:gosec // G705 false positive: writing to strings.Builder, not an HTTP response
 		}
 		if step.StepResult.Observed != "" {
 			obs := step.StepResult.Observed
@@ -1087,7 +1118,7 @@ func formatFailedScenario(s scenario.ScoredScenario) string {
 				obs = truncateObserved(obs, attractor.MaxObservedBytes)
 				label = fmt.Sprintf("Observed (%dB)", attractor.MaxObservedBytes)
 			}
-			fmt.Fprintf(&b, "\n    %s: %s", label, obs)
+			fmt.Fprintf(&b, "\n    %s: %s", label, obs) //nolint:gosec // G705 false positive: writing to strings.Builder, not an HTTP response
 		}
 	}
 	return b.String()
