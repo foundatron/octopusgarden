@@ -568,9 +568,10 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 	}
 
 	s.history = append(s.history, iterationFeedback{
-		iteration: iter,
-		kind:      feedbackValidation,
-		message:   formatValidationFeedback(satisfaction, failures),
+		iteration:       iter,
+		kind:            feedbackValidation,
+		message:         formatValidationFeedback(satisfaction, failures),
+		failedScenarios: parseFailedScenarios(failures),
 	})
 
 	if s.stallCount >= s.opts.StallLimit {

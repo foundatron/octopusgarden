@@ -44,7 +44,7 @@ from pathlib import Path
 REPO = "foundatron/octopusgarden"
 MAX_CI_WAIT = 600
 CI_POLL_INTERVAL = 30
-MAX_CI_RETRIES = 2
+MAX_CI_RETRIES = 4
 MAX_PUSH_RETRIES = 2
 DIFF_SIZE_LIMIT = 100_000
 DIFF_TRUNCATE_LINES = 3000
@@ -451,8 +451,9 @@ def wait_for_ci(pr_number: str) -> int:
                     if c.get("conclusion") == "FAILURE":
                         log(f"  FAILED: {c.get('name', 'unknown')}")
                 return 1
+            passing = {"SUCCESS", "SKIPPED", "NEUTRAL"}
             if all(s == "COMPLETED" for s in states) and all(
-                c == "SUCCESS" for c in conclusions
+                c in passing for c in conclusions
             ):
                 log("All CI checks passed!")
                 return 0
@@ -506,19 +507,20 @@ def ci_retry_loop(
     impl_model: str,
     budget: str | None,
     pr_url: str,
-) -> None:
+) -> bool:
+    """Run CI retry loop. Returns True if CI passed, False otherwise."""
     ci_retries = 0
     while True:
         ci_result = wait_for_ci(pr_number)
         if ci_result == 0:
-            return
+            return True
         if ci_result == 2:
             log(f"ERROR: Timed out waiting for CI. PR: {pr_url}")
-            sys.exit(1)
+            return False
         ci_retries += 1
         if ci_retries > MAX_CI_RETRIES:
             log(f"CI failed after {MAX_CI_RETRIES} retries. PR: {pr_url}")
-            sys.exit(1)
+            return False
         log(f"CI retry {ci_retries}/{MAX_CI_RETRIES}...")
 
         # Get failed run logs
@@ -999,7 +1001,14 @@ def main() -> None:
 
         # Phase 6: CI Retry Loop
         log("Phase 6: CI check and retry...")
-        ci_retry_loop(pr_number, branch, prompt_file, impl_model, args.budget, pr_url)
+        ci_passed = ci_retry_loop(
+            pr_number, branch, prompt_file, impl_model, args.budget, pr_url
+        )
+
+        if not ci_passed:
+            log(f"CI did not pass. PR left open for manual review: {pr_url}")
+            unlock_issue(issue_number)
+            continue
 
         # Merge
         log(f"Merging PR #{pr_number}...")

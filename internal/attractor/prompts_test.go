@@ -680,6 +680,338 @@ func TestBuildSystemPromptBackwardsCompat(t *testing.T) {
 	}
 }
 
+func TestParseFailedScenarios(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		wantKeys []string
+		wantNone []string
+	}{
+		{
+			name:     "single failure",
+			input:    []string{"✗ move-card (45/100)"},
+			wantKeys: []string{"move-card"},
+		},
+		{
+			name:     "passing scenario skipped",
+			input:    []string{"✓ add-task (100/100)"},
+			wantKeys: []string{},
+		},
+		{
+			name:     "multiple failures",
+			input:    []string{"✗ move-card (45/100)", "✗ add-task (30/100)"},
+			wantKeys: []string{"move-card", "add-task"},
+		},
+		{
+			name:     "mixed pass and fail",
+			input:    []string{"✓ health (100/100)", "✗ create-item (60/100)"},
+			wantKeys: []string{"create-item"},
+			wantNone: []string{"health"},
+		},
+		{
+			name: "indented sub-lines ignored",
+			input: []string{
+				"✗ move-card (45/100)\n  ✗ check status (20/100)\n    Reasoning: timeout\n    Observed: got 500",
+			},
+			wantKeys: []string{"move-card"},
+		},
+		{
+			name:     "empty input",
+			input:    []string{},
+			wantKeys: []string{},
+		},
+		{
+			name:     "malformed line gracefully skipped",
+			input:    []string{"✗ bad-scenario no-parens", "✗ move-card (45/100)"},
+			wantKeys: []string{"move-card"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseFailedScenarios(tt.input)
+			for _, key := range tt.wantKeys {
+				if _, ok := got[key]; !ok {
+					t.Errorf("expected key %q in result, got %v", key, got)
+				}
+			}
+			for _, key := range tt.wantNone {
+				if _, ok := got[key]; ok {
+					t.Errorf("unexpected key %q in result", key)
+				}
+			}
+		})
+	}
+}
+
+func TestParseFailedScenariosScores(t *testing.T) {
+	got := parseFailedScenarios([]string{"✗ move-card (45/100)", "✗ add-task (30/100)"})
+	if got["move-card"] != 45 {
+		t.Errorf("move-card score: got %v, want 45", got["move-card"])
+	}
+	if got["add-task"] != 30 {
+		t.Errorf("add-task score: got %v, want 30", got["add-task"])
+	}
+}
+
+// TestScenarioFormatRoundTrip locks the contract between FormatScenarioFailureLine
+// (used by cmd/octog to build ValidateFn output) and parseFailedScenarios (used by
+// the attractor loop for stall detection). If the format changes in one without
+// updating the other, this test catches the regression before it silently degrades
+// stall steering to a no-op.
+func TestScenarioFormatRoundTrip(t *testing.T) {
+	tests := []struct {
+		id    string
+		score float64
+	}{
+		{"move-card", 45},
+		{"add-task", 30},
+		{"scenario with spaces", 0},
+		{"edge-case", 100},
+	}
+	for _, tt := range tests {
+		line := FormatScenarioFailureLine(tt.id, tt.score)
+		got := parseFailedScenarios([]string{line})
+		score, ok := got[tt.id]
+		if !ok {
+			t.Errorf("id=%q: FormatScenarioFailureLine output %q not parsed by parseFailedScenarios", tt.id, line)
+			continue
+		}
+		if score != tt.score {
+			t.Errorf("id=%q: score round-trip: got %v, want %v", tt.id, score, tt.score)
+		}
+	}
+}
+
+func TestBuildSteeringText(t *testing.T) {
+	mkFeedback := func(kind string, failed map[string]float64) iterationFeedback {
+		return iterationFeedback{kind: kind, failedScenarios: failed}
+	}
+	mkVal := func(failed map[string]float64) iterationFeedback {
+		return mkFeedback(feedbackValidation, failed)
+	}
+	mkBuild := func() iterationFeedback {
+		return mkFeedback(feedbackBuildError, nil)
+	}
+
+	tests := []struct {
+		name      string
+		history   []iterationFeedback
+		wantEmpty bool
+		wantIDs   []string
+	}{
+		{
+			name:      "no history",
+			history:   nil,
+			wantEmpty: true,
+		},
+		{
+			name:      "single entry no steering",
+			history:   []iterationFeedback{mkVal(map[string]float64{"move-card": 45})},
+			wantEmpty: true,
+		},
+		{
+			name: "different scenarios each iteration",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 45}),
+				mkVal(map[string]float64{"add-task": 30}),
+			},
+			wantEmpty: true,
+		},
+		{
+			name: "same scenario 2 consecutive iterations",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 50}),
+				mkVal(map[string]float64{"move-card": 45}),
+			},
+			wantEmpty: false,
+			wantIDs:   []string{"move-card"},
+		},
+		{
+			name: "3 consecutive same scenario",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 60}),
+				mkVal(map[string]float64{"move-card": 50}),
+				mkVal(map[string]float64{"move-card": 45}),
+			},
+			wantEmpty: false,
+			wantIDs:   []string{"move-card"},
+		},
+		{
+			name: "streak broken by passing",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 50}),
+				mkVal(map[string]float64{}), // move-card passed
+				mkVal(map[string]float64{"move-card": 45}),
+			},
+			wantEmpty: true,
+		},
+		{
+			name: "non-validation entries don't break streaks",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 50}),
+				mkBuild(),
+				mkVal(map[string]float64{"move-card": 45}),
+			},
+			wantEmpty: false,
+			wantIDs:   []string{"move-card"},
+		},
+		{
+			name: "multiple stalling scenarios",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 50, "add-task": 40}),
+				mkVal(map[string]float64{"move-card": 45, "add-task": 35}),
+			},
+			wantEmpty: false,
+			wantIDs:   []string{"move-card", "add-task"},
+		},
+		{
+			name: "mixed repeated and new",
+			history: []iterationFeedback{
+				mkVal(map[string]float64{"move-card": 50}),
+				mkVal(map[string]float64{"move-card": 45, "add-task": 30}),
+			},
+			wantEmpty: false,
+			wantIDs:   []string{"move-card"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildSteeringText(tt.history)
+			if tt.wantEmpty {
+				if got != "" {
+					t.Errorf("expected empty steering text, got:\n%s", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("expected non-empty steering text")
+			}
+			if !strings.Contains(got, "STALL NOTICE") {
+				t.Errorf("steering text should contain STALL NOTICE, got:\n%s", got)
+			}
+			for _, id := range tt.wantIDs {
+				if !strings.Contains(got, id) {
+					t.Errorf("steering text should mention scenario %q, got:\n%s", id, got)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildSteeringTextTrajectory(t *testing.T) {
+	mkVal := func(failed map[string]float64) iterationFeedback {
+		return iterationFeedback{kind: feedbackValidation, failedScenarios: failed}
+	}
+
+	history := []iterationFeedback{
+		mkVal(map[string]float64{"move-card": 60}),
+		mkVal(map[string]float64{"move-card": 50}),
+		mkVal(map[string]float64{"move-card": 45}),
+	}
+	got := buildSteeringText(history)
+
+	if !strings.Contains(got, "60 → 50 → 45") {
+		t.Errorf("steering text should contain score trajectory, got:\n%s", got)
+	}
+}
+
+func TestBuildMessagesWithSteering(t *testing.T) {
+	// Two consecutive validation failures for the same scenario should inject steering.
+	history := []iterationFeedback{
+		{
+			iteration:       1,
+			kind:            feedbackValidation,
+			message:         "Satisfaction score: 50.0/100\nScenario results:\n✗ move-card (50/100)",
+			failedScenarios: map[string]float64{"move-card": 50},
+		},
+		{
+			iteration:       2,
+			kind:            feedbackValidation,
+			message:         "Satisfaction score: 45.0/100\nScenario results:\n✗ move-card (45/100)",
+			failedScenarios: map[string]float64{"move-card": 45},
+		},
+	}
+
+	msgs := buildMessages(3, history)
+	content := msgs[0].Content
+
+	if !strings.Contains(content, "STALL NOTICE") {
+		t.Errorf("messages should contain STALL NOTICE when scenario stalls, got:\n%s", content)
+	}
+	if !strings.Contains(content, "move-card") {
+		t.Errorf("messages should mention stalling scenario, got:\n%s", content)
+	}
+	// Steering should appear before the categorized feedback.
+	steerIdx := strings.Index(content, "STALL NOTICE")
+	feedbackIdx := strings.Index(content, "VALIDATION FAILURES")
+	if steerIdx < 0 || feedbackIdx < 0 {
+		t.Errorf("expected both STALL NOTICE and VALIDATION FAILURES in content, got:\n%s", content)
+	} else if steerIdx > feedbackIdx {
+		t.Errorf("steering text should appear before categorized feedback")
+	}
+}
+
+func TestBuildMessagesNoSteeringWithoutConsecutive(t *testing.T) {
+	// Different scenarios each iteration: no steering expected.
+	history := []iterationFeedback{
+		{
+			iteration:       1,
+			kind:            feedbackValidation,
+			message:         "Satisfaction score: 50.0/100",
+			failedScenarios: map[string]float64{"move-card": 50},
+		},
+		{
+			iteration:       2,
+			kind:            feedbackValidation,
+			message:         "Satisfaction score: 45.0/100",
+			failedScenarios: map[string]float64{"add-task": 45},
+		},
+	}
+
+	msgs := buildMessages(3, history)
+	if strings.Contains(msgs[0].Content, "STALL NOTICE") {
+		t.Error("should not inject steering when scenarios differ each iteration")
+	}
+}
+
+func TestBuildPatchMessagesWithSteering(t *testing.T) {
+	history := []iterationFeedback{
+		{
+			iteration:       1,
+			kind:            feedbackValidation,
+			message:         "Satisfaction score: 50.0/100\nScenario results:\n✗ add-task (50/100)",
+			failedScenarios: map[string]float64{"add-task": 50},
+		},
+		{
+			iteration:       2,
+			kind:            feedbackValidation,
+			message:         "Satisfaction score: 40.0/100\nScenario results:\n✗ add-task (40/100)",
+			failedScenarios: map[string]float64{"add-task": 40},
+		},
+	}
+	bestFiles := map[string]string{"main.go": "package main\n"}
+
+	msgs := buildPatchMessages(history, bestFiles, 50.0)
+	content := msgs[0].Content
+
+	if !strings.Contains(content, "STALL NOTICE") {
+		t.Errorf("patch messages should contain STALL NOTICE when scenario stalls, got:\n%s", content)
+	}
+	if !strings.Contains(content, "add-task") {
+		t.Errorf("patch messages should mention stalling scenario, got:\n%s", content)
+	}
+	// Steering should appear before "Failures to fix".
+	steerIdx := strings.Index(content, "STALL NOTICE")
+	failIdx := strings.Index(content, "Failures to fix")
+	if steerIdx < 0 || failIdx < 0 {
+		t.Errorf("expected both STALL NOTICE and 'Failures to fix' in content, got:\n%s", content)
+	} else if steerIdx > failIdx {
+		t.Errorf("steering text should appear before 'Failures to fix' section")
+	}
+}
+
 // capsSuffix returns a short string describing capabilities for test names.
 func capsSuffix(caps ScenarioCapabilities) string {
 	switch {
