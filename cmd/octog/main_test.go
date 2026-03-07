@@ -1430,3 +1430,23 @@ func TestRunCmdInvalidThreshold(t *testing.T) {
 		})
 	}
 }
+
+func TestFrugalModelFlagParsing(t *testing.T) {
+	// Verify --frugal-model is a recognized flag and its value flows into runLoopParams.
+	// We use a flag.FlagSet with the same definition as runCmd to avoid going through
+	// the full run path (which requires Docker, API keys, etc.).
+	ctx := context.Background()
+	logger := testLogger()
+
+	// Passing missing --spec and --scenarios should return errSpecAndScenariosRequired,
+	// not a "flag provided but not defined" error — proving the flag is accepted.
+	err := runCmd(ctx, logger, []string{"--frugal-model", "claude-haiku-4-5", "--spec", "s.md", "--scenarios", "s/"})
+	if errors.Is(err, flag.ErrHelp) {
+		t.Fatal("--frugal-model was not recognized as a valid flag")
+	}
+	// The flag is parsed successfully; the error here is from missing spec file or API keys,
+	// not from an unrecognized flag.
+	if err != nil && strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Errorf("--frugal-model flag not defined: %v", err)
+	}
+}

@@ -71,6 +71,7 @@ type IterationProgress struct {
 	InputTokens      int
 	OutputTokens     int
 	Failures         []string
+	Model            string // model used for generation in this iteration
 }
 
 // ProgressFunc is called synchronously after each iteration completes.
@@ -114,6 +115,7 @@ type Attractor struct {
 // RunOptions configures the attractor loop.
 type RunOptions struct {
 	Model             string
+	FrugalModel       string               // optional cheaper model to start with; escalates to Model after consecutive failures
 	JudgeModel        string               // model used for the wonder phase diagnosis; falls back to Model when empty
 	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
 	BudgetUSD         float64              // 0 = unlimited
@@ -163,6 +165,7 @@ type runState struct {
 	scoreHistory           []float64
 	lastOutcome            IterationOutcome
 	lastSatisfaction       float64
+	lastImproved           bool // true when the last validated iteration beat bestSatisfaction
 	lastInputTokens        int
 	lastOutputTokens       int
 	lastFailures           []string
@@ -176,6 +179,16 @@ type runState struct {
 	scenarioScores         map[string]float64      // per-scenario scores from the last validated iteration
 	scenarioScoreIteration int                     // iteration number corresponding to scenarioScores
 	codeHashes             []string                // SHA-256 hashes of generated file sets, in iteration order
+	escalation             *escalationState        // nil when FrugalModel is empty (escalation disabled)
+}
+
+// currentModel returns the model to use for generation, respecting escalation state.
+// Returns opts.Model directly when escalation is disabled.
+func (s *runState) currentModel() string {
+	if s.escalation != nil {
+		return s.escalation.currentModel()
+	}
+	return s.opts.Model
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -211,6 +224,7 @@ func (s *runState) buildProgress(iter int, costBefore float64) IterationProgress
 		InputTokens:      s.lastInputTokens,
 		OutputTokens:     s.lastOutputTokens,
 		Failures:         s.lastFailures,
+		Model:            s.currentModel(),
 	}
 }
 
@@ -272,6 +286,7 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 		patchActive:        opts.PatchMode,
 		sessionProvider:    sessionProvider,
 		grpcTargetProvider: grpcTargetProvider,
+		escalation:         newEscalationState(opts.FrugalModel, opts.Model, a.logger),
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -326,6 +341,10 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 			opts.Progress(s.buildProgress(iter, costBefore))
 		}
 
+		if s.escalation != nil {
+			s.escalation.recordOutcome(s.lastImproved, a.logger)
+		}
+
 		if result != nil {
 			a.setRunSpanAttrs(runSpan, result)
 			return result, nil
@@ -366,7 +385,7 @@ func (a *Attractor) generateContent(ctx context.Context, specContent string, mes
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
 		Messages:     messages,
-		Model:        s.opts.Model,
+		Model:        s.currentModel(),
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
 	})
 	if err != nil {
@@ -386,10 +405,12 @@ func (a *Attractor) generateContent(ctx context.Context, specContent string, mes
 func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int, s *runState) (string, error) {
 	opts := s.opts
 
-	// Resolve judge model — fall back to generator model when unset.
+	// Resolve judge model — fall back to the primary generation model when unset.
+	// Always use the primary model (not the current frugal tier) so diagnostics retain
+	// full capability during the exact window where the frugal model is struggling.
 	judgeModel := opts.JudgeModel
 	if judgeModel == "" {
-		a.logger.Debug("wonder/reflect: no judge model set, falling back to generator model", "model", opts.Model)
+		a.logger.Debug("wonder/reflect: no judge model set, falling back to primary model", "model", opts.Model)
 		judgeModel = opts.Model
 	}
 
@@ -436,7 +457,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 	reflectResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
 		Messages:     []llm.Message{{Role: "user", Content: reflectPrompt}},
-		Model:        opts.Model,
+		Model:        opts.Model, // always use primary model; reflect crafts the next steering prompt
 		Temperature:  &reflectTemp,
 	})
 	if err != nil {
@@ -459,6 +480,8 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 // iterate runs a single iteration of the attractor loop.
 // Returns (result, nil) for terminal conditions, (nil, nil) to continue, or (nil, err) for hard errors.
 func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *runState, validate ValidateFn) (*RunResult, error) {
+	s.lastImproved = false // reset at start of each iteration; set true only by processValidation on strict improvement
+
 	// Select spec content: use summarized view when available to respect context budget.
 	// SelectContent returns full spec if it fits the budget, so iteration 1 (no failures)
 	// still gets maximum detail. Iteration 2+ gets failure-relevant sections expanded.
@@ -751,6 +774,7 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 		s.bestFiles = maps.Clone(files)
 		s.stallCount = 0
 		s.patchRegressionCount = 0
+		s.lastImproved = true
 		if err := writeFiles(s.bestDir, files); err != nil {
 			return nil, fmt.Errorf("attractor: write best files: %w", err)
 		}

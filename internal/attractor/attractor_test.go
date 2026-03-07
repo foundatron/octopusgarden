@@ -2136,3 +2136,106 @@ func TestWonderReflect_BudgetExhaustedAfterWonder(t *testing.T) {
 		t.Errorf("unexpected status %q (expected budget_exceeded, stalled, or converged)", result.Status)
 	}
 }
+
+func TestModelEscalationPassedToGenerate(t *testing.T) {
+	// Simulate 2 build failures then success, verifying that the model seen by
+	// Generate changes from the frugal model to the primary model after escalation.
+	var buildCount atomic.Int32
+	capturedModels := make([]string, 0, 4)
+	var mu sync.Mutex
+
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			mu.Lock()
+			capturedModels = append(capturedModels, req.Model)
+			mu.Unlock()
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, _, _ string) error {
+			n := buildCount.Add(1)
+			if n <= 2 {
+				return fmt.Errorf("build failed iteration %d", n)
+			}
+			return nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Model = "primary-model"
+	opts.FrugalModel = "frugal-model"
+	opts.StallLimit = 5 // allow more iterations so escalation has room to fire
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+
+	// At least 3 generate calls: 2 before escalation (frugal) + 1 after (primary).
+	mu.Lock()
+	defer mu.Unlock()
+	if len(capturedModels) < 3 {
+		t.Fatalf("expected at least 3 generate calls, got %d", len(capturedModels))
+	}
+	// First 2 calls should use the frugal model.
+	for i := range 2 {
+		if capturedModels[i] != "frugal-model" {
+			t.Errorf("generate call %d: expected model %q, got %q", i+1, "frugal-model", capturedModels[i])
+		}
+	}
+	// The call after escalation should use the primary model.
+	if capturedModels[2] != "primary-model" {
+		t.Errorf("generate call 3 (post-escalation): expected model %q, got %q", "primary-model", capturedModels[2])
+	}
+}
+
+func TestNoEscalationWithoutFrugalModel(t *testing.T) {
+	var capturedModels []string
+	var mu sync.Mutex
+
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			mu.Lock()
+			capturedModels = append(capturedModels, req.Model)
+			mu.Unlock()
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n < 3 {
+			return 50, []string{"not yet"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Model = "primary-model"
+	// FrugalModel intentionally left empty → escalation disabled.
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i, m := range capturedModels {
+		if m != "primary-model" {
+			t.Errorf("generate call %d: expected model %q, got %q", i+1, "primary-model", m)
+		}
+	}
+}

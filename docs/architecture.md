@@ -496,6 +496,7 @@ type ValidateFn func(ctx context.Context, url string) (satisfaction float64, fai
 // RunOptions configures the attractor loop.
 type RunOptions struct {
 	Model             string
+	FrugalModel       string               // optional cheaper model to start with; escalates to Model after consecutive failures
 	JudgeModel        string               // model used for the wonder phase diagnosis; falls back to Model when empty
 	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
 	BudgetUSD         float64              // 0 = unlimited
@@ -587,6 +588,7 @@ type IterationProgress struct {
 	InputTokens      int
 	OutputTokens     int
 	Failures         []string
+	Model            string // model used for generation in this iteration
 }
 ```
 
