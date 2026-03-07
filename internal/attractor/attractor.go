@@ -567,10 +567,13 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 		a.trackPatchRegression(iter, satisfaction, s)
 	}
 
+	fidelity := determineFidelity(iter, s.stallCount)
+	slog.Debug("feedback fidelity", "iteration", iter, "fidelity", fidelity, "stall_count", s.stallCount)
 	s.history = append(s.history, iterationFeedback{
 		iteration:       iter,
 		kind:            feedbackValidation,
-		message:         formatValidationFeedback(satisfaction, failures),
+		message:         formatValidationFeedback(satisfaction, failures, fidelity),
+		fidelity:        fidelity,
 		failedScenarios: parseFailedScenarios(failures),
 	})
 
