@@ -111,20 +111,21 @@ type Attractor struct {
 
 // RunOptions configures the attractor loop.
 type RunOptions struct {
-	Model         string
-	Language      string               // language hint: "go", "python", "node", "rust", or "" (auto)
-	BudgetUSD     float64              // 0 = unlimited
-	Threshold     float64              // default 95
-	MaxIterations int                  // default 10
-	StallLimit    int                  // default 3
-	WorkspaceDir  string               // default "./workspace"
-	HealthTimeout time.Duration        // default 30s
-	Progress      ProgressFunc         // optional per-iteration callback
-	PatchMode     bool                 // if true, iteration 2+ sends prev best files + failures
-	ContextBudget int                  // max estimated tokens for spec in system prompt; 0 = unlimited
-	Capabilities  ScenarioCapabilities // detected from loaded scenarios
-	Genes         string               // extracted pattern guide to inject into system prompt (empty = no genes)
-	GeneLanguage  string               // source language of the gene exemplar (for cross-language note)
+	Model             string
+	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
+	BudgetUSD         float64              // 0 = unlimited
+	Threshold         float64              // default 95
+	MaxIterations     int                  // default 10
+	StallLimit        int                  // default 3
+	WorkspaceDir      string               // default "./workspace"
+	HealthTimeout     time.Duration        // default 30s
+	Progress          ProgressFunc         // optional per-iteration callback
+	PatchMode         bool                 // if true, iteration 2+ sends prev best files + failures
+	BlockOnRegression bool                 // if true, convergence is blocked when per-scenario regressions are detected
+	ContextBudget     int                  // max estimated tokens for spec in system prompt; 0 = unlimited
+	Capabilities      ScenarioCapabilities // detected from loaded scenarios
+	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
+	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -147,27 +148,29 @@ type GRPCTargetProviderFn func(target string)
 
 // runState holds mutable state across iterations of the attractor loop.
 type runState struct {
-	runID                string
-	opts                 RunOptions
-	baseDir              string
-	bestDir              string
-	totalCost            float64
-	bestSatisfaction     float64
-	stallCount           int
-	history              []iterationFeedback
-	scoreHistory         []float64
-	lastOutcome          IterationOutcome
-	lastSatisfaction     float64
-	lastInputTokens      int
-	lastOutputTokens     int
-	lastFailures         []string
-	startTime            time.Time
-	bestFiles            map[string]string       // files from the best-scoring iteration
-	patchActive          bool                    // patch mode currently in effect (may disable on regression)
-	patchRegressionCount int                     // consecutive regressions while patch mode active
-	summarized           *specpkg.SummarizedSpec // nil if spec fits budget or budget is 0
-	sessionProvider      SessionProviderFn       // callback to set the current session
-	grpcTargetProvider   GRPCTargetProviderFn    // callback to set the gRPC target
+	runID                  string
+	opts                   RunOptions
+	baseDir                string
+	bestDir                string
+	totalCost              float64
+	bestSatisfaction       float64
+	stallCount             int
+	history                []iterationFeedback
+	scoreHistory           []float64
+	lastOutcome            IterationOutcome
+	lastSatisfaction       float64
+	lastInputTokens        int
+	lastOutputTokens       int
+	lastFailures           []string
+	startTime              time.Time
+	bestFiles              map[string]string       // files from the best-scoring iteration
+	patchActive            bool                    // patch mode currently in effect (may disable on regression)
+	patchRegressionCount   int                     // consecutive regressions while patch mode active
+	summarized             *specpkg.SummarizedSpec // nil if spec fits budget or budget is 0
+	sessionProvider        SessionProviderFn       // callback to set the current session
+	grpcTargetProvider     GRPCTargetProviderFn    // callback to set the gRPC target
+	scenarioScores         map[string]float64      // per-scenario scores from the last validated iteration
+	scenarioScoreIteration int                     // iteration number corresponding to scenarioScores
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -552,7 +555,35 @@ func (a *Attractor) processValidation(iter int, satisfaction float64, failures [
 	s.lastSatisfaction = satisfaction
 	s.scoreHistory = append(s.scoreHistory, satisfaction)
 
-	if satisfaction >= s.opts.Threshold {
+	// Detect per-scenario regressions before the convergence check.
+	currentScores := parseAllScenarios(failures)
+	if len(failures) > 0 && len(currentScores) == 0 {
+		// No scenario lines parsed from non-empty output — likely a format change in
+		// validator output. Log at debug level to aid diagnosis of unexpected
+		// "no regressions detected" situations.
+		a.logger.Debug("parseAllScenarios: non-empty failures slice yielded zero parsed scenarios; regression detection disabled for this iteration", "iteration", iter, "entry_count", len(failures))
+	}
+	regressions := detectRegressions(s.scenarioScores, s.scenarioScoreIteration, currentScores, iter, s.opts.Threshold)
+	if len(regressions) > 0 {
+		body := formatRegressions(regressions)
+		s.history = append(s.history, iterationFeedback{
+			iteration: iter,
+			kind:      feedbackRegression,
+			message:   body,
+		})
+		a.logger.Info("scenario regressions detected", "iteration", iter, "count", len(regressions))
+	}
+
+	// Full replacement (not merge) avoids stale scores for renamed or removed scenarios.
+	s.scenarioScores = currentScores
+	s.scenarioScoreIteration = iter
+
+	// Converge only when at/above threshold and not blocked by a regression.
+	converge := satisfaction >= s.opts.Threshold
+	if converge && s.opts.BlockOnRegression && len(regressions) > 0 {
+		converge = false
+	}
+	if converge {
 		if err := writeFiles(s.bestDir, files); err != nil {
 			return nil, fmt.Errorf("attractor: write best files: %w", err)
 		}

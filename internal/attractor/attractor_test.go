@@ -1468,3 +1468,114 @@ func TestMinimalismPromptProgression(t *testing.T) {
 		t.Errorf("req 3 should contain minimalism prompt (score 85 > 80), got:\n%s", thirdContent)
 	}
 }
+
+// TestRegressionFeedbackInjected verifies that when a scenario passes in one iteration
+// and then fails in the next, a REGRESSIONS feedback entry is injected into the messages
+// for the following iteration.
+func TestRegressionFeedbackInjected(t *testing.T) {
+	// Iter 1: aggregate below threshold so run continues; scenario-a scores above threshold.
+	// Iter 2: scenario-a drops below threshold → regression detected.
+	// Iter 3: Generate call should contain "REGRESSIONS" in messages.
+	iter1Failures := []string{"✓ scenario-a (98/100)"}
+	iter2Failures := []string{"✗ scenario-a (45/100)"}
+
+	// capturedMsgs is appended from generateFn without synchronization.
+	// This is safe because the attractor loop calls Generate sequentially (never concurrently).
+	var capturedMsgs [][]llm.Message
+	var validateCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedMsgs = append(capturedMsgs, req.Messages)
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := validateCount.Add(1)
+		switch n {
+		case 1:
+			// aggregate 60 < threshold 95 — does not converge; scenario-a is at 98.
+			return 60, iter1Failures, 0.005, nil
+		case 2:
+			// scenario-a dropped from 98 to 45 → regression.
+			return 50, iter2Failures, 0.005, nil
+		default:
+			return 100, nil, 0.005, nil
+		}
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if len(capturedMsgs) < 3 {
+		t.Fatalf("expected at least 3 Generate calls, got %d", len(capturedMsgs))
+	}
+
+	// Iter 3 messages should contain REGRESSIONS feedback.
+	msgsContain := func(msgs []llm.Message, sub string) bool {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, sub) {
+				return true
+			}
+		}
+		return false
+	}
+	if !msgsContain(capturedMsgs[2], "REGRESSIONS") {
+		t.Errorf("iteration 3 Generate call should contain REGRESSIONS feedback, got: %v", capturedMsgs[2])
+	}
+	if !msgsContain(capturedMsgs[2], "scenario-a") {
+		t.Errorf("iteration 3 Generate call should mention the regressed scenario, got: %v", capturedMsgs[2])
+	}
+}
+
+// TestBlockOnRegressionPreventsConvergence verifies that when BlockOnRegression is true,
+// the loop does not converge if a per-scenario regression is detected in the same iteration
+// that the aggregate score meets the threshold.
+func TestBlockOnRegressionPreventsConvergence(t *testing.T) {
+	// Iter 1: aggregate below threshold; scenario-a scores above threshold per-scenario.
+	// Iter 2: aggregate meets threshold but scenario-a regressed → BlockOnRegression blocks.
+	// Iter 3: aggregate meets threshold with no regressions → converge.
+	iter1Failures := []string{"✓ scenario-a (98/100)", "✓ scenario-b (100/100)"}
+	iter2Failures := []string{"✗ scenario-a (45/100)", "✓ scenario-b (100/100)"}
+
+	var validateCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		n := validateCount.Add(1)
+		switch n {
+		case 1:
+			// aggregate 60 < threshold 95 — does not converge; scenario-a is at 98.
+			return 60, iter1Failures, 0.005, nil
+		case 2:
+			// Aggregate meets threshold, but scenario-a regressed from 98 to 45.
+			return 97, iter2Failures, 0.005, nil
+		default:
+			return 100, nil, 0.005, nil
+		}
+	}
+
+	opts := defaultOpts(t)
+	opts.BlockOnRegression = true
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should not have converged on iteration 2 due to regression blocking.
+	// Iteration 3 has no regression and aggregate 100 → converged.
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged (on iteration 3), got %q", result.Status)
+	}
+	if result.Iterations < 3 {
+		t.Errorf("expected at least 3 iterations (regression blocked iter 2), got %d", result.Iterations)
+	}
+}
