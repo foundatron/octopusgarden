@@ -38,6 +38,13 @@ func makeJSONResponse(goal, constraint, success float64, questions string) strin
 		goal, constraint, success, questions)
 }
 
+func makeJSONResponseFull(goal, constraint, success float64, questions, strengths, gaps string) string {
+	return fmt.Sprintf(
+		`{"goal_clarity":%g,"constraint_clarity":%g,"success_clarity":%g,"questions":%s,"strengths":%s,"gaps":%s}`,
+		goal, constraint, success, questions, strengths, gaps,
+	)
+}
+
 func TestComputeAggregate(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -224,6 +231,73 @@ func TestCheckMalformedResponse(t *testing.T) {
 				t.Errorf("expected errMalformedResponse, got %v", err)
 			}
 		})
+	}
+}
+
+func TestParseResponseWithStrengthsGaps(t *testing.T) {
+	strengths := `{"goal":["Clear purpose"],"constraint":["API specified"],"success":["Measurable criteria"]}`
+	gaps := `{"goal":["Edge cases absent"],"constraint":[],"success":["No thresholds"]}`
+	input := makeJSONResponseFull(0.9, 0.8, 0.85, `{}`, strengths, gaps)
+
+	got, err := parseResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Strengths["goal"]) != 1 || got.Strengths["goal"][0] != "Clear purpose" {
+		t.Errorf("unexpected goal strengths: %v", got.Strengths["goal"])
+	}
+	if len(got.Strengths["constraint"]) != 1 || got.Strengths["constraint"][0] != "API specified" {
+		t.Errorf("unexpected constraint strengths: %v", got.Strengths["constraint"])
+	}
+	if len(got.Gaps["goal"]) != 1 || got.Gaps["goal"][0] != "Edge cases absent" {
+		t.Errorf("unexpected goal gaps: %v", got.Gaps["goal"])
+	}
+	if len(got.Gaps["constraint"]) != 0 {
+		t.Errorf("expected empty constraint gaps, got %v", got.Gaps["constraint"])
+	}
+	if len(got.Gaps["success"]) != 1 || got.Gaps["success"][0] != "No thresholds" {
+		t.Errorf("unexpected success gaps: %v", got.Gaps["success"])
+	}
+}
+
+func TestParseResponseWithoutStrengthsGaps(t *testing.T) {
+	input := makeJSONResponse(0.9, 0.8, 0.85, `{}`)
+
+	got, err := parseResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Strengths != nil {
+		t.Errorf("expected nil Strengths, got %v", got.Strengths)
+	}
+	if got.Gaps != nil {
+		t.Errorf("expected nil Gaps, got %v", got.Gaps)
+	}
+}
+
+func TestCheckPropagatesStrengthsGaps(t *testing.T) {
+	strengths := `{"goal":["Purpose is clear"],"constraint":["Constraints listed"],"success":["Criteria given"]}`
+	gaps := `{"goal":[],"constraint":["Error handling missing"],"success":[]}`
+	mock := &mockClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{
+				Content: makeJSONResponseFull(0.9, 0.8, 0.85, `{}`, strengths, gaps),
+			}, nil
+		},
+	}
+
+	result, err := Check(context.Background(), mock, "test-model", "spec content", 0.8, testLogger())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(result.Strengths["goal"]) != 1 || result.Strengths["goal"][0] != "Purpose is clear" {
+		t.Errorf("unexpected goal strengths: %v", result.Strengths["goal"])
+	}
+	if len(result.Gaps["constraint"]) != 1 || result.Gaps["constraint"][0] != "Error handling missing" {
+		t.Errorf("unexpected constraint gaps: %v", result.Gaps["constraint"])
+	}
+	if len(result.Gaps["goal"]) != 0 {
+		t.Errorf("expected empty goal gaps, got %v", result.Gaps["goal"])
 	}
 }
 

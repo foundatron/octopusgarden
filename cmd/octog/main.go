@@ -863,6 +863,7 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	judgeModel := fs.String("judge-model", "", "LLM model for clarity assessment (default: provider-specific)")
 	threshold := fs.Float64("threshold", 0.8, "aggregate clarity score threshold (0.0–1.0)")
+	verbose := fs.Bool("verbose", false, "show per-dimension strengths and gaps")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog preflight [flags] <spec-path>\n\nAssess spec clarity before running the attractor loop.\n\nFlags:\n")
@@ -902,9 +903,15 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	}
 
 	fmt.Printf("Preflight results for: %s\n", specPath)
-	fmt.Printf("  Goal clarity:       %.2f\n", result.GoalClarity)
-	fmt.Printf("  Constraint clarity: %.2f\n", result.ConstraintClarity)
-	fmt.Printf("  Success clarity:    %.2f\n", result.SuccessClarity)
+
+	if *verbose {
+		printPreflightVerbose(result)
+	} else {
+		fmt.Printf("  Goal clarity:       %.2f\n", result.GoalClarity)
+		fmt.Printf("  Constraint clarity: %.2f\n", result.ConstraintClarity)
+		fmt.Printf("  Success clarity:    %.2f\n", result.SuccessClarity)
+	}
+
 	fmt.Printf("  Aggregate score:    %.2f (threshold: %.2f)\n", result.AggregateScore, *threshold)
 
 	if result.Pass {
@@ -920,6 +927,34 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 		}
 	}
 	return errPreflightFailed
+}
+
+func printPreflightVerbose(result *preflight.Result) {
+	dims := []struct {
+		key   string
+		label string
+		score float64
+	}{
+		{"goal", "Goal clarity:", result.GoalClarity},
+		{"constraint", "Constraint clarity:", result.ConstraintClarity},
+		{"success", "Success clarity:", result.SuccessClarity},
+	}
+	for _, d := range dims {
+		fmt.Printf("  %-20s%.2f\n", d.label, d.score)
+		strengths := result.Strengths[d.key]
+		gaps := result.Gaps[d.key]
+		if len(strengths) == 0 && len(gaps) == 0 {
+			fmt.Printf("    (no details available)\n")
+		} else {
+			for _, s := range strengths {
+				fmt.Printf("    ✓ %s\n", s)
+			}
+			for _, g := range gaps {
+				fmt.Printf("    ~ %s\n", g)
+			}
+		}
+		fmt.Println()
+	}
 }
 
 func openStore(ctx context.Context) (*store.Store, error) {
