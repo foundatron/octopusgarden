@@ -307,7 +307,11 @@ def snapshot_issues(issues: list[str], work_dir: Path) -> list[str]:
                 "--json",
                 "title,body,comments",
             ],
+            check=False,
         )
+        if result.returncode != 0:
+            log(f"ERROR: could not fetch issue #{issue_number} (does it exist?)")
+            sys.exit(1)
         data = json.loads(result.stdout)
         title = data["title"]
         titles.append(title)
@@ -744,7 +748,10 @@ Instructions:
 
 
 def make_cleanup(
-    work_dir: Path, issues: list[str]
+    work_dir: Path,
+    issues: list[str],
+    *,
+    dry_run: bool = False,
 ) -> tuple[collections.abc.Callable[[], None], collections.abc.Callable[..., None]]:
     """Create cleanup and signal handler functions with a once-guard."""
     cleaned = False
@@ -755,8 +762,9 @@ def make_cleanup(
             return
         cleaned = True
         shutil.rmtree(work_dir, ignore_errors=True)
-        for n in issues:
-            unlock_issue(n)
+        if not dry_run:
+            for n in issues:
+                unlock_issue(n)
 
     def signal_handler(signum: int, _frame: object) -> None:
         cleanup()
@@ -825,15 +833,16 @@ def main() -> None:
     check_prerequisites()
 
     work_dir = Path(tempfile.mkdtemp())
-    cleanup, sig_handler = make_cleanup(work_dir, args.issues)
+    cleanup, sig_handler = make_cleanup(work_dir, args.issues, dry_run=args.dry_run)
     atexit.register(cleanup)
     install_signal_handlers(sig_handler)
 
     # Snapshot all issues upfront (prompt injection defense)
     titles = snapshot_issues(args.issues, work_dir)
-    lock_issues(args.issues)
+    if not args.dry_run:
+        lock_issues(args.issues)
     log(
-        f"All {len(args.issues)} issues snapshotted and locked. No further network fetches for issue content."
+        f"All {len(args.issues)} issues snapshotted{'' if args.dry_run else ' and locked'}. No further network fetches for issue content."
     )
 
     total = len(args.issues)
