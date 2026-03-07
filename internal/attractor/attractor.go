@@ -171,6 +171,7 @@ type runState struct {
 	grpcTargetProvider     GRPCTargetProviderFn    // callback to set the gRPC target
 	scenarioScores         map[string]float64      // per-scenario scores from the last validated iteration
 	scenarioScoreIteration int                     // iteration number corresponding to scenarioScores
+	codeHashes             []string                // SHA-256 hashes of generated file sets, in iteration order
 }
 
 func (s *runState) result(iter int, status string) *RunResult {
@@ -371,6 +372,12 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 		return nil, err
 	}
 
+	// Inject oscillation steering when the last 4 code hashes form an A→B→A→B pattern.
+	// Appended after applyMinimalismSuffix for highest salience at the end of the message.
+	if detectOscillation(s.codeHashes) {
+		messages[len(messages)-1].Content += "\n\n" + buildOscillationSteering()
+	}
+
 	// Generate code via LLM.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
@@ -400,6 +407,9 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 	if s.patchActive && s.bestFiles != nil && iter > 1 {
 		files = MergeFiles(files, s.bestFiles)
 	}
+
+	// Record the hash of the merged file set for oscillation detection.
+	s.codeHashes = append(s.codeHashes, hashFiles(files))
 
 	// Write files to iteration directory.
 	iterDir := filepath.Join(s.baseDir, fmt.Sprintf("iter_%d", iter))

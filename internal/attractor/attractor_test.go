@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1529,6 +1530,91 @@ func TestRegressionFeedbackInjected(t *testing.T) {
 	}
 	if !msgsContain(capturedMsgs[2], "scenario-a") {
 		t.Errorf("iteration 3 Generate call should mention the regressed scenario, got: %v", capturedMsgs[2])
+	}
+}
+
+// TestOscillationSteeringInjected verifies that oscillation steering is injected into the
+// Generate call once an A→B→A→B pattern is detected in the code hashes.
+func TestOscillationSteeringInjected(t *testing.T) {
+	// Two distinct valid LLM outputs that produce different file hashes.
+	outputA := `=== FILE: main.go ===
+package main
+
+func main() { /* version A */ }
+=== END FILE ===
+=== FILE: Dockerfile ===
+FROM scratch
+CMD ["./app"]
+=== END FILE ===`
+
+	outputB := `=== FILE: main.go ===
+package main
+
+func main() { /* version B */ }
+=== END FILE ===
+=== FILE: Dockerfile ===
+FROM scratch
+CMD ["./server"]
+=== END FILE ===`
+
+	var callCount atomic.Int32
+	var mu sync.Mutex
+	var capturedMsgs [][]llm.Message
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			mu.Lock()
+			capturedMsgs = append(capturedMsgs, req.Messages)
+			mu.Unlock()
+			n := callCount.Add(1)
+			if n%2 == 1 {
+				return llm.GenerateResponse{Content: outputA, CostUSD: 0.01}, nil
+			}
+			return llm.GenerateResponse{Content: outputB, CostUSD: 0.01}, nil
+		},
+	}
+
+	// Validation always fails — drives stall without converging.
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 30, []string{"not good enough"}, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	// StallLimit=4: iter 1 sets best (stallCount=0); iters 2,3,4,5 stall (stallCount 1,2,3,4).
+	// This produces exactly 5 Generate calls, giving oscillation detection a chance to fire on iter 5.
+	opts.StallLimit = 4
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusStalled {
+		t.Errorf("expected stalled status, got %q", result.Status)
+	}
+
+	if len(capturedMsgs) < 5 {
+		t.Fatalf("expected at least 5 Generate calls, got %d", len(capturedMsgs))
+	}
+
+	msgsContain := func(msgs []llm.Message, sub string) bool {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, sub) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Iterations 1–4 (indices 0–3): codeHashes has fewer than 4 ABAB entries → no oscillation.
+	for i := range 4 {
+		if msgsContain(capturedMsgs[i], "OSCILLATION DETECTED") {
+			t.Errorf("iteration %d (index %d) should not contain OSCILLATION DETECTED", i+1, i)
+		}
+	}
+
+	// Iteration 5 (index 4): codeHashes = [A,B,A,B] → oscillation detected → steering injected.
+	if !msgsContain(capturedMsgs[4], "OSCILLATION DETECTED") {
+		t.Errorf("iteration 5 (index 4) should contain OSCILLATION DETECTED; messages: %v", capturedMsgs[4])
 	}
 }
 
