@@ -1275,14 +1275,17 @@ func TestExtractFailureStrings(t *testing.T) {
 }
 
 // TestStallNoticeAppearsInGenerateByIteration3 exercises the full cross-file wiring:
-// processValidation → failedScenarios → buildSteeringText → buildMessages → Generate.
-// It verifies that STALL NOTICE appears in the Generate request by iteration 3 when the
-// same scenario fails in consecutive validation iterations.
+// processValidation → failedScenarios → buildSteeringText → wonderReflect trigger → Generate.
+// When the same scenario fails in 2+ consecutive validation iterations, wonder/reflect fires.
+// On wonder parse failure (mock returns file output, not JSON), it falls back to normal generation
+// which injects the STALL NOTICE.
 func TestStallNoticeAppearsInGenerateByIteration3(t *testing.T) {
 	var capturedMsgs [][]llm.Message
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
 			capturedMsgs = append(capturedMsgs, req.Messages)
+			// All calls return validLLMOutput — the wonder call will fail to parse JSON
+			// and fall back to normal generation.
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
@@ -1302,9 +1305,10 @@ func TestStallNoticeAppearsInGenerateByIteration3(t *testing.T) {
 	}
 
 	// Iteration 1 sets best (45 > 0, stallCount=0); iterations 2, 3, 4 stall (stallCount 1, 2, 3).
-	// With StallLimit=3 the run terminates after iteration 4, producing 4 Generate calls.
-	if len(capturedMsgs) < 3 {
-		t.Fatalf("expected at least 3 Generate calls, got %d", len(capturedMsgs))
+	// Starting at iteration 3, wonder fires then falls back — so iters 3 and 4 each have 2 calls.
+	// Total calls: 1 + 1 + 2 + 2 = 6 (or more).
+	if len(capturedMsgs) < 4 {
+		t.Fatalf("expected at least 4 Generate calls, got %d", len(capturedMsgs))
 	}
 
 	// msgsContain returns true if any message in the slice contains the substring.
@@ -1322,17 +1326,24 @@ func TestStallNoticeAppearsInGenerateByIteration3(t *testing.T) {
 		t.Error("iteration 1 Generate call should not contain STALL NOTICE")
 	}
 
-	// Iteration 2 (index 1): only 1 consecutive validation failure → no STALL NOTICE.
+	// Iteration 2 (index 1): only 1 consecutive validation failure → no wonder, no STALL NOTICE.
 	if msgsContain(capturedMsgs[1], "STALL NOTICE") {
 		t.Error("iteration 2 Generate call should not contain STALL NOTICE")
 	}
 
-	// Iteration 3 (index 2): 2 consecutive failures for stall-scenario → STALL NOTICE required.
-	if !msgsContain(capturedMsgs[2], "STALL NOTICE") {
-		t.Errorf("iteration 3 Generate call should contain STALL NOTICE, got: %v", capturedMsgs[2])
-	}
+	// Iteration 3 wonder call (index 2): wonder prompt — contains stall-scenario info but
+	// not as a "STALL NOTICE" header; the wonder prompt uses a different diagnostic format.
 	if !msgsContain(capturedMsgs[2], "stall-scenario") {
-		t.Errorf("iteration 3 Generate call should mention stall-scenario, got: %v", capturedMsgs[2])
+		t.Errorf("iteration 3 wonder call should mention stall-scenario in failure history, got: %v", capturedMsgs[2])
+	}
+
+	// Iteration 3 fallback normal gen (index 3): wonder JSON parse failed → fell back to
+	// normal generation which injects STALL NOTICE into the user message.
+	if !msgsContain(capturedMsgs[3], "STALL NOTICE") {
+		t.Errorf("iteration 3 fallback Generate call should contain STALL NOTICE, got: %v", capturedMsgs[3])
+	}
+	if !msgsContain(capturedMsgs[3], "stall-scenario") {
+		t.Errorf("iteration 3 fallback Generate call should mention stall-scenario, got: %v", capturedMsgs[3])
 	}
 }
 
@@ -1429,9 +1440,12 @@ func TestMinimalismPromptIncludesFailingScenarios(t *testing.T) {
 
 func TestMinimalismPromptProgression(t *testing.T) {
 	scores := []float64{60, 85}
+	// Use DIFFERENT failing scenarios on each iteration to avoid triggering a stall streak.
+	// If the same scenario failed 2+ consecutive iterations, wonder/reflect would fire instead
+	// of the normal generation path with minimalism suffix. Distinct scenarios prevent the streak.
 	scenarioFailures := [][]string{
 		{FormatScenarioFailureLine("alpha", 50)},
-		{FormatScenarioFailureLine("alpha", 70)},
+		{FormatScenarioFailureLine("beta", 70)}, // different scenario — no consecutive streak
 	}
 	var reqs []llm.GenerateRequest
 	client := &mockLLMClient{
@@ -1819,5 +1833,306 @@ func TestTestCommandOutput_IncludedInFeedback(t *testing.T) {
 	}
 	if !strings.Contains(lastUserMsg, testOutput) {
 		t.Errorf("expected test output %q in user message, got: %s", testOutput, lastUserMsg)
+	}
+}
+
+// validDiagnosisJSON returns a JSON string suitable as wonder phase output.
+func validDiagnosisJSON() string {
+	return `{"hypotheses":["possible cause"],"root_causes":["root"],"suggested_approach":"Use a completely different architecture"}`
+}
+
+// stallingValidateFn returns a validate function that reports the same scenario failing
+// for the first n calls, then returns satisfaction = 100.
+// Failure format matches FormatScenarioFailureLine so buildSteeringText can detect the stall.
+func stallingValidateFn(n int) (ValidateFn, *atomic.Int32) {
+	var count atomic.Int32
+	fn := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		c := int(count.Add(1))
+		if c <= n {
+			return 50, []string{FormatScenarioFailureLine("auth", 50)}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+	return fn, &count
+}
+
+func TestWonderReflect_StallTriggersTwoCalls(t *testing.T) {
+	type callInfo struct {
+		model string
+		temp  *float64
+	}
+	var (
+		callsMu sync.Mutex
+		calls   []callInfo
+		callIdx atomic.Int32
+	)
+
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			callsMu.Lock()
+			calls = append(calls, callInfo{model: req.Model, temp: req.Temperature})
+			callsMu.Unlock()
+			idx := int(callIdx.Add(1))
+			switch idx {
+			case 3:
+				// Iteration 3: wonder phase — return diagnosis JSON.
+				return llm.GenerateResponse{Content: validDiagnosisJSON(), CostUSD: 0.005}, nil
+			case 4:
+				// Iteration 3: reflect phase — return valid files.
+				return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+			default:
+				return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+			}
+		},
+	}
+
+	// 2 stalling iterations, then converge.
+	validate, _ := stallingValidateFn(2)
+
+	opts := defaultOpts(t)
+	opts.Model = "gen-model"
+	opts.JudgeModel = "judge-model"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+
+	// Iter 1 + iter 2: 2 normal gen calls. Iter 3: wonder + reflect (no normal gen).
+	if len(calls) != 4 {
+		t.Fatalf("expected 4 generate calls, got %d: %v", len(calls), calls)
+	}
+
+	wonderCall := calls[2]
+	if wonderCall.model != "judge-model" {
+		t.Errorf("wonder call: expected model %q, got %q", "judge-model", wonderCall.model)
+	}
+	if wonderCall.temp == nil || *wonderCall.temp != wonderTemperature {
+		t.Errorf("wonder call: expected temperature %.1f, got %v", wonderTemperature, wonderCall.temp)
+	}
+
+	reflectCall := calls[3]
+	if reflectCall.model != "gen-model" {
+		t.Errorf("reflect call: expected model %q, got %q", "gen-model", reflectCall.model)
+	}
+	if reflectCall.temp == nil || *reflectCall.temp != reflectTemperature {
+		t.Errorf("reflect call: expected temperature %.1f, got %v", reflectTemperature, reflectCall.temp)
+	}
+}
+
+func TestWonderReflect_ReflectOutputParsedAsFiles(t *testing.T) {
+	var callIdx atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			idx := int(callIdx.Add(1))
+			switch idx {
+			case 3:
+				return llm.GenerateResponse{Content: validDiagnosisJSON(), CostUSD: 0.005}, nil
+			case 4:
+				// Reflect output: distinct marker to verify it was actually used.
+				return llm.GenerateResponse{Content: `=== FILE: reflect_output.go ===
+package main
+func main() { /* reflect */ }
+=== END FILE ===
+=== FILE: Dockerfile ===
+FROM scratch
+=== END FILE ===`, CostUSD: 0.01}, nil
+			default:
+				return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+			}
+		},
+	}
+
+	validate, _ := stallingValidateFn(2)
+
+	var builtDir string
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, dir, _ string) error {
+			builtDir = dir
+			return nil
+		},
+	}
+
+	opts := defaultOpts(t)
+	opts.Model = "gen-model"
+	opts.JudgeModel = "judge-model"
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+
+	// Verify the reflect output was used by checking the built directory contents.
+	if builtDir == "" {
+		t.Fatal("no build directory captured")
+	}
+	content, readErr := os.ReadFile(filepath.Join(builtDir, "reflect_output.go"))
+	if readErr != nil {
+		t.Fatalf("reflect_output.go not found in build dir: %v", readErr)
+	}
+	if !strings.Contains(string(content), "reflect") {
+		t.Error("reflect output file should contain reflect marker")
+	}
+}
+
+func TestWonderReflect_WonderFailsFallsBack(t *testing.T) {
+	var callIdx atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			idx := int(callIdx.Add(1))
+			if idx == 3 {
+				// Wonder call returns a transient error — should fall back.
+				return llm.GenerateResponse{}, fmt.Errorf("transient API error")
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	validate, _ := stallingValidateFn(2)
+
+	opts := defaultOpts(t)
+	opts.Model = "gen-model"
+	opts.JudgeModel = "judge-model"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	// Should complete without error — fell back to normal generation.
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error (should fall back, not hard fail): %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a result")
+	}
+}
+
+func TestWonderReflect_WonderGarbageFallsBack(t *testing.T) {
+	var callIdx atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			idx := int(callIdx.Add(1))
+			if idx == 3 {
+				// Wonder call returns unparseable text.
+				return llm.GenerateResponse{Content: "this is not JSON at all", CostUSD: 0.005}, nil
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	validate, _ := stallingValidateFn(2)
+
+	opts := defaultOpts(t)
+	opts.JudgeModel = "judge-model"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error (garbage diagnosis should fall back): %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a result")
+	}
+}
+
+func TestWonderReflect_OnlyOnStall(t *testing.T) {
+	var generateCalls atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			generateCalls.Add(1)
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	// Always succeeds — no stall, no wonder/reflect.
+	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.JudgeModel = "judge-model"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// Only 1 generate call (iter 1 normal gen) — no wonder/reflect calls.
+	if n := generateCalls.Load(); n != 1 {
+		t.Errorf("expected exactly 1 generate call, got %d", n)
+	}
+}
+
+func TestWonderReflect_ContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var callIdx atomic.Int32
+
+	client := &mockLLMClient{
+		generateFn: func(callCtx context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			idx := int(callIdx.Add(1))
+			if idx == 3 {
+				// Cancel on wonder call.
+				cancel()
+				return llm.GenerateResponse{}, callCtx.Err()
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	validate, _ := stallingValidateFn(2)
+
+	opts := defaultOpts(t)
+	opts.JudgeModel = "judge-model"
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	_, err := a.Run(ctx, "Build an app", opts, validate, nil, nil)
+	if err == nil {
+		t.Fatal("expected error from context cancellation during wonder phase")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestWonderReflect_BudgetExhaustedAfterWonder(t *testing.T) {
+	var callIdx atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			idx := int(callIdx.Add(1))
+			if idx == 3 {
+				// Wonder call costs a lot — pushes over budget.
+				return llm.GenerateResponse{Content: validDiagnosisJSON(), CostUSD: 100.0}, nil
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	// 2 stalling iterations.
+	validate, _ := stallingValidateFn(2)
+
+	opts := defaultOpts(t)
+	opts.JudgeModel = "judge-model"
+	opts.BudgetUSD = 1.0 // small budget; wonder call will exceed it
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a result")
+	}
+	// Budget exceeded during or after wonder — should terminate gracefully.
+	if result.Status != StatusBudgetExceeded && result.Status != StatusStalled && result.Status != StatusConverged {
+		t.Errorf("unexpected status %q (expected budget_exceeded, stalled, or converged)", result.Status)
 	}
 }

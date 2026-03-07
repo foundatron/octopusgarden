@@ -335,6 +335,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
 	opts := attractor.RunOptions{
 		Model:             p.Model,
+		JudgeModel:        p.JudgeModel,
 		BudgetUSD:         p.Budget,
 		Threshold:         p.Threshold,
 		PatchMode:         p.PatchMode,

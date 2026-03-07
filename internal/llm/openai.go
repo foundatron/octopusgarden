@@ -105,11 +105,16 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		}
 	}
 
-	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+	chatParams := openai.ChatCompletionNewParams{
 		Model:               req.Model,
 		Messages:            messages,
 		MaxCompletionTokens: openai.Int(int64(maxTokens)),
-	})
+	}
+	if req.Temperature != nil {
+		chatParams.Temperature = openai.Float(*req.Temperature)
+	}
+
+	resp, err := c.client.Chat.Completions.New(ctx, chatParams)
 	if err != nil {
 		return GenerateResponse{}, fmt.Errorf("openai generate: %w", err)
 	}
@@ -159,7 +164,7 @@ func (c *OpenAIClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRespon
 	m := c.logUsage("openai judge", req.Model, resp.Usage)
 
 	// Parse JSON response — strip markdown code fences if present.
-	cleaned := extractJSON(content)
+	cleaned := ExtractJSON(content)
 	var result judgeResult
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 		return JudgeResponse{

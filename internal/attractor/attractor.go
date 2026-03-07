@@ -114,6 +114,7 @@ type Attractor struct {
 // RunOptions configures the attractor loop.
 type RunOptions struct {
 	Model             string
+	JudgeModel        string               // model used for the wonder phase diagnosis; falls back to Model when empty
 	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
 	BudgetUSD         float64              // 0 = unlimited
 	Threshold         float64              // default 95
@@ -346,6 +347,115 @@ func (a *Attractor) setRunSpanAttrs(span trace.Span, result *RunResult) {
 	)
 }
 
+// generateContent produces the LLM output for one iteration.
+// When scenarios are stalling (buildSteeringText returns non-empty), it first tries
+// the wonder/reflect two-phase process. If that yields output, it is used directly.
+// Otherwise it falls back to the standard single-call generation path.
+func (a *Attractor) generateContent(ctx context.Context, specContent string, messages []llm.Message, iter int, s *runState) (string, error) {
+	if buildSteeringText(s.history) != "" {
+		content, err := a.wonderReflect(ctx, specContent, iter, s)
+		if err != nil {
+			return "", err
+		}
+		if content != "" {
+			return content, nil
+		}
+	}
+
+	// Normal generation path.
+	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
+		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		Messages:     messages,
+		Model:        s.opts.Model,
+		CacheControl: &llm.CacheControl{Type: "ephemeral"},
+	})
+	if err != nil {
+		return "", fmt.Errorf("attractor: generate iteration %d: %w", iter, err)
+	}
+	s.totalCost += genResp.CostUSD
+	s.lastInputTokens = genResp.InputTokens
+	s.lastOutputTokens = genResp.OutputTokens
+	return genResp.Content, nil
+}
+
+// wonderReflect runs a two-phase wonder/reflect process when scenarios are stalling.
+// Wonder phase: uses the judge model at high temperature to diagnose why attempts are failing.
+// Reflect phase: uses the generator model at low temperature to produce new code from the diagnosis.
+// Returns the reflect output (non-empty means use it instead of normal generation).
+// Returns ("", nil) to signal graceful fallback to normal generation.
+func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int, s *runState) (string, error) {
+	opts := s.opts
+
+	// Resolve judge model — fall back to generator model when unset.
+	judgeModel := opts.JudgeModel
+	if judgeModel == "" {
+		a.logger.Debug("wonder/reflect: no judge model set, falling back to generator model", "model", opts.Model)
+		judgeModel = opts.Model
+	}
+
+	oscillating := detectOscillation(s.codeHashes)
+	wonderPrompt := buildWonderPrompt(s.history, s.bestFiles, s.scoreHistory, oscillating)
+
+	wonderTemp := wonderTemperature
+	wonderResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
+		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		Messages:     []llm.Message{{Role: "user", Content: wonderPrompt}},
+		Model:        judgeModel,
+		Temperature:  &wonderTemp,
+	})
+	if err != nil {
+		// Context cancellation is a hard error; other LLM errors fall back to normal generation.
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("attractor: wonder phase iteration %d: %w", iter, err)
+		}
+		a.logger.Warn("wonder/reflect: wonder phase failed, falling back to normal generation",
+			"iteration", iter, "error", err)
+		return "", nil
+	}
+	s.totalCost += wonderResp.CostUSD
+	a.logger.Info("wonder phase complete", "iteration", iter, "cost_usd", wonderResp.CostUSD)
+
+	// Check budget before proceeding to reflect phase.
+	if s.budgetExceeded() {
+		a.logger.Info("budget exceeded after wonder phase, skipping reflect", "iteration", iter)
+		return "", nil
+	}
+
+	diagnosis, err := parseDiagnosis(wonderResp.Content)
+	if err != nil {
+		a.logger.Warn("wonder/reflect: failed to parse diagnosis, falling back to normal generation",
+			"iteration", iter, "error", err)
+		return "", nil
+	}
+
+	// Determine whether minimalism prompting should be included.
+	minimalism := len(s.scoreHistory) > 0 && s.scoreHistory[len(s.scoreHistory)-1] > minimalismThreshold
+
+	reflectPrompt := buildReflectPrompt(diagnosis, minimalism)
+	reflectTemp := reflectTemperature
+	reflectResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
+		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		Messages:     []llm.Message{{Role: "user", Content: reflectPrompt}},
+		Model:        opts.Model,
+		Temperature:  &reflectTemp,
+	})
+	if err != nil {
+		// Context cancellation is a hard error; other LLM errors fall back to normal generation.
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("attractor: reflect phase iteration %d: %w", iter, err)
+		}
+		a.logger.Warn("wonder/reflect: reflect phase failed, falling back to normal generation",
+			"iteration", iter, "error", err)
+		return "", nil
+	}
+	s.totalCost += reflectResp.CostUSD
+	s.lastInputTokens = wonderResp.InputTokens + reflectResp.InputTokens
+	s.lastOutputTokens = wonderResp.OutputTokens + reflectResp.OutputTokens
+	a.logger.Info("reflect phase complete", "iteration", iter, "cost_usd", reflectResp.CostUSD)
+
+	return reflectResp.Content, nil
+}
+
 // iterate runs a single iteration of the attractor loop.
 // Returns (result, nil) for terminal conditions, (nil, nil) to continue, or (nil, err) for hard errors.
 func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *runState, validate ValidateFn) (*RunResult, error) {
@@ -381,23 +491,15 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 		messages[len(messages)-1].Content += "\n\n" + buildOscillationSteering()
 	}
 
-	// Generate code via LLM.
-	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
-		Messages:     messages,
-		Model:        s.opts.Model,
-		CacheControl: &llm.CacheControl{Type: "ephemeral"},
-	})
+	// Generate code: wonder/reflect on stall, normal generation otherwise.
+	generatedContent, err := a.generateContent(ctx, specContent, messages, iter, s)
 	if err != nil {
-		return nil, fmt.Errorf("attractor: generate iteration %d: %w", iter, err)
+		return nil, err
 	}
-	s.totalCost += genResp.CostUSD
-	s.lastInputTokens = genResp.InputTokens
-	s.lastOutputTokens = genResp.OutputTokens
 	s.lastFailures = nil
 
 	// Parse files from LLM output.
-	files, err := ParseFiles(genResp.Content)
+	files, err := ParseFiles(generatedContent)
 	if err != nil {
 		a.logger.Warn("parse files failed", "iteration", iter, "error", err)
 		s.lastOutcome = OutcomeParseFail

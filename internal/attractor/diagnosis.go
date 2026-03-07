@@ -7,6 +7,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/foundatron/octopusgarden/internal/llm"
 )
 
 // wonderTemperature is the sampling temperature for the wonder (diagnosis) phase.
@@ -30,7 +32,7 @@ var errEmptySuggestedApproach = errors.New("attractor: diagnosis missing require
 // Strips markdown code fences before unmarshalling.
 // Only SuggestedApproach is required; empty hypotheses and root_causes are allowed.
 func parseDiagnosis(raw string) (Diagnosis, error) {
-	cleaned := extractJSONFromText(raw)
+	cleaned := llm.ExtractJSON(raw)
 	var d Diagnosis
 	if err := json.Unmarshal([]byte(cleaned), &d); err != nil {
 		return Diagnosis{}, fmt.Errorf("attractor: parse diagnosis JSON: %w", err)
@@ -39,23 +41,6 @@ func parseDiagnosis(raw string) (Diagnosis, error) {
 		return Diagnosis{}, errEmptySuggestedApproach
 	}
 	return d, nil
-}
-
-// extractJSONFromText strips markdown code fences from LLM output to get raw JSON.
-// Handles ```json\n...\n``` and ```\n...\n``` patterns.
-// This mirrors the extractJSON function in internal/llm/json.go (unexported there).
-func extractJSONFromText(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		if idx := strings.Index(s, "\n"); idx != -1 {
-			s = s[idx+1:]
-		}
-		if idx := strings.LastIndex(s, "```"); idx != -1 {
-			s = s[:idx]
-		}
-		s = strings.TrimSpace(s)
-	}
-	return s
 }
 
 // buildWonderPrompt constructs the prompt for the wonder (diagnosis) phase.
