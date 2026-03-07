@@ -53,6 +53,7 @@ var (
 	errInvalidLanguage            = errors.New("--language must be one of: go, python, node, rust, auto")
 	errListModelsUnsupported      = errors.New("provider does not support listing models")
 	errPreflightFailed            = errors.New("preflight: spec clarity below threshold")
+	errScenarioPreflightFailed    = errors.New("preflight: scenario quality below threshold")
 	errInvalidPreflightThreshold  = errors.New("preflight threshold must be between 0.0 and 1.0")
 	errSourceDirRequired          = errors.New("--source-dir is required")
 	errSourceDirNotExist          = errors.New("--source-dir does not exist")
@@ -864,6 +865,7 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	judgeModel := fs.String("judge-model", "", "LLM model for clarity assessment (default: provider-specific)")
 	threshold := fs.Float64("threshold", 0.8, "aggregate clarity score threshold (0.0–1.0)")
 	verbose := fs.Bool("verbose", false, "show per-dimension strengths and gaps")
+	scenarios := fs.String("scenarios", "", "directory of scenario YAML files to assess against the spec (both spec and scenario checks always run; use exit code to gate on either)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog preflight [flags] <spec-path>\n\nAssess spec clarity before running the attractor loop.\n\nFlags:\n")
@@ -903,22 +905,42 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	}
 
 	fmt.Printf("Preflight results for: %s\n", specPath)
+	specErr := printSpecResult(result, *threshold, *verbose)
 
-	if *verbose {
+	if *scenarios == "" {
+		return specErr
+	}
+
+	fmt.Println()
+	scenarioResult, err := preflight.CheckScenarios(ctx, clients.client, *judgeModel, parsedSpec.RawContent, *scenarios, *threshold, logger)
+	if err != nil {
+		return err
+	}
+	printScenarioPreflight(scenarioResult, *threshold)
+
+	if specErr != nil {
+		return specErr
+	}
+	if !scenarioResult.Pass {
+		return errScenarioPreflightFailed
+	}
+	return nil
+}
+
+// printSpecResult prints spec preflight scores and returns errPreflightFailed if the spec did not pass.
+func printSpecResult(result *preflight.Result, threshold float64, verbose bool) error {
+	if verbose {
 		printPreflightVerbose(result)
 	} else {
 		fmt.Printf("  Goal clarity:       %.2f\n", result.GoalClarity)
 		fmt.Printf("  Constraint clarity: %.2f\n", result.ConstraintClarity)
 		fmt.Printf("  Success clarity:    %.2f\n", result.SuccessClarity)
 	}
-
-	fmt.Printf("  Aggregate score:    %.2f (threshold: %.2f)\n", result.AggregateScore, *threshold)
-
+	fmt.Printf("  Aggregate score:    %.2f (threshold: %.2f)\n", result.AggregateScore, threshold)
 	if result.Pass {
 		fmt.Printf("  Status: PASS\n")
 		return nil
 	}
-
 	fmt.Printf("  Status: WARN — spec clarity below threshold\n")
 	if len(result.Questions) > 0 {
 		fmt.Printf("\nSuggested clarifications:\n")
@@ -927,6 +949,26 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 		}
 	}
 	return errPreflightFailed
+}
+
+func printScenarioPreflight(result *preflight.ScenarioResult, threshold float64) {
+	fmt.Printf("Scenario preflight results:\n")
+	fmt.Printf("  Coverage:    %.2f\n", result.Coverage)
+	fmt.Printf("  Feasibility: %.2f\n", result.Feasibility)
+	fmt.Printf("  Isolation:   %.2f\n", result.Isolation)
+	fmt.Printf("  Chains:      %.2f\n", result.Chains)
+	fmt.Printf("  Aggregate score: %.2f (threshold: %.2f)\n", result.Aggregate, threshold)
+	if result.Pass {
+		fmt.Printf("  Status: PASS\n")
+	} else {
+		fmt.Printf("  Status: WARN — scenario quality below threshold\n")
+	}
+	if len(result.Issues) > 0 {
+		fmt.Printf("\nScenario issues:\n")
+		for _, issue := range result.Issues {
+			fmt.Printf("  [%s/%s] %s\n", issue.Scenario, issue.Dimension, issue.Detail)
+		}
+	}
 }
 
 func printPreflightVerbose(result *preflight.Result) {
