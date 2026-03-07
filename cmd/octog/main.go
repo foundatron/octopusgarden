@@ -135,6 +135,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	model := fs.String("model", "", "LLM model to use for generation (default: provider-specific)")
+	frugalModel := fs.String("frugal-model", "", "cheaper model to start with; escalates to --model after 2 consecutive non-improving iterations")
 	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
 	budget := fs.Float64("budget", 5.00, "maximum budget in USD")
 	threshold := fs.Float64("threshold", 95, "satisfaction threshold (0-100)")
@@ -207,6 +208,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		ParsedSpec:        parsedSpec,
 		ScenariosPath:     *scenariosFlag,
 		Model:             *model,
+		FrugalModel:       *frugalModel,
 		JudgeModel:        *judgeModel,
 		Budget:            *budget,
 		Threshold:         *threshold,
@@ -258,6 +260,7 @@ type runLoopParams struct {
 	ParsedSpec        spec.Spec
 	ScenariosPath     string
 	Model             string
+	FrugalModel       string
 	JudgeModel        string
 	Budget            float64
 	Threshold         float64
@@ -347,6 +350,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
 	opts := attractor.RunOptions{
 		Model:             p.Model,
+		FrugalModel:       p.FrugalModel,
 		JudgeModel:        p.JudgeModel,
 		BudgetUSD:         p.Budget,
 		Threshold:         p.Threshold,
