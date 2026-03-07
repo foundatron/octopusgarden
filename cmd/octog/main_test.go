@@ -91,7 +91,7 @@ func TestRunAndScore(t *testing.T) {
 		targetURL:     srv.URL,
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001")
+	}, mock, "claude-haiku-4-5-20251001", nil)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 		targetURL:     "http://127.0.0.1:1",
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001")
+	}, mock, "claude-haiku-4-5-20251001", nil)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestValidateThreshold(t *testing.T) {
 				targetURL:     srv.URL,
 				logger:        testLogger(),
 				sessionGetter: func() *container.Session { return nil },
-			}, mock, "claude-haiku-4-5-20251001")
+			}, mock, "claude-haiku-4-5-20251001", nil)
 			if err != nil {
 				t.Fatalf("runAndScore: %v", err)
 			}
@@ -1585,5 +1585,137 @@ func TestFrugalModelFlagParsing(t *testing.T) {
 	// not from an unrecognized flag.
 	if err != nil && strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Errorf("--frugal-model flag not defined: %v", err)
+	}
+}
+
+// simpleScenario returns a Scenario with a single GET request step.
+func simpleScenario(id string) scenario.Scenario {
+	return scenario.Scenario{
+		ID: id,
+		Steps: []scenario.Step{
+			{Request: &scenario.Request{Method: "GET", Path: "/"}},
+		},
+	}
+}
+
+func TestRunAndScoreSequentialOrder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+		simpleScenario("s3"),
+	}
+
+	mock := &mockLLMClient{}
+	agg, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001", nil)
+	if err != nil {
+		t.Fatalf("runAndScore: %v", err)
+	}
+
+	if len(agg.Scenarios) != 3 {
+		t.Fatalf("expected 3 scenarios, got %d", len(agg.Scenarios))
+	}
+	for i, want := range []string{"s1", "s2", "s3"} {
+		if agg.Scenarios[i].ScenarioID != want {
+			t.Errorf("scenario[%d]: got %q, want %q", i, agg.Scenarios[i].ScenarioID, want)
+		}
+	}
+}
+
+func TestRunAndScoreRestartCalledBetweenScenarios(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+	}
+
+	restartCount := 0
+	restart := attractor.RestartFunc(func(_ context.Context) (string, error) {
+		restartCount++
+		return srv.URL, nil
+	})
+
+	mock := &mockLLMClient{}
+	agg, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001", restart)
+	if err != nil {
+		t.Fatalf("runAndScore: %v", err)
+	}
+
+	if len(agg.Scenarios) != 2 {
+		t.Fatalf("expected 2 scenarios, got %d", len(agg.Scenarios))
+	}
+	if restartCount != 1 {
+		t.Errorf("expected restart called 1 time, got %d", restartCount)
+	}
+}
+
+func TestRunAndScoreRestartErrorPropagation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+	}
+
+	errRestart := errors.New("container restart failed")
+	restart := attractor.RestartFunc(func(_ context.Context) (string, error) {
+		return "", errRestart
+	})
+
+	mock := &mockLLMClient{}
+	_, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001", restart)
+	if err == nil {
+		t.Fatal("expected error from restart, got nil")
+	}
+	if !strings.Contains(err.Error(), "restart container") {
+		t.Errorf("expected error to contain 'restart container', got: %v", err)
+	}
+}
+
+func TestRunAndScoreNilRestart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+	}
+
+	mock := &mockLLMClient{}
+	agg, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(agg.Scenarios) != 2 {
+		t.Fatalf("expected 2 scenarios, got %d", len(agg.Scenarios))
 	}
 }

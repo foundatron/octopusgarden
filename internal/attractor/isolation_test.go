@@ -46,7 +46,7 @@ func TestSystemPromptContainsOnlySpec(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -93,7 +93,7 @@ func TestScenarioContentNeverInSystemPrompt(t *testing.T) {
 		},
 	}
 
-	validate := func(_ context.Context, _ string) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		// Return failures containing sentinels — these should appear in user
 		// messages (feedback channel) but never in system prompts.
