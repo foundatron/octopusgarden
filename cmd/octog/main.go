@@ -15,13 +15,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
@@ -310,33 +306,23 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 
 	// Session provider pattern: the attractor sets the current session before
 	// calling validate, and the validate closure reads it to create ExecExecutors.
-	// Mutex protects against future refactoring that might run the attractor and
-	// validation concurrently (runAndScore fans out to 10 goroutines).
-	var sessionMu sync.Mutex
+	// Both calls are sequential (attractor loop never overlaps with validate), so
+	// no synchronization is needed.
 	var currentSession *container.Session
 	sessionProvider := attractor.SessionProviderFn(func(session *container.Session) {
-		sessionMu.Lock()
 		currentSession = session
-		sessionMu.Unlock()
 	})
 	sessionGetter := func() *container.Session {
-		sessionMu.Lock()
-		defer sessionMu.Unlock()
 		return currentSession
 	}
 
 	// gRPC target provider pattern: same as session provider — attractor sets it,
 	// validate closure reads it.
-	var grpcTargetMu sync.Mutex
 	var currentGRPCTarget string
 	grpcTargetProvider := attractor.GRPCTargetProviderFn(func(target string) {
-		grpcTargetMu.Lock()
 		currentGRPCTarget = target
-		grpcTargetMu.Unlock()
 	})
 	grpcTargetGetter := func() string {
-		grpcTargetMu.Lock()
-		defer grpcTargetMu.Unlock()
 		return currentGRPCTarget
 	}
 
@@ -543,6 +529,9 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	if caps.NeedsGRPC && *grpcTarget == "" {
 		logger.Warn("scenarios contain gRPC steps but --grpc-target is not set; gRPC steps will fail")
 	}
+	if len(scenarios) > 1 {
+		logger.Warn("validating multiple scenarios against --target without container restart; state may accumulate between scenarios")
+	}
 	agg, err := runAndScore(ctx, scenarios, executorOpts{
 		targetURL:     *target,
 		logger:        logger,
@@ -550,7 +539,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		needsBrowser:  caps.NeedsBrowser,
 		needsWS:       caps.NeedsWS,
 		grpcTarget:    *grpcTarget,
-	}, clients.client, *judgeModel)
+	}, clients.client, *judgeModel, nil)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -994,82 +983,58 @@ func buildExecutors(opts executorOpts) (map[string]scenario.StepExecutor, func()
 	return executors, cleanup
 }
 
-func runAndScore(ctx context.Context, scenarios []scenario.Scenario, opts executorOpts, llmClient llm.Client, judgeModel string) (scenario.AggregateResult, error) {
-	type indexedResult struct {
-		index int
-		ss    scenario.ScoredScenario
-	}
-
-	var (
-		mu      sync.Mutex
-		results = make([]indexedResult, 0, len(scenarios))
-	)
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(10)
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, opts executorOpts, llmClient llm.Client, judgeModel string, restart attractor.RestartFunc) (scenario.AggregateResult, error) {
+	scored := make([]scenario.ScoredScenario, 0, len(scenarios))
 
 	for i, sc := range scenarios {
-		g.Go(func() error {
-			// Each goroutine gets its own Runner (independent variable capture state) and Judge.
-			executors, cleanup := buildExecutors(opts)
-			defer cleanup()
-			runner := scenario.NewRunner(executors, opts.logger)
-			judge := scenario.NewJudge(llmClient, judgeModel, opts.logger)
-
-			result, err := runner.Run(gctx, sc)
+		if ctx.Err() != nil {
+			return scenario.AggregateResult{}, ctx.Err()
+		}
+		if i > 0 && restart != nil {
+			newURL, err := restart(ctx)
 			if err != nil {
-				// If the group context was canceled (another goroutine failed),
-				// propagate the cancellation rather than recording a phantom zero.
-				if gctx.Err() != nil {
-					return gctx.Err()
-				}
-				weight := 1.0
-				if sc.Weight != nil {
-					weight = *sc.Weight
-				}
-				opts.logger.Warn("scenario setup failed", "scenario", sc.ID, "error", err)
-				mu.Lock()
-				results = append(results, indexedResult{index: i, ss: scenario.ScoredScenario{
-					ScenarioID: sc.ID,
-					Weight:     weight,
-					Score:      0,
-				}})
-				mu.Unlock()
-				return nil
+				return scenario.AggregateResult{}, fmt.Errorf("restart container: %w", err)
 			}
+			opts.targetURL = newURL
+		}
 
-			ss, err := judge.ScoreScenario(gctx, sc, result)
-			if err != nil {
-				return fmt.Errorf("score scenario %s: %w", sc.ID, err)
+		executors, cleanup := buildExecutors(opts)
+		runner := scenario.NewRunner(executors, opts.logger)
+		judge := scenario.NewJudge(llmClient, judgeModel, opts.logger)
+
+		result, runErr := runner.Run(ctx, sc)
+		cleanup()
+		if runErr != nil {
+			weight := 1.0
+			if sc.Weight != nil {
+				weight = *sc.Weight
 			}
+			opts.logger.Warn("scenario setup failed", "scenario", sc.ID, "error", runErr)
+			scored = append(scored, scenario.ScoredScenario{
+				ScenarioID: sc.ID,
+				Weight:     weight,
+				Score:      0,
+			})
+			continue
+		}
 
-			mu.Lock()
-			results = append(results, indexedResult{index: i, ss: ss})
-			mu.Unlock()
-			return nil
-		})
-	}
+		ss, err := judge.ScoreScenario(ctx, sc, result)
+		if err != nil {
+			return scenario.AggregateResult{}, fmt.Errorf("score scenario %s: %w", sc.ID, err)
+		}
 
-	if err := g.Wait(); err != nil {
-		return scenario.AggregateResult{}, err
-	}
-
-	// Sort by original index for deterministic output.
-	slices.SortFunc(results, func(a, b indexedResult) int { return a.index - b.index })
-	scored := make([]scenario.ScoredScenario, len(results))
-	for i, r := range results {
-		scored[i] = r.ss
+		scored = append(scored, ss)
 	}
 
 	return scenario.Aggregate(scored), nil
 }
 
 func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string) attractor.ValidateFn {
-	return func(ctx context.Context, url string) (float64, []string, float64, error) {
+	return func(ctx context.Context, url string, restart attractor.RestartFunc) (float64, []string, float64, error) {
 		opts := baseOpts
 		opts.targetURL = url
 		opts.grpcTarget = grpcTargetGetter()
-		agg, err := runAndScore(ctx, scenarios, opts, llmClient, judgeModel)
+		agg, err := runAndScore(ctx, scenarios, opts, llmClient, judgeModel, restart)
 		if err != nil {
 			return 0, nil, 0, err
 		}

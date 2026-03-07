@@ -5,18 +5,20 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/codes"
+
+	"github.com/foundatron/octopusgarden/internal/attractor"
 )
 
 func TestWrapValidateFnSuccess(t *testing.T) {
 	exp, tp := newTestTP()
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
-	inner := func(_ context.Context, _ string) (float64, []string, float64, error) {
+	inner := func(_ context.Context, _ string, _ attractor.RestartFunc) (float64, []string, float64, error) {
 		return 85.0, []string{"minor issue"}, 0.005, nil
 	}
 
 	wrapped := WrapValidateFn(inner, tp)
-	sat, failures, cost, err := wrapped(context.Background(), "http://localhost:8080")
+	sat, failures, cost, err := wrapped(context.Background(), "http://localhost:8080", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,12 +51,12 @@ func TestWrapValidateFnError(t *testing.T) {
 	exp, tp := newTestTP()
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
-	inner := func(_ context.Context, _ string) (float64, []string, float64, error) {
+	inner := func(_ context.Context, _ string, _ attractor.RestartFunc) (float64, []string, float64, error) {
 		return 0, nil, 0, errMock
 	}
 
 	wrapped := WrapValidateFn(inner, tp)
-	_, _, _, err := wrapped(context.Background(), "http://localhost:8080")
+	_, _, _, err := wrapped(context.Background(), "http://localhost:8080", nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

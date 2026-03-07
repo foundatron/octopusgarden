@@ -489,7 +489,9 @@ type ContainerManager interface {
 ```go
 // ValidateFn runs holdout scenarios against a running container and returns results.
 // The attractor never imports internal/scenario — the CLI provides this closure.
-type ValidateFn func(ctx context.Context, url string) (satisfaction float64, failures []string, cost float64, err error)
+// restart may be called to stop the current container and start a fresh one between scenarios.
+// restart is nil for gRPC and exec-only paths that do not support container restart.
+type ValidateFn func(ctx context.Context, url string, restart RestartFunc) (satisfaction float64, failures []string, cost float64, err error)
 ```
 
 [embedmd]:# (../internal/attractor/attractor.go go /^\/\/ RunOptions configures/ /^}/)

@@ -100,9 +100,15 @@ type ContainerManager interface {
 	StartSession(ctx context.Context, tag string) (session *container.Session, stop container.StopFunc, err error)
 }
 
+// RestartFunc stops the current container, starts a fresh one, and returns the new URL.
+// It is provided to ValidateFn so that a scenario can trigger a clean restart between runs.
+type RestartFunc func(ctx context.Context) (newURL string, err error)
+
 // ValidateFn runs holdout scenarios against a running container and returns results.
 // The attractor never imports internal/scenario — the CLI provides this closure.
-type ValidateFn func(ctx context.Context, url string) (satisfaction float64, failures []string, cost float64, err error)
+// restart may be called to stop the current container and start a fresh one between scenarios.
+// restart is nil for gRPC and exec-only paths that do not support container restart.
+type ValidateFn func(ctx context.Context, url string, restart RestartFunc) (satisfaction float64, failures []string, cost float64, err error)
 
 // Attractor orchestrates the convergence loop: generate code → build → validate → iterate.
 type Attractor struct {
@@ -585,6 +591,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		defer s.sessionProvider(nil) // clear session after validation
 	}
 
+	var restartFn RestartFunc
 	switch {
 	case caps.NeedsGRPC:
 		res, err := a.startGRPCContainer(ctx, iter, tag, caps, s)
@@ -601,25 +608,17 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		defer s.grpcTargetProvider("") // clear after validation
 	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
 		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
-		runRes, stop, err := a.containerMgr.Run(ctx, tag)
+		res, err := a.startHTTPContainer(ctx, iter, tag, s.opts.HealthTimeout, s)
 		if err != nil {
-			a.logger.Warn("container run failed", "iteration", iter, "error", err)
-			s.lastOutcome = OutcomeRunFail
-			s.lastSatisfaction = 0
-			s.recordStall(iter, feedbackRunError, fmt.Sprintf("Container failed to start: %s", err))
-			return a.checkStalled(iter, s), nil
+			return nil, err
 		}
-		defer stop()
-		url = runRes.URL
-		containerID = runRes.ContainerID
-
-		if err := a.containerMgr.WaitHealthy(ctx, url, s.opts.HealthTimeout); err != nil {
-			a.logger.Warn("health check failed", "iteration", iter, "error", err)
-			s.lastOutcome = OutcomeHealthFail
-			s.lastSatisfaction = 0
-			s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
-			return a.checkStalled(iter, s), nil
+		if res.stop == nil {
+			return res.stalled, nil
 		}
+		defer res.stop()
+		url = res.url
+		containerID = res.containerID
+		restartFn = res.restart
 	}
 
 	// Run test command before validation when configured and an HTTP container is available.
@@ -627,7 +626,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		return stall, err
 	}
 
-	satisfaction, failures, valCost, err := validate(ctx, url)
+	satisfaction, failures, valCost, err := validate(ctx, url, restartFn)
 	if err != nil {
 		return nil, fmt.Errorf("attractor: validate iteration %d: %w", iter, err)
 	}
@@ -668,6 +667,64 @@ func (a *Attractor) runTestCommand(ctx context.Context, iter int, containerID st
 		return true, a.checkStalled(iter, s), nil
 	}
 	return false, nil, nil
+}
+
+// httpContainerResult holds the outputs of startHTTPContainer.
+type httpContainerResult struct {
+	url         string
+	stop        func() // non-nil on success; nil when startup failed (safe to use as failure sentinel)
+	restart     RestartFunc
+	containerID string
+	stalled     *RunResult // non-nil when startup failed and stall limit is reached
+}
+
+// startHTTPContainer launches a container, waits for HTTP health, and builds a RestartFunc.
+// When startup fails, result.stop is nil and the container has already been stopped.
+// The caller must defer result.stop() only when result.stop is non-nil.
+// The stop function and restart function share a mutable reference so that restarting
+// updates the cleanup target without changing the deferred call site.
+func (a *Attractor) startHTTPContainer(ctx context.Context, iter int, tag string, healthTimeout time.Duration, s *runState) (httpContainerResult, error) {
+	runRes, stop, err := a.containerMgr.Run(ctx, tag)
+	if err != nil {
+		a.logger.Warn("container run failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeRunFail
+		s.lastSatisfaction = 0
+		s.recordStall(iter, feedbackRunError, fmt.Sprintf("Container failed to start: %s", err))
+		return httpContainerResult{stalled: a.checkStalled(iter, s)}, nil
+	}
+
+	if err := a.containerMgr.WaitHealthy(ctx, runRes.URL, healthTimeout); err != nil {
+		stop()
+		a.logger.Warn("health check failed", "iteration", iter, "error", err)
+		s.lastOutcome = OutcomeHealthFail
+		s.lastSatisfaction = 0
+		s.recordStall(iter, feedbackHealthError, fmt.Sprintf("Health check failed: %s", err))
+		return httpContainerResult{stalled: a.checkStalled(iter, s)}, nil
+	}
+
+	currentStop := stop
+	restartFn := func(restartCtx context.Context) (string, error) {
+		currentStop()
+		currentStop = func() {} // prevent double-stop if Run fails
+		newRes, newStop, runErr := a.containerMgr.Run(restartCtx, tag)
+		if runErr != nil {
+			return "", fmt.Errorf("attractor: restart container: %w", runErr)
+		}
+		currentStop = newStop
+		if hErr := a.containerMgr.WaitHealthy(restartCtx, newRes.URL, healthTimeout); hErr != nil {
+			newStop()
+			currentStop = func() {}
+			return "", fmt.Errorf("attractor: restart health check: %w", hErr)
+		}
+		return newRes.URL, nil
+	}
+
+	return httpContainerResult{
+		url:         runRes.URL,
+		containerID: runRes.ContainerID,
+		stop:        func() { currentStop() },
+		restart:     restartFn,
+	}, nil
 }
 
 // grpcContainerResult holds the outputs of startGRPCContainer.
