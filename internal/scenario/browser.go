@@ -208,16 +208,23 @@ func (e *BrowserExecutor) doNavigate(ctx context.Context, req BrowserRequest) (S
 }
 
 func (e *BrowserExecutor) doClick(ctx context.Context, req BrowserRequest) (StepOutput, error) {
-	var text, html, location string
 	err := chromedp.Run(ctx,
 		chromedp.WaitVisible(req.Selector, chromedp.ByQuery),
 		chromedp.Click(req.Selector, chromedp.ByQuery),
+	)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("browser: click: %w", err)
+	}
+
+	var text, html, location string
+	err = chromedp.Run(ctx,
+		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.InnerHTML("body", &html, chromedp.ByQuery),
 		chromedp.Text("body", &text, chromedp.ByQuery),
 		chromedp.Location(&location),
 	)
 	if err != nil {
-		return StepOutput{}, fmt.Errorf("browser: click: %w", err)
+		return StepOutput{}, fmt.Errorf("browser: click read: %w", err)
 	}
 
 	return buildBrowserOutput(location, text, html, -1), nil
