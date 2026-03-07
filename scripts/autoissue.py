@@ -432,7 +432,7 @@ def wait_for_ci(pr_number: str) -> int:
                 "--repo",
                 REPO,
                 "--json",
-                "name,state,conclusion",
+                "name,state,bucket",
             ],
             check=False,
             stderr_pipe=True,
@@ -443,18 +443,14 @@ def wait_for_ci(pr_number: str) -> int:
         except (json.JSONDecodeError, ValueError):
             checks = []
         if checks:
-            conclusions = [c.get("conclusion", "") for c in checks]
-            states = [c.get("state", "") for c in checks]
-            if any(c == "FAILURE" for c in conclusions):
+            buckets = [c.get("bucket", "") for c in checks]
+            if any(b == "fail" for b in buckets):
                 log("CI checks failed.")
                 for c in checks:
-                    if c.get("conclusion") == "FAILURE":
+                    if c.get("bucket") == "fail":
                         log(f"  FAILED: {c.get('name', 'unknown')}")
                 return 1
-            passing = {"SUCCESS", "SKIPPED", "NEUTRAL"}
-            if all(s == "COMPLETED" for s in states) and all(
-                c in passing for c in conclusions
-            ):
+            if all(b in {"pass", "skipping"} for b in buckets):
                 log("All CI checks passed!")
                 return 0
         if elapsed == 0:
