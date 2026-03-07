@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import collections.abc
 import json
 import re
 import shutil
@@ -127,10 +128,18 @@ def run_phase(
     """Run a claude phase, capturing text output to a file."""
     log(f"  Running {phase_name} (model: {model})...")
     prompt_content = prompt_file.read_text()
-    args = _claude_args(model, budget) + ["--output-format", "text", prompt_content]
-    result = subprocess.run(args, stdout=subprocess.PIPE, text=True)
+    args = _claude_args(model, budget) + ["--output-format", "text"]
+    result = subprocess.run(
+        args,
+        input=prompt_content,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     if result.returncode != 0:
         log(f"  ERROR: {phase_name} failed (exit code {result.returncode})")
+        if result.stderr:
+            log(f"  stderr: {result.stderr.strip()}")
         raise PhaseError(phase_name)
     output_file.write_text(result.stdout or "")
     lines = len((result.stdout or "").splitlines())
@@ -146,8 +155,8 @@ def run_phase_nocapture(
     """Run a claude phase, letting output go to terminal."""
     log(f"  Running {phase_name} (model: {model})...")
     prompt_content = prompt_file.read_text()
-    args = _claude_args(model, budget) + [prompt_content]
-    result = subprocess.run(args)
+    args = _claude_args(model, budget)
+    result = subprocess.run(args, input=prompt_content, text=True)
     if result.returncode != 0:
         log(f"  ERROR: {phase_name} failed (exit code {result.returncode})")
         raise PhaseError(phase_name)
@@ -165,12 +174,13 @@ def validate_artifact(
     if not path.is_file():
         log(f"  ERROR: artifact not found: {path}")
         raise PhaseError(f"artifact not found: {path}")
-    lines = path.read_text().splitlines()
+    text = path.read_text()
+    lines = text.splitlines()
     if len(lines) < min_lines:
         log(f"  ERROR: artifact too short ({len(lines)} lines, need {min_lines}+)")
         raise PhaseError(f"artifact too short: {path}")
     for section in required_sections or []:
-        if f"### {section}" not in path.read_text():
+        if f"### {section}" not in text:
             log(f"  ERROR: missing required section in artifact: ### {section}")
             raise PhaseError(f"missing section: {section}")
 
@@ -250,7 +260,7 @@ def get_diff_for_review() -> str:
     if len(diff_full) > DIFF_SIZE_LIMIT:
         log(f"  Large diff ({len(diff_full)} chars), using stat + per-file strategy")
         stat_result = run_cmd(["git", "diff", "main...HEAD", "--stat"])
-        numstat_result = run_cmd(["git", "diff", "main...HEAD", "--stat", "--numstat"])
+        numstat_result = run_cmd(["git", "diff", "main...HEAD", "--numstat"])
         # Get top 10 changed files by lines added
         numstat_lines = numstat_result.stdout.strip().splitlines()
         top_files: list[str] = []
@@ -410,18 +420,38 @@ def wait_for_ci(pr_number: str) -> int:
     elapsed = 0
     while elapsed < MAX_CI_WAIT:
         result = run_cmd(
-            ["gh", "pr", "checks", pr_number, "--repo", REPO],
+            [
+                "gh",
+                "pr",
+                "checks",
+                pr_number,
+                "--repo",
+                REPO,
+                "--json",
+                "name,state,conclusion",
+            ],
             check=False,
             stderr_pipe=True,
         )
         output = result.stdout or ""
-        if "fail" in output:
-            log("CI checks failed.")
-            print(output)
-            return 1
-        if "pass" in output and "pending" not in output:
-            log("All CI checks passed!")
-            return 0
+        try:
+            checks = json.loads(output)
+        except (json.JSONDecodeError, ValueError):
+            checks = []
+        if checks:
+            conclusions = [c.get("conclusion", "") for c in checks]
+            states = [c.get("state", "") for c in checks]
+            if any(c == "FAILURE" for c in conclusions):
+                log("CI checks failed.")
+                for c in checks:
+                    if c.get("conclusion") == "FAILURE":
+                        log(f"  FAILED: {c.get('name', 'unknown')}")
+                return 1
+            if all(s == "COMPLETED" for s in states) and all(
+                c == "SUCCESS" for c in conclusions
+            ):
+                log("All CI checks passed!")
+                return 0
         if elapsed == 0:
             log(
                 f"Checks still running, polling every {CI_POLL_INTERVAL}s (max {MAX_CI_WAIT}s)..."
@@ -440,7 +470,7 @@ def wait_for_ci(pr_number: str) -> int:
 def push_with_retry(
     branch: str, prompt_file: Path, impl_model: str, budget: str | None
 ) -> None:
-    for attempt in range(1, MAX_PUSH_RETRIES + 2):
+    for attempt in range(MAX_PUSH_RETRIES + 1):
         result = subprocess.run(
             ["git", "push", "--force-with-lease", "-u", "origin", branch],
             capture_output=True,
@@ -449,18 +479,19 @@ def push_with_retry(
         if result.returncode == 0:
             return
         push_output = result.stderr or result.stdout or ""
-        if attempt > MAX_PUSH_RETRIES:
+        if attempt >= MAX_PUSH_RETRIES:
             log(
                 f"ERROR: Push failed after {MAX_PUSH_RETRIES} retries (pre-push hooks keep failing)"
             )
             print(push_output)
             raise PhaseError("push failed")
+        retry_num = attempt + 1
         log(
-            f"Push failed (likely pre-push hook). Attempting fix (retry {attempt}/{MAX_PUSH_RETRIES})..."
+            f"Push failed (likely pre-push hook). Attempting fix (retry {retry_num}/{MAX_PUSH_RETRIES})..."
         )
         write_prompt(prompt_file, push_fix_prompt(push_output))
         run_phase_nocapture(
-            f"Push Fix (retry {attempt})", impl_model, prompt_file, budget
+            f"Push Fix (retry {retry_num})", impl_model, prompt_file, budget
         )
 
 
@@ -710,7 +741,9 @@ Instructions:
 # ---------------------------------------------------------------------------
 
 
-def make_cleanup(work_dir: Path, issues: list[str]) -> tuple[callable, callable]:
+def make_cleanup(
+    work_dir: Path, issues: list[str]
+) -> tuple[collections.abc.Callable[[], None], collections.abc.Callable[..., None]]:
     """Create cleanup and signal handler functions with a once-guard."""
     cleaned = False
 
@@ -730,7 +763,7 @@ def make_cleanup(work_dir: Path, issues: list[str]) -> tuple[callable, callable]
     return cleanup, signal_handler
 
 
-def install_signal_handlers(handler: callable) -> None:
+def install_signal_handlers(handler: collections.abc.Callable[..., None]) -> None:
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
 
