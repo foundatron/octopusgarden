@@ -50,7 +50,7 @@ func NewBrowserExecutor(ctx context.Context, baseURL string, logger *slog.Logger
 
 // ValidCaptureSources returns the valid capture source names for browser steps.
 func (e *BrowserExecutor) ValidCaptureSources() []string {
-	return []string{BrowserSourceText, BrowserSourceHTML, BrowserSourceCount, BrowserSourceLocation}
+	return []string{BrowserSourceText, BrowserSourceHTML, BrowserSourceCount, BrowserSourceLocation, BrowserSourceValue}
 }
 
 // Execute dispatches a browser action and returns the step output.
@@ -231,11 +231,12 @@ func (e *BrowserExecutor) doClick(ctx context.Context, req BrowserRequest) (Step
 }
 
 func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepOutput, error) {
-	var text, html, location string
+	var text, html, location, inputValue string
 	err := chromedp.Run(ctx,
 		chromedp.WaitVisible(req.Selector, chromedp.ByQuery),
 		chromedp.Clear(req.Selector, chromedp.ByQuery),
 		chromedp.SendKeys(req.Selector, req.Value, chromedp.ByQuery),
+		chromedp.Value(req.Selector, &inputValue, chromedp.ByQuery),
 		chromedp.InnerHTML("body", &html, chromedp.ByQuery),
 		chromedp.Text("body", &text, chromedp.ByQuery),
 		chromedp.Location(&location),
@@ -244,7 +245,19 @@ func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepO
 		return StepOutput{}, fmt.Errorf("browser: fill: %w", err)
 	}
 
-	return buildBrowserOutput(location, text, html, -1), nil
+	observed := fmt.Sprintf("URL: %s\nSelector: %s\nFilled value: %s\nPage content:\n%s",
+		location, req.Selector, inputValue, text)
+
+	return StepOutput{
+		Observed:    observed,
+		CaptureBody: text,
+		CaptureSources: map[string]string{
+			BrowserSourceText:     text,
+			BrowserSourceHTML:     html,
+			BrowserSourceLocation: location,
+			BrowserSourceValue:    inputValue,
+		},
+	}, nil
 }
 
 func (e *BrowserExecutor) doAssert(ctx context.Context, req BrowserRequest) (StepOutput, error) {
