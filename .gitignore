@@ -1,7 +1,58 @@
 # Compiled binary
 /octog
 
-# Claude Code local state (keep .claude/skills/ if needed)
+# Claude Code local state
 .claude/settings.local.json
 .claude/agent-memory-local/
 workspace/
+
+# Go binaries and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test binary, built with `go test -c`
+*.test
+
+# Go coverage profiles and test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Python byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Python type checkers
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# Environment
+.env
+.envrc
