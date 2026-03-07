@@ -65,6 +65,7 @@ func Parse(r io.Reader) (Spec, error) {
 		descEnd = headings[1].line
 	}
 	spec.Description = collectContent(lines, headings[0].line+1, descEnd)
+	spec.TestCommand = extractTestCommand(lines[headings[0].line+1 : descEnd])
 
 	// Build sections from all headings (including the first).
 	sections := make([]Section, 0, len(headings))
@@ -127,6 +128,19 @@ func parseHeading(line string) (int, string) {
 		return 0, ""
 	}
 	return level, text
+}
+
+// extractTestCommand scans lines for "Test-Command: <value>" and returns the value,
+// or empty string if not found. The key comparison is case-insensitive.
+func extractTestCommand(lines []string) string {
+	const testCommandPrefix = "test-command:"
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(trimmed), testCommandPrefix) {
+			return strings.TrimSpace(trimmed[len(testCommandPrefix):])
+		}
+	}
+	return ""
 }
 
 // collectContent joins lines[start:end], trimming leading/trailing blank lines.

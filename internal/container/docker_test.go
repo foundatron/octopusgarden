@@ -313,15 +313,18 @@ func defaultRunMock(hostPort string) *mockDockerAPI {
 
 func TestRunSuccess(t *testing.T) {
 	m := newManager(defaultRunMock("49152"), nil, newTestLogger())
-	url, stop, err := m.Run(context.Background(), "test:latest")
+	result, stop, err := m.Run(context.Background(), "test:latest")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer stop()
 
 	want := "http://127.0.0.1:49152"
-	if url != want {
-		t.Errorf("url = %q, want %q", url, want)
+	if result.URL != want {
+		t.Errorf("url = %q, want %q", result.URL, want)
+	}
+	if result.ContainerID != testContainerID {
+		t.Errorf("ContainerID = %q, want %q", result.ContainerID, testContainerID)
 	}
 }
 
@@ -735,6 +738,60 @@ func TestSessionExecCreateError(t *testing.T) {
 	}
 	if !errors.Is(err, errExecFailed) {
 		t.Errorf("expected errExecFailed, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunTest tests
+// ---------------------------------------------------------------------------
+
+func TestRunTestSuccess(t *testing.T) {
+	mock := defaultSessionMock()
+	mock.containerExecCreateFunc = func(_ context.Context, _ string, _ dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+		return dockercontainer.ExecCreateResponse{ID: "exec-test-123"}, nil
+	}
+	mock.containerExecAttachFunc = func(_ context.Context, _ string, _ dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+		return fakeHijackedResponse(buildMuxStream("all tests passed\n", "")), nil
+	}
+	mock.containerExecInspectFunc = func(_ context.Context, _ string) (dockercontainer.ExecInspect, error) {
+		return dockercontainer.ExecInspect{ExitCode: 0}, nil
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	result, err := m.RunTest(context.Background(), testContainerID, "go test ./...")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+	if !strings.Contains(result.Stdout, "all tests passed") {
+		t.Errorf("expected stdout to contain 'all tests passed', got %q", result.Stdout)
+	}
+}
+
+func TestRunTestNonZeroExit(t *testing.T) {
+	mock := defaultSessionMock()
+	mock.containerExecCreateFunc = func(_ context.Context, _ string, _ dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error) {
+		return dockercontainer.ExecCreateResponse{ID: "exec-test-456"}, nil
+	}
+	mock.containerExecAttachFunc = func(_ context.Context, _ string, _ dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+		return fakeHijackedResponse(buildMuxStream("", "FAIL: test_foo\n")), nil
+	}
+	mock.containerExecInspectFunc = func(_ context.Context, _ string) (dockercontainer.ExecInspect, error) {
+		return dockercontainer.ExecInspect{ExitCode: 1}, nil
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	result, err := m.RunTest(context.Background(), testContainerID, "go test ./...")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", result.ExitCode)
+	}
+	if !strings.Contains(result.Stderr, "FAIL: test_foo") {
+		t.Errorf("expected stderr to contain 'FAIL: test_foo', got %q", result.Stderr)
 	}
 }
 

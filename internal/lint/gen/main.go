@@ -125,11 +125,21 @@ Violations are reported but do not block usage.
 | {{.ID}} | {{.Summary}}{{with .Detail}} — {{.}}{{end}} |
 {{- end}}
 
+## Metadata
+
+Optional key-value fields can appear in the description text (between the title heading and the
+next section heading). They use the format ` + "`Key: value`" + ` on their own line.
+
+| Key | Description |
+|-----|-------------|
+| ` + "`Test-Command`" + ` | Shell command run inside the HTTP container after a successful health check. A non-zero exit code is treated as a mechanical failure (like a build failure) and triggers another generation iteration. The command runs via ` + "`sh -c`" + ` with a 60-second timeout. Example: ` + "`Test-Command: go test ./...`" + ` |
+
 ## Notes
 
 - Headings inside fenced code blocks (` + "```" + ` or ` + "~~~" + `) are ignored by the parser.
 - The spec content is passed as a string to the attractor — file paths are never exposed.
 - Only ATX-style headings (` + "`# Title`" + `) are recognized; setext-style is not supported.
+- ` + "`Test-Command`" + ` requires an HTTP container (i.e. scenarios with HTTP request steps). It has no effect when only exec-only or gRPC containers are started.
 `
 
 var scenarioTmpl = `# Scenario Format Reference

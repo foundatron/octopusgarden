@@ -114,6 +114,7 @@ type Spec struct {
 	Description string
 	Sections    []Section
 	RawContent  string // full markdown, used for LLM prompt
+	TestCommand string // optional test command from "Test-Command: ..." in description
 }
 
 // Section represents a single heading and its content within a spec.
@@ -474,8 +475,9 @@ scores (using scenario `weight` field, default 1.0). See `Aggregate()` in
 // *container.Manager satisfies this automatically.
 type ContainerManager interface {
 	Build(ctx context.Context, dir, tag string) error
-	Run(ctx context.Context, tag string) (url string, stop container.StopFunc, err error)
+	Run(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error)
 	RunMultiPort(ctx context.Context, tag string, extraPorts []string) (container.RunResult, container.StopFunc, error)
+	RunTest(ctx context.Context, containerID, command string) (container.ExecResult, error)
 	WaitHealthy(ctx context.Context, url string, timeout time.Duration) error
 	WaitPort(ctx context.Context, addr string, timeout time.Duration) error
 	StartSession(ctx context.Context, tag string) (session *container.Session, stop container.StopFunc, err error)
@@ -508,6 +510,7 @@ type RunOptions struct {
 	Capabilities      ScenarioCapabilities // detected from loaded scenarios
 	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
 	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
+	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
 }
 ```
 
@@ -559,6 +562,7 @@ const (
 	OutcomeRunFail    IterationOutcome = "run_fail"
 	OutcomeHealthFail IterationOutcome = "health_fail"
 	OutcomeParseFail  IterationOutcome = "parse_fail"
+	OutcomeTestFail   IterationOutcome = "test_fail"
 )
 ```
 

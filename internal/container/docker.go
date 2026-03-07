@@ -153,14 +153,14 @@ func parseBuildLog(r io.Reader, logger *slog.Logger) error {
 	return nil
 }
 
-// Run starts a container from the given image tag and returns the base URL and
+// Run starts a container from the given image tag and returns a RunResult and
 // a stop function. The container must expose port 8080.
 //
 // Cleanup on partial failure:
 //   - ContainerCreate fails  → return error (nothing to clean up)
 //   - ContainerStart fails   → ContainerRemove(force) the created container
 //   - ContainerInspect fails → ContainerStop + ContainerRemove
-func (m *Manager) Run(ctx context.Context, tag string) (url string, stop StopFunc, err error) {
+func (m *Manager) Run(ctx context.Context, tag string) (RunResult, StopFunc, error) {
 	const containerPort = nat.Port("8080/tcp")
 
 	createResp, err := m.docker.ContainerCreate(ctx,
@@ -176,26 +176,26 @@ func (m *Manager) Run(ctx context.Context, tag string) (url string, stop StopFun
 		nil, nil, "",
 	)
 	if err != nil {
-		return "", nil, fmt.Errorf("container: create: %w", err)
+		return RunResult{}, nil, fmt.Errorf("container: create: %w", err)
 	}
 	containerID := createResp.ID
 
 	if err := m.docker.ContainerStart(ctx, containerID, dockercontainer.StartOptions{}); err != nil {
 		// Container was created but never started — remove only, no stop needed.
 		_ = m.docker.ContainerRemove(context.Background(), containerID, dockercontainer.RemoveOptions{Force: true})
-		return "", nil, fmt.Errorf("container: start: %w", err)
+		return RunResult{}, nil, fmt.Errorf("container: start: %w", err)
 	}
 
 	inspectResp, err := m.docker.ContainerInspect(ctx, containerID)
 	if err != nil {
 		m.stopAndRemove(containerID)
-		return "", nil, fmt.Errorf("container: inspect: %w", err)
+		return RunResult{}, nil, fmt.Errorf("container: inspect: %w", err)
 	}
 
 	bindings, ok := inspectResp.NetworkSettings.Ports[containerPort]
 	if !ok || len(bindings) == 0 {
 		m.stopAndRemove(containerID)
-		return "", nil, errNoPortBinding
+		return RunResult{}, nil, errNoPortBinding
 	}
 
 	containerURL := "http://127.0.0.1:" + bindings[0].HostPort
@@ -206,7 +206,7 @@ func (m *Manager) Run(ctx context.Context, tag string) (url string, stop StopFun
 		shortID = shortID[:12]
 	}
 	m.logger.Info("container started", "id", shortID, "url", containerURL)
-	return containerURL, stopFn, nil
+	return RunResult{URL: containerURL, ContainerID: containerID}, stopFn, nil
 }
 
 // stopAndRemove stops and forcibly removes a running container.
@@ -217,10 +217,11 @@ func (m *Manager) stopAndRemove(containerID string) {
 	_ = m.docker.ContainerRemove(ctx, containerID, dockercontainer.RemoveOptions{Force: true})
 }
 
-// RunResult holds the container URL and any extra port bindings.
+// RunResult holds the container URL, container ID, and any extra port bindings.
 type RunResult struct {
-	URL        string            // HTTP base URL (port 8080)
-	ExtraPorts map[string]string // e.g. "50051/tcp" -> "127.0.0.1:54321"
+	URL         string            // HTTP base URL (port 8080)
+	ContainerID string            // Docker container ID
+	ExtraPorts  map[string]string // e.g. "50051/tcp" -> "127.0.0.1:54321"
 }
 
 // RunMultiPort starts a container exposing port 8080 (optional) plus additional ports.
@@ -266,7 +267,8 @@ func (m *Manager) RunMultiPort(ctx context.Context, tag string, extraPorts []str
 	}
 
 	result := RunResult{
-		ExtraPorts: make(map[string]string, len(extraPorts)),
+		ContainerID: containerID,
+		ExtraPorts:  make(map[string]string, len(extraPorts)),
 	}
 
 	// HTTP port is optional: populate URL only if 8080 is bound.
@@ -590,6 +592,18 @@ func (m *Manager) StartSession(ctx context.Context, tag string) (*Session, StopF
 	}
 	stopFn := func() { m.stopAndRemove(containerID) }
 	return session, stopFn, nil
+}
+
+// RunTest executes a shell command inside a running container and returns the result.
+// It creates an ephemeral exec against an existing containerID using sh -c.
+// The timeout defaults to 60 seconds.
+func (m *Manager) RunTest(ctx context.Context, containerID, command string) (ExecResult, error) {
+	session := &Session{
+		containerID: containerID,
+		docker:      m.docker,
+		logger:      m.logger,
+	}
+	return session.Exec(ctx, command, ExecOptions{Timeout: 60 * time.Second})
 }
 
 // copyFileToTar opens path and writes its contents to tw.

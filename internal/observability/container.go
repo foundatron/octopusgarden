@@ -50,29 +50,47 @@ func (t *TracingContainerManager) Build(ctx context.Context, dir, tag string) er
 
 // Run delegates to the inner manager and records a container.run span.
 // The span covers the full container lifetime — it ends when the returned StopFunc is called.
-func (t *TracingContainerManager) Run(ctx context.Context, tag string) (string, container.StopFunc, error) {
+func (t *TracingContainerManager) Run(ctx context.Context, tag string) (container.RunResult, container.StopFunc, error) {
 	ctx, span := t.tracer.Start(ctx, "container.run", trace.WithAttributes(
 		attribute.String("container.tag", tag),
 	))
 
-	url, stop, err := t.inner.Run(ctx, tag)
+	result, stop, err := t.inner.Run(ctx, tag)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		span.SetAttributes(attribute.Bool("container.success", false))
 		span.End()
-		return url, stop, err
+		return result, stop, err
 	}
 
 	span.SetAttributes(
 		attribute.Bool("container.success", true),
-		attribute.String("container.url", url),
+		attribute.String("container.url", result.URL),
 	)
 	wrappedStop := func() {
 		stop()
 		span.End()
 	}
-	return url, wrappedStop, nil
+	return result, wrappedStop, nil
+}
+
+// RunTest delegates to the inner manager and records a container.run_test span.
+func (t *TracingContainerManager) RunTest(ctx context.Context, containerID, command string) (container.ExecResult, error) {
+	ctx, span := t.tracer.Start(ctx, "container.run_test", trace.WithAttributes(
+		attribute.String("container.id", containerID),
+	))
+	defer span.End()
+
+	result, err := t.inner.RunTest(ctx, containerID, command)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return result, err
+	}
+
+	span.SetAttributes(attribute.Int("container.exit_code", result.ExitCode))
+	return result, nil
 }
 
 // WaitHealthy delegates to the inner manager and records a container.health span.
