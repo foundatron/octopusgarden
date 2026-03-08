@@ -131,7 +131,7 @@ func (e *WSExecutor) connect(ctx context.Context, connID, wsURL string) error {
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", wsURL, err)
 	}
-	conn.SetReadLimit(10 * 1024 * 1024) // 10 MB
+	conn.SetReadLimit(MaxResponseBytes)
 
 	bgCtx, cancel := context.WithCancel(context.Background()) //nolint:containedctx // background reader needs a long-lived context
 	c := &wsConn{

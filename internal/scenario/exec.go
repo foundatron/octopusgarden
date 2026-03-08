@@ -20,9 +20,6 @@ import (
 
 const (
 	defaultExecTimeout = 30 * time.Second
-	// defaultMaxOutputBytes is the maximum bytes captured from command output.
-	// Keep in sync with the constant of the same name in internal/container/docker.go.
-	defaultMaxOutputBytes = 10 << 20 // 10MB
 )
 
 var (
@@ -99,7 +96,7 @@ func (e *ExecExecutor) writeFileContainer(ctx context.Context, filePath, dir, co
 	result, err := e.Session.Exec(ctx, cmd, container.ExecOptions{
 		Stdin:          content,
 		Timeout:        defaultExecTimeout,
-		MaxOutputBytes: defaultMaxOutputBytes,
+		MaxOutputBytes: MaxResponseBytes,
 	})
 	if err != nil {
 		return fmt.Errorf("write file %q: %w", filePath, err)
@@ -136,7 +133,7 @@ func (e *ExecExecutor) runContainer(ctx context.Context, command, stdin string, 
 		Stdin:          stdin,
 		Env:            env,
 		Timeout:        timeout,
-		MaxOutputBytes: defaultMaxOutputBytes,
+		MaxOutputBytes: MaxResponseBytes,
 	})
 	if err != nil {
 		return StepOutput{}, fmt.Errorf("exec: container exec: %w", err)
@@ -151,8 +148,8 @@ func (e *ExecExecutor) runLocal(ctx context.Context, command, stdin string, env 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // command is from scenario YAML, not user input
 	cmd.WaitDelay = 3 * time.Second                      // don't block if child processes keep pipes open after kill
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &limitedWriter{w: &stdout, remaining: defaultMaxOutputBytes}
-	cmd.Stderr = &limitedWriter{w: &stderr, remaining: defaultMaxOutputBytes}
+	cmd.Stdout = &limitedWriter{w: &stdout, remaining: MaxResponseBytes}
+	cmd.Stderr = &limitedWriter{w: &stderr, remaining: MaxResponseBytes}
 
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)

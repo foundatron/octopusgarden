@@ -57,7 +57,7 @@ func (e *HTTPExecutor) Execute(ctx context.Context, step Step, vars map[string]s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // cap at 10MB
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 	if err != nil {
 		return StepOutput{}, fmt.Errorf("read response body: %w", err)
 	}
