@@ -39,56 +39,42 @@ func NewOpenAIClient(apiKey, baseURL string, zeroCost bool, logger *slog.Logger)
 	}
 }
 
-// openaiMetrics holds extracted token counts and cost from an OpenAI API response.
-type openaiMetrics struct {
-	inputTokens  int
-	outputTokens int
-	cachedTokens int
-	cost         float64
-}
-
-// logUsage extracts token counts, calculates cost, and logs structured metrics
-// for an OpenAI API call. The prefix distinguishes call types (e.g. "openai generate",
-// "openai judge").
-func (c *OpenAIClient) logUsage(prefix, model string, usage openai.CompletionUsage) openaiMetrics {
+// logUsage extracts token counts, calculates cost, logs structured metrics,
+// and returns a usageMetrics for the OpenAI API call.
+// The prefix distinguishes call types (e.g. "openai generate", "openai judge").
+func (c *OpenAIClient) logUsage(prefix, model string, usage openai.CompletionUsage) usageMetrics {
 	inputTokens := int(usage.PromptTokens)
 	outputTokens := int(usage.CompletionTokens)
-	cachedTokens := int(usage.PromptTokensDetails.CachedTokens)
+	cacheReadTokens := int(usage.PromptTokensDetails.CachedTokens)
 
 	var cost float64
 	if !c.zeroCost {
 		// OpenAI: regular input = total prompt minus cached, cache write = 0 (same price),
 		// cache read = cached tokens.
-		regularInput := inputTokens - cachedTokens
+		regularInput := inputTokens - cacheReadTokens
 		var usingFallback bool
-		cost, usingFallback = CalculateCost(model, regularInput, 0, cachedTokens, outputTokens)
+		cost, usingFallback = CalculateCost(model, regularInput, 0, cacheReadTokens, outputTokens)
 		if usingFallback {
 			c.logger.Warn("using fallback pricing for unknown model", "model", model)
 		}
 	}
 
-	c.logger.Info(prefix,
-		"model", model,
-		"input_tokens", inputTokens,
-		"cached_tokens", cachedTokens,
-		"output_tokens", outputTokens,
-		"cost_usd", cost,
-		"cache_hit", cachedTokens > 0,
-	)
-
-	return openaiMetrics{
-		inputTokens:  inputTokens,
-		outputTokens: outputTokens,
-		cachedTokens: cachedTokens,
-		cost:         cost,
+	m := usageMetrics{
+		model:           model,
+		inputTokens:     inputTokens,
+		cacheReadTokens: cacheReadTokens,
+		outputTokens:    outputTokens,
+		cost:            cost,
 	}
+	m.log(c.logger, prefix)
+	return m
 }
 
 // Generate calls the OpenAI Chat Completions API to generate code.
 func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 8192
+		maxTokens = defaultGenerateMaxTokens
 	}
 
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
@@ -131,7 +117,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		Content:      content,
 		InputTokens:  m.inputTokens,
 		OutputTokens: m.outputTokens,
-		CacheHit:     m.cachedTokens > 0,
+		CacheHit:     m.cacheReadTokens > 0,
 		CostUSD:      m.cost,
 		FinishReason: finishReason,
 	}, nil
@@ -150,7 +136,7 @@ func (c *OpenAIClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRespon
 	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model:               req.Model,
 		Messages:            messages,
-		MaxCompletionTokens: openai.Int(4096),
+		MaxCompletionTokens: openai.Int(defaultJudgeMaxTokens),
 	})
 	if err != nil {
 		return JudgeResponse{}, fmt.Errorf("openai judge: %w", err)
