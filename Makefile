@@ -2,7 +2,7 @@
 
 BINARY := octog
 
-.PHONY: all help build test test-integration test-browser coverage lint fmt generate clean docs docs-check
+.PHONY: all help build test test-integration test-browser coverage lint fmt generate clean docs docs-check check
 
 all: build
 
@@ -41,6 +41,12 @@ docs: ## Sync embedded code in docs
 
 docs-check: ## Verify docs are in sync with code
 	go run github.com/campoy/embedmd/v2@latest -d docs/*.md
+
+check: ## Run all pre-push checks (build, test, lint, docs)
+	$(MAKE) build
+	$(MAKE) test
+	$(MAKE) lint
+	$(MAKE) docs-check
 
 clean: ## Remove built binary
 	rm -f $(BINARY)
