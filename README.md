@@ -29,6 +29,9 @@ OctopusGarden builds on ideas pioneered by others:
 - **[Simon Willison's writeup](https://simonwillison.net/2026/Feb/7/software-factory/)** — "How
   StrongDM's AI team build serious software without even looking at the code" — deep dive into the
   software factory pattern and scenario-based validation.
+- **[Ouroboros](https://github.com/Q00/ouroboros)** — Specification-first AI development plugin
+  using Socratic questioning and ontological analysis to expose hidden assumptions before code
+  generation. Inspired OctopusGarden's preflight and wonder/reflect meta-cognitive patterns.
 
 ## How It Works
 
