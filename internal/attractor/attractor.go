@@ -26,6 +26,8 @@ var (
 	errEmptySpec            = errors.New("attractor: spec content is empty")
 	errUnsupportedLanguage  = errors.New("attractor: unsupported language")
 	errMinimalismNoMessages = errors.New("attractor: minimalism suffix: no messages to append to")
+
+	_ ContainerManager = (*container.Manager)(nil)
 )
 
 // summarizeModel is the cheap model used for spec summarization.

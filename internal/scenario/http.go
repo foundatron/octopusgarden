@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+var _ StepExecutor = (*HTTPExecutor)(nil)
+
 // HTTPExecutor executes HTTP request steps.
 type HTTPExecutor struct {
 	Client  *http.Client

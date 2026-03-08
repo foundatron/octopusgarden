@@ -25,7 +25,12 @@ const (
 	defaultMaxOutputBytes = 10 << 20 // 10MB
 )
 
-var errWriteFileFailed = errors.New("write file failed")
+var (
+	errWriteFileFailed = errors.New("write file failed")
+
+	_ StepExecutor     = (*ExecExecutor)(nil)
+	_ containerSession = (*container.Session)(nil)
+)
 
 // containerSession provides command execution inside a running container.
 // Satisfied by *container.Session via structural typing.
