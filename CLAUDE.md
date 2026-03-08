@@ -73,6 +73,19 @@ Minimize — stdlib first. Allowed exceptions:
   (repeated per attractor iteration — ~90% cost reduction on cache reads)
 - Linting: `make lint`; config in `.golangci.yaml`; gochecknoglobals disabled (pricing tables OK)
 
+## Interfaces
+
+Cross-package and multi-implementation interfaces:
+
+| Interface        | Package   | Implementations                                                       |
+| ---------------- | --------- | --------------------------------------------------------------------- |
+| Client           | llm       | AnthropicClient, OpenAIClient, observability.TracingLLMClient         |
+| StepExecutor     | scenario  | HTTPExecutor, ExecExecutor, BrowserExecutor, GRPCExecutor, WSExecutor |
+| ContainerManager | attractor | container.Manager, observability.TracingContainerManager              |
+| containerSession | scenario  | `*container.Session`                                                  |
+| dockerAPI        | container | dockerclient.Client                                                   |
+| modelLister      | cmd/octog | llm.AnthropicClient, llm.OpenAIClient                                 |
+
 ## Configuration
 
 API keys go in `~/.octopusgarden/config` (preferred) or environment variables. Config file uses
