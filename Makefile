@@ -24,8 +24,10 @@ test-browser: ## Run browser integration tests (requires Chrome)
 
 coverage: ## Run tests with coverage and check threshold
 	go test -coverprofile=coverage.out ./...
-	go tool cover -func=coverage.out
-	@go tool cover -func=coverage.out | awk '/^total:/ { pct = $$3+0; if (pct < 50) { print "Coverage " $$3 " below 50% threshold"; exit 1 } }'
+	@echo "--- Per-function coverage ---"
+	@go tool cover -func=coverage.out | grep -v '^total:' | awk '{print $$NF, $$1}' | sort -n | column -t
+	@echo "--- Total ---"
+	@go tool cover -func=coverage.out | awk '/^total:/ { print "Coverage: " $$3; pct = $$3+0; if (pct < 50) { print "Coverage " $$3 " below 50% threshold"; exit 1 } }'
 
 lint: ## Run golangci-lint (full module)
 	golangci-lint run ./...
