@@ -14,6 +14,7 @@ linters:
     - err113          # enforce sentinel errors / no inline errors.New()
     - errorlint       # find errors.Is/As misuse, non-wrapping comparisons
     - wastedassign    # dead assignments
+    - paralleltest    # enforce t.Parallel() in test functions
 
     # Security
     - gosec
@@ -55,7 +56,7 @@ linters:
     - musttag           # no struct tags yet
 
     # Noisy for this codebase
-    - paralleltest      # httptest.Server tests; adding t.Parallel() requires refactor
+    # paralleltest enabled — see exclusions below for non-llm packages
     - dupl              # OpenAI stub has intentional structural similarity to Anthropic client
     - funlen            # replaced by cyclop + gocognit
     - ireturn           # too restrictive for interface return patterns
@@ -111,6 +112,12 @@ linters:
     paths:
       - workspace   # generated attractor output — not project source code
     rules:
+      - path: "internal/(scenario|attractor|container|store|spec|lint|gene|observability|view|preflight|e2e)/"
+        linters:
+          - paralleltest  # not yet parallelized; llm package enforces this
+      - path: "cmd/"
+        linters:
+          - paralleltest  # CLI integration tests; not yet parallelized
       - path: "_test\\.go"
         linters:
           - gosec       # test fixtures with hardcoded values / httptest servers
