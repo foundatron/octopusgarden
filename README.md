@@ -33,23 +33,25 @@ OctopusGarden builds on ideas pioneered by others:
 ## How It Works
 
 ```text
-Spec (markdown) ──→ Attractor Loop ──→ Generated Code ──→ Docker Build
-                        │                                      │
-                        │         (holdout wall)               ▼
-                        │                              Running Container
-                        │                                      │
-                        ◄──── Failure Feedback ◄──── Validator + LLM Judge
-                                                               │
-                                                    Satisfaction Score (0-100)
+Spec + Scenarios ──→ Preflight ──→ Attractor Loop ──→ Generated Code ──→ Docker Build
+                     (optional)        │    ▲                                  │
+                                       │    │ wonder/reflect                   ▼
+                                       │    │ (on stall)              Running Container
+                                       │                                      │
+                                       ◄──── Failure Feedback ◄──── Validator + LLM Judge
+                                                                              │
+                                                                   Satisfaction Score (0-100)
 ```
 
 1. You write a **spec** in markdown describing the software
 1. You write **scenarios** in YAML describing how to verify it works
+1. **Preflight** assesses spec clarity and scenario quality (skip with `--skip-preflight`)
 1. The **attractor loop** calls an LLM to generate code from the spec
 1. The code is built and run in a **Docker container**
 1. The **validator** runs scenarios against the running container
 1. An **LLM judge** scores satisfaction per scenario step
-1. Failures are fed back to the attractor, which iterates
+1. Failures are fed back to the attractor, which iterates — on stalls, **wonder/reflect** diagnoses
+   root causes and generates surgical fixes
 1. Loop continues until satisfaction exceeds your threshold (default 95%)
 
 ## Quick Start
@@ -136,7 +138,9 @@ octog <command> [flags]
 Commands:
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
+  preflight  Assess spec clarity before running the attractor loop
   status     Show recent runs, scores, and costs
+  lint       Check spec and scenario files for errors
   extract    Extract coding patterns from a source directory into a gene file
   models     List available models
   configure  Interactively configure API keys
@@ -146,18 +150,24 @@ Run `octog models` to list available models.
 
 ### `run`
 
-| Flag               | Default             | Description                                                    |
-| ------------------ | ------------------- | -------------------------------------------------------------- |
-| `--spec`           | *(required)*        | Path to the spec markdown file                                 |
-| `--scenarios`      | *(required)*        | Path to the scenarios directory                                |
-| `--model`          | `claude-sonnet-4-6` | LLM model for code generation                                  |
-| `--judge-model`    | `claude-haiku-4-5`  | LLM model for satisfaction judging                             |
-| `--budget`         | `5.00`              | Maximum spend in USD                                           |
-| `--threshold`      | `95`                | Satisfaction target (0-100)                                    |
-| `--genes`          | *(none)*            | Path to gene file from `octog extract` (bootstraps generation) |
-| `--language`       | `go`                | Target language: `go`, `python`, `node`, `rust`, or `auto`     |
-| `--patch`          | `false`             | Incremental patch mode (iteration 2+ sends only changed files) |
-| `--context-budget` | `0`                 | Max estimated tokens for spec in system prompt; 0 = unlimited  |
+| Flag                    | Default             | Description                                                            |
+| ----------------------- | ------------------- | ---------------------------------------------------------------------- |
+| `--spec`                | *(required)*        | Path to the spec markdown file                                         |
+| `--scenarios`           | *(required)*        | Path to the scenarios directory                                        |
+| `--model`               | `claude-sonnet-4-6` | LLM model for code generation                                          |
+| `--frugal-model`        | *(none)*            | Cheaper model; escalates to `--model` after 2 non-improving iterations |
+| `--judge-model`         | `claude-haiku-4-5`  | LLM model for satisfaction judging                                     |
+| `--budget`              | `5.00`              | Maximum spend in USD                                                   |
+| `--threshold`           | `95`                | Satisfaction target (0-100)                                            |
+| `--genes`               | *(none)*            | Path to gene file from `octog extract` (bootstraps generation)         |
+| `--language`            | `go`                | Target language: `go`, `python`, `node`, `rust`, or `auto`             |
+| `--patch`               | `false`             | Incremental patch mode (iteration 2+ sends only changed files)         |
+| `--block-on-regression` | `false`             | Block convergence when any scenario regresses below threshold          |
+| `--context-budget`      | `0`                 | Max estimated tokens for spec in system prompt; 0 = unlimited          |
+| `--otel-endpoint`       | *(none)*            | OTLP/HTTP endpoint for tracing (e.g. `localhost:4318`)                 |
+| `--skip-preflight`      | `false`             | Skip the spec clarity preflight check                                  |
+| `--preflight-threshold` | `0.8`               | Aggregate clarity score threshold for preflight (0.0–1.0)              |
+| `-v`                    | `0`                 | Verbosity: 0=quiet, 1=per-scenario summary, 2=full step detail         |
 
 ### `validate`
 
@@ -165,8 +175,11 @@ Run `octog models` to list available models.
 | --------------- | ------------------ | ------------------------------------------------------------------- |
 | `--scenarios`   | *(required)*       | Path to the scenarios directory                                     |
 | `--target`      | *(required)*       | URL of the running service to validate                              |
+| `--grpc-target` | *(none)*           | gRPC host:port for gRPC scenarios                                   |
 | `--judge-model` | `claude-haiku-4-5` | LLM model for satisfaction judging                                  |
 | `--threshold`   | `0`                | Minimum satisfaction score; non-zero enables exit code 1 on failure |
+| `--format`      | `text`             | Output format: `text` or `json`                                     |
+| `-v`            | `0`                | Verbosity: 0=standard, 1=per-scenario, 2=full detail                |
 
 ### `extract`
 
@@ -178,7 +191,35 @@ Run `octog models` to list available models.
 
 ### `status`
 
-No flags. Shows a table of recent runs with status, model, score, iterations, cost, and timestamp.
+| Flag       | Default | Description                     |
+| ---------- | ------- | ------------------------------- |
+| `--format` | `text`  | Output format: `text` or `json` |
+
+### `preflight`
+
+Assess spec clarity before running the attractor loop.
+
+```text
+octog preflight [flags] <spec-path>
+```
+
+| Flag            | Default            | Description                                                      |
+| --------------- | ------------------ | ---------------------------------------------------------------- |
+| `--judge-model` | `claude-haiku-4-5` | LLM model for clarity assessment                                 |
+| `--threshold`   | `0.8`              | Aggregate clarity score threshold (0.0–1.0)                      |
+| `--verbose`     | `false`            | Show per-dimension strengths and gaps                            |
+| `--scenarios`   | *(none)*           | Directory of scenario YAML files to also assess against the spec |
+
+### `lint`
+
+Check spec and scenario files for structural errors (no LLM required).
+
+| Flag          | Default  | Description                         |
+| ------------- | -------- | ----------------------------------- |
+| `--spec`      | *(none)* | Path to spec file to lint           |
+| `--scenarios` | *(none)* | Path to scenarios directory to lint |
+
+At least one of `--spec` or `--scenarios` is required.
 
 ## Key Concepts
 
@@ -187,6 +228,11 @@ No flags. Shows a table of recent runs with status, model, score, iterations, co
   these during code generation)
 - **Attractor** — The convergence loop: generate -> test -> score -> feedback -> regenerate
 - **Satisfaction** — Probabilistic scoring (0-100) via LLM-as-judge, not boolean pass/fail
+- **Preflight** — LLM-based spec clarity and scenario quality assessment before running the loop
+- **Wonder/Reflect** — Two-phase stall recovery: high-temperature diagnosis (wonder) then
+  low-temperature surgical generation (reflect)
+- **Model Escalation** — Start cheap with `--frugal-model`, escalate to `--model` after 2
+  consecutive non-improving iterations, downgrade back after 5 consecutive improvements
 - **Gene Transfusion** — Extract coding patterns from exemplar codebases to bootstrap generation
   (`octog extract` → `octog run --genes`)
 
