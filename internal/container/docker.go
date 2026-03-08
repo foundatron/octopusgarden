@@ -25,6 +25,8 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
+	"github.com/foundatron/octopusgarden/internal/limits"
 )
 
 // DefaultGRPCPort is the standard container port for gRPC services.
@@ -457,9 +459,8 @@ type Session struct {
 	logger      *slog.Logger
 }
 
-// defaultMaxOutputBytes is the maximum bytes captured from exec output.
-// Keep in sync with the constant of the same name in internal/scenario/exec.go.
-const defaultMaxOutputBytes = 10 << 20 // 10MB
+// defaultMaxOutputBytes is the fallback for ExecOptions.MaxOutputBytes when not set.
+const defaultMaxOutputBytes = limits.MaxResponseBytes
 
 // Exec runs a command inside the container via docker exec.
 func (s *Session) Exec(ctx context.Context, command string, opts ExecOptions) (ExecResult, error) {

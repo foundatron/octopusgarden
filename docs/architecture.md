@@ -159,6 +159,8 @@ package scenario
 import (
 	"context"
 	"errors"
+
+	"github.com/foundatron/octopusgarden/internal/limits"
 )
 
 var (
@@ -187,6 +189,10 @@ const (
 	GRPCSourceStatus  = "status"
 	GRPCSourceHeaders = "headers"
 )
+
+// MaxResponseBytes is the maximum bytes captured from response bodies and command output.
+// Re-exported from internal/limits for use within the scenario package.
+const MaxResponseBytes = limits.MaxResponseBytes
 
 // StepExecutor executes a single scenario step and returns its output.
 type StepExecutor interface {
