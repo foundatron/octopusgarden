@@ -3,18 +3,20 @@
 ## System Overview
 
 ```text
-Spec (markdown) ──→ Attractor Loop ──→ Generated Code ──→ Docker Build
-                        │                                      │
-                        │         (holdout wall)               ▼
-                        │                              Running Container
-                        │                                      │
-                        ◄──── Failure Feedback ◄──── Validator + LLM Judge
-                                                               │
-                                                    Satisfaction Score (0-100)
+Spec + Scenarios ──→ Preflight ──→ Attractor Loop ──→ Generated Code ──→ Docker Build
+                     (optional)        │    ▲                                  │
+                                       │    │ wonder/reflect                   ▼
+                                       │    │ (on stall)              Running Container
+                                       │                                      │
+                                       ◄──── Failure Feedback ◄──── Validator + LLM Judge
+                                                                              │
+                                                                   Satisfaction Score (0-100)
 ```
 
 The attractor loop generates code from a spec, builds it in Docker, validates it against holdout
 scenarios using an LLM judge, and iterates on failures until satisfaction converges above threshold.
+On stalls, the wonder/reflect cycle diagnoses root causes and generates surgical fixes. Model
+escalation starts cheap and upgrades when progress stalls.
 
 ## Repository Structure
 
@@ -34,7 +36,13 @@ octopusgarden/
 │   ├── attractor/                # Convergence loop
 │   │   ├── attractor.go          # Core loop, types, options
 │   │   ├── convergence.go        # Trend detection
-│   │   └── fileparse.go          # Parse LLM output into files, merge for patch mode
+│   │   ├── diagnosis.go          # Wonder/reflect two-phase stall recovery
+│   │   ├── escalation.go         # Model tier escalation (frugal ↔ primary)
+│   │   ├── fileparse.go          # Parse LLM output into files, merge for patch mode
+│   │   ├── languages.go          # Per-language templates (Go, Python, Node, Rust)
+│   │   ├── oscillation.go        # A→B→A→B oscillation detection (SHA-256 hashing)
+│   │   ├── prompts.go            # System prompt, feedback fidelity, steering text
+│   │   └── regression.go         # Per-scenario regression tracking
 │   ├── container/docker.go       # Build and run Docker containers
 │   ├── llm/                      # LLM client abstraction
 │   │   ├── client.go             # Client interface, request/response types
@@ -44,8 +52,16 @@ octopusgarden/
 │   │   ├── models.go             # Model registry, cost tracking
 │   │   └── prompt.go             # Prompt templates
 │   ├── gene/                     # Gene transfusion (scan, analyze, gene types)
-│   ├── lint/                     # Spec and scenario linting
-│   └── store/                    # SQLite run history (db.go, types.go)
+│   ├── lint/                     # Spec and scenario structural linting
+│   ├── preflight/                # LLM-based spec/scenario quality assessment
+│   │   ├── preflight.go          # Check(): spec clarity (goal, constraint, success)
+│   │   └── scenario.go           # CheckScenarios(): coverage, feasibility, isolation, chains
+│   ├── observability/            # OpenTelemetry tracing (OTLP/HTTP)
+│   │   └── setup.go              # InitTracer, TracingLLMClient, TracingContainerManager
+│   ├── view/                     # JSON view models for CLI output
+│   ├── store/                    # SQLite run history (db.go, types.go)
+│   ├── testutil/                 # Test helpers
+│   └── e2e/                      # End-to-end integration tests
 ├── examples/                     # Example specs and scenarios
 │   └── <name>/
 │       ├── spec.md               # Spec file
@@ -57,19 +73,24 @@ octopusgarden/
 
 ```text
 cmd/octog
-    ├── internal/attractor   (loop, convergence, fileparse)
+    ├── internal/attractor      (loop, convergence, diagnosis, escalation, oscillation, regression)
     │       ├── internal/llm
     │       ├── internal/spec
     │       └── internal/container
-    ├── internal/gene        (scan, analyze, gene types)
+    ├── internal/preflight      (spec clarity, scenario quality assessment)
+    │       └── internal/llm
+    ├── internal/gene           (scan, analyze, gene types)
     │       ├── internal/llm
     │       └── internal/spec
-    ├── internal/scenario    (loader, runner, judge)
+    ├── internal/scenario       (loader, runner, judge)
     │       └── internal/llm
-    ├── internal/llm         (client interface, anthropic, openai, models, prompts)
-    ├── internal/container   (docker build/run)
-    ├── internal/spec        (parser, types, summary)
-    └── internal/store       (sqlite)
+    ├── internal/lint           (spec + scenario structural linting)
+    ├── internal/observability  (OpenTelemetry tracing, instrumented wrappers)
+    ├── internal/llm            (client interface, anthropic, openai, models, prompts)
+    ├── internal/container      (docker build/run, sessions, multi-port)
+    ├── internal/spec           (parser, types, summary)
+    ├── internal/view           (JSON view models for CLI output)
+    └── internal/store          (sqlite)
 ```
 
 Key constraint: `internal/attractor` never imports `internal/scenario`. The attractor receives spec
@@ -535,22 +556,34 @@ type RunResult struct {
 ### Loop Pseudocode
 
 ```text
-1. If ContextBudget > 0 and spec exceeds budget, summarize spec (pyramid summaries)
-2. For iter = 1 to MaxIterations:
+0. Preflight: run spec clarity check (unless --skip-preflight); abort if below threshold
+1. If FrugalModel is set, init escalation state (start at frugal tier)
+2. If ContextBudget > 0 and spec exceeds budget, summarize spec (pyramid summaries)
+3. For iter = 1 to MaxIterations:
    a. Check budget
-   b. Select spec content (full or summarized with failure-relevant sections expanded)
-   c. Build messages:
+   b. Check escalation: upgrade frugal→primary after 2 non-improving, downgrade after 5 improving
+   c. Select spec content (full or summarized with failure-relevant sections expanded)
+   d. Build messages:
       - Normal mode: spec only (iter 1) or spec + last 3 failure summaries (iter N>1)
       - Patch mode (iter 2+ with bestFiles): previous best files + failures
-   d. Call LLM: generate code
-   e. Parse LLM output into files (=== FILE: path === ... === END FILE ===)
-   f. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
-   g. Write files to workspace/{run_id}/iter_{n}/
-   h. docker build → docker run → wait for health check → call validate(ctx, url)
-   i. If satisfaction >= threshold → return "converged"
-   j. Track improvement/stalls; patch mode: disable after 2 consecutive regressions
-   k. If stall count >= stall limit → return "stalled"
-3. Return "max_iterations"
+   e. Apply minimalism suffix when last score > 80% (discourage over-engineering)
+   f. Inject oscillation steering when A→B→A→B hash pattern detected
+   g. Generate code:
+      - If stalling → wonder/reflect two-phase process (see below)
+      - Otherwise → normal single-call generation
+   h. Parse LLM output into files (=== FILE: path === ... === END FILE ===)
+   i. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
+   j. Record SHA-256 hash of file set (for oscillation detection)
+   k. Write files to workspace/{run_id}/iter_{n}/
+   l. docker build → docker run → wait for health check
+   m. Run test command if configured (non-zero exit → test_fail)
+   n. call validate(ctx, url) → satisfaction, failures
+   o. Detect per-scenario regressions (score dropped below threshold since last validation)
+   p. If satisfaction >= threshold and no regressions blocking → return "converged"
+   q. Determine feedback fidelity: compact (iter 1-2) → standard (3-4) → full (5+)
+   r. Track improvement/stalls; patch mode: disable after 2 consecutive regressions
+   s. If stall count >= stall limit → return "stalled"
+4. Return "max_iterations"
 ```
 
 ### Progress Reporting
@@ -639,19 +672,118 @@ random host port assignment. Health check polls `GET /` every 1s for up to the c
 `StopFunc` returned by `Run` stops and removes the container using `context.Background()` to succeed
 even after caller context cancellation. `Close()` closes the underlying Docker client.
 
+`RunMultiPort()` starts a container exposing port 8080 (optional) plus additional ports (e.g.
+`50051/tcp` for gRPC). `StartSession()` creates a long-lived container running `sleep infinity` for
+exec-based scenarios; `Session.Exec()` runs commands inside it via `docker exec`.
+
+## Stall Recovery (Wonder/Reflect)
+
+When scenarios stall across consecutive iterations, the attractor switches from normal generation to
+a two-phase wonder/reflect process:
+
+1. **Wonder phase** — Uses the judge model (or primary model as fallback) at high temperature (0.8)
+   to diagnose why attempts are failing. Receives score history, recent failures, and best generated
+   code. Oscillation detection data is included when the last 4 code hashes form an A→B→A→B pattern.
+   Output: a structured `Diagnosis` with hypotheses, root causes, and a suggested approach.
+
+2. **Reflect phase** — Uses the primary model at low temperature (0.4) to generate a new
+   implementation based on the diagnosis. When the score is already above 80%, a minimalism
+   instruction discourages over-engineering.
+
+If either phase fails (non-context-cancellation errors), the loop falls back to normal generation
+gracefully.
+
+### Oscillation Detection
+
+`hashFiles()` computes a deterministic SHA-256 of each iteration's file set. `detectOscillation()`
+returns true when the last 4 hashes form an A→B→A→B pattern (or the degenerate A==A==A==A case),
+signaling the LLM is alternating between two solutions without progress. When detected, steering text
+is injected into the generation prompt and included in the wonder phase input.
+
+## Model Escalation
+
+When `--frugal-model` is set, the attractor starts at the frugal (cheaper) tier and manages
+automatic escalation:
+
+- **Escalate** (frugal → primary): after 2 consecutive non-improving iterations
+- **Downgrade** (primary → frugal): after 5 consecutive improving iterations
+
+The `escalationState` struct tracks consecutive failures and improvements. `recordOutcome()` is
+called after each iteration with whether satisfaction strictly improved. When escalation is disabled
+(no `--frugal-model`), the primary model is used throughout.
+
+## Feedback Fidelity
+
+Validation feedback sent to the LLM is scaled by iteration to balance cost and signal:
+
+| Level      | Iterations | Max bytes | Detail                                     |
+| ---------- | ---------- | --------- | ------------------------------------------ |
+| `compact`  | 1–2        | 4 KB      | Scenario summary lines only                |
+| `standard` | 3–4        | 12 KB     | Failing step detail, observed truncated    |
+| `full`     | 5+         | 24 KB     | All step detail, full observed output      |
+
+Stalls escalate fidelity by one level (e.g. compact → standard after 2 consecutive stalls).
+
+## Per-Scenario Regression Tracking
+
+After each validated iteration, `detectRegressions()` compares per-scenario scores against the
+previous snapshot. A regression is recorded when a scenario was at or above the convergence threshold
+in the prior iteration but drops below it in the current one. Regressions are injected as feedback
+entries for the next iteration.
+
+When `--block-on-regression` is set, the attractor will not converge even if the aggregate
+satisfaction exceeds the threshold, as long as any scenario has regressed.
+
+## Preflight
+
+`octog preflight` (and the integrated check in `octog run`) assesses spec and scenario quality
+before the attractor loop begins.
+
+### Spec Check (`preflight.Check`)
+
+Three dimensions, each scored 0.0–1.0:
+
+- **Goal clarity** (weight 0.4) — Does the spec define WHAT the software should do?
+- **Constraint clarity** (weight 0.3) — Does it define HOW (interfaces, constraints)?
+- **Success clarity** (weight 0.3) — Does it define verification criteria?
+
+Aggregate = weighted sum. Below threshold → error with clarifying questions. Verbose mode shows
+per-dimension strengths and gaps.
+
+### Scenario Check (`preflight.CheckScenarios`)
+
+Four dimensions, each scored 0.0–1.0 (unweighted average):
+
+- **Coverage** — Do scenarios exercise all spec behaviors?
+- **Feasibility** — Are scenarios executable as written?
+- **Isolation** — Does each scenario test one coherent behavior?
+- **Chains** — Are multi-step variable captures and substitutions correct?
+
+Returns per-scenario issues with dimension and actionable detail.
+
+## Observability
+
+OpenTelemetry tracing is enabled via `--otel-endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT` env var).
+`observability.InitTracer()` creates an OTLP/HTTP exporter with a batch span processor. Empty
+endpoint returns a noop provider (zero overhead).
+
+Instrumented wrappers (`TracingLLMClient`, `TracingContainerManager`) create spans around LLM calls,
+container operations, and the attractor loop. The service name is `octog`.
+
 ## CLI Interface
 
 ```text
-octog run       --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--context-budget 0] [--provider anthropic|openai]
-octog extract   --source-dir <path> [--output genes.json] [--model ...] [--provider anthropic|openai]
-octog validate  --scenarios <dir> --target <url> [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [--provider anthropic|openai]
-octog status    [--format text|json]
-octog lint      --spec <path> --scenarios <dir>
-octog models    [--provider anthropic|openai]
+octog run        --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--frugal-model ...] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--block-on-regression] [--context-budget 0] [--otel-endpoint ...] [--skip-preflight] [--preflight-threshold 0.8] [-v 0|1|2] [--provider anthropic|openai]
+octog validate   --scenarios <dir> --target <url> [--grpc-target host:port] [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [-v 0|1|2] [--provider anthropic|openai]
+octog preflight  [--judge-model claude-haiku-4-5] [--threshold 0.8] [--verbose] [--scenarios <dir>] <spec-path>
+octog status     [--format text|json]
+octog lint       [--spec <path>] [--scenarios <dir>]
+octog extract    --source-dir <path> [--output genes.json] [--model ...] [--provider anthropic|openai]
+octog models     [--provider anthropic|openai]
 octog configure
 ```
 
-Subcommands: `run`, `validate`, `status`, `extract`, `lint`, `models`, `configure`.
+Subcommands: `run`, `validate`, `preflight`, `status`, `lint`, `extract`, `models`, `configure`.
 
 Provider is auto-detected from which API key is set. Use `--provider` to disambiguate when both are
 present. Config file (`~/.octopusgarden/config`) supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`;
