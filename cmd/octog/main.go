@@ -650,6 +650,11 @@ type modelLister interface {
 	ListModels(ctx context.Context) ([]llm.AvailableModel, error)
 }
 
+var (
+	_ modelLister = (*llm.AnthropicClient)(nil)
+	_ modelLister = (*llm.OpenAIClient)(nil)
+)
+
 func modelsCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("models", flag.ContinueOnError)
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")

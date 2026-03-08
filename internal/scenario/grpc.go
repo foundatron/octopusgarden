@@ -23,6 +23,8 @@ import (
 const defaultGRPCTimeout = 30 * time.Second
 
 var (
+	_ StepExecutor = (*GRPCExecutor)(nil)
+
 	errGRPCMissingService  = errors.New("grpc step missing required field: service")
 	errGRPCMissingMethod   = errors.New("grpc step missing required field: method")
 	errGRPCNotAService     = errors.New("resolved name is not a service")

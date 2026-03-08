@@ -16,6 +16,8 @@ import (
 const defaultBrowserTimeout = 10 * time.Second
 
 var (
+	_ StepExecutor = (*BrowserExecutor)(nil)
+
 	errInvalidBrowserAction = errors.New("invalid browser action")
 	errNavigateRequiresURL  = errors.New("navigate action requires url")
 	errClickRequiresSelect  = errors.New("click action requires selector")

@@ -19,7 +19,11 @@ const (
 	wsMessageBufferCap      = 1000
 )
 
-var errWSConnNotFound = errors.New("ws connection not found for id")
+var (
+	errWSConnNotFound = errors.New("ws connection not found for id")
+
+	_ StepExecutor = (*WSExecutor)(nil)
+)
 
 // WSExecutor executes WebSocket steps.
 // Each WSExecutor instance is per-scenario (not shared across concurrent runs).
