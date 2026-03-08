@@ -40,7 +40,8 @@ const stepPassThreshold = 80
 
 var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
-	errScenariosAndTargetRequired = errors.New("--scenarios and --target are required")
+	errScenariosAndTargetRequired = errors.New("--scenarios and either --target or --code are required")
+	errCodeAndTargetConflict      = errors.New("--code and --target are mutually exclusive")
 	errMissingAnthropicKey        = errors.New("ANTHROPIC_API_KEY not set (use env var or ~/.octopusgarden/config)")
 	errMissingOpenAIKey           = errors.New("OPENAI_API_KEY not set (use env var or ~/.octopusgarden/config)")
 	errNoAPIKey                   = errors.New("no API key found: set ANTHROPIC_API_KEY or OPENAI_API_KEY (or use ~/.octopusgarden/config)")
@@ -477,16 +478,33 @@ func applyModelDefaults(model, judgeModel *string, provider string) {
 	}
 }
 
-func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error {
+// validateFlags holds parsed flags for the validate subcommand.
+type validateFlags struct {
+	scenarios     string
+	target        string
+	code          string
+	healthTimeout time.Duration
+	grpcTarget    string
+	provider      string
+	judgeModel    string
+	threshold     float64
+	format        string
+	verbose       int
+}
+
+func parseValidateFlags(args []string) (validateFlags, error) {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
-	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory (required)")
-	target := fs.String("target", "", "target URL to validate against (required)")
-	grpcTarget := fs.String("grpc-target", "", "gRPC target (host:port) to validate against (required for gRPC scenarios)")
-	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
-	judgeModel := fs.String("judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
-	threshold := fs.Float64("threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
-	format := fs.String("format", "text", "output format: text or json")
-	verbose := fs.Int("v", 0, "verbosity level: 0=standard, 1=per-scenario summary, 2=full step detail with judge reasoning")
+	vf := validateFlags{}
+	fs.StringVar(&vf.scenarios, "scenarios", "", "path to scenarios directory (required)")
+	fs.StringVar(&vf.target, "target", "", "target URL to validate against")
+	fs.StringVar(&vf.code, "code", "", "path to directory with Dockerfile; manages container lifecycle with restart between scenarios")
+	fs.DurationVar(&vf.healthTimeout, "health-timeout", 30*time.Second, "container health check timeout (used with --code)")
+	fs.StringVar(&vf.grpcTarget, "grpc-target", "", "gRPC target (host:port) to validate against (required for gRPC scenarios)")
+	fs.StringVar(&vf.provider, "provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+	fs.StringVar(&vf.judgeModel, "judge-model", "", "LLM model for satisfaction judging (default: provider-specific)")
+	fs.Float64Var(&vf.threshold, "threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
+	fs.StringVar(&vf.format, "format", "text", "output format: text or json")
+	fs.IntVar(&vf.verbose, "v", 0, "verbosity level: 0=standard, 1=per-scenario summary, 2=full step detail with judge reasoning")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog validate [flags]\n\nFlags:\n")
@@ -494,58 +512,141 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 	}
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return validateFlags{}, err
 	}
 
-	if *format != "text" && *format != "json" {
-		return errInvalidFormat
+	if vf.format != "text" && vf.format != "json" {
+		return validateFlags{}, errInvalidFormat
 	}
-
-	if *scenariosFlag == "" || *target == "" {
+	if vf.code != "" && vf.target != "" {
+		return validateFlags{}, errCodeAndTargetConflict
+	}
+	if vf.scenarios == "" || (vf.target == "" && vf.code == "") {
 		fs.Usage()
-		return errScenariosAndTargetRequired
+		return validateFlags{}, errScenariosAndTargetRequired
 	}
 
-	// Create LLM client (resolves provider) and apply judge model default.
-	clients, err := newLLMClient(*provider, logger)
+	return vf, nil
+}
+
+func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error {
+	vf, err := parseValidateFlags(args)
 	if err != nil {
 		return err
 	}
-	if *judgeModel == "" {
-		*judgeModel = defaultJudgeModel(clients.provider)
+
+	clients, err := newLLMClient(vf.provider, logger)
+	if err != nil {
+		return err
+	}
+	if vf.judgeModel == "" {
+		vf.judgeModel = defaultJudgeModel(clients.provider)
 	}
 
-	if err := validateJudgeFlags(*threshold, *judgeModel); err != nil {
+	if err := validateJudgeFlags(vf.threshold, vf.judgeModel); err != nil {
 		return err
 	}
 
-	scenarios, err := scenario.LoadDir(*scenariosFlag)
+	scenarios, err := scenario.LoadDir(vf.scenarios)
 	if err != nil {
 		return fmt.Errorf("load scenarios: %w", err)
 	}
 
-	// Exec steps are not supported when validating against an external --target;
-	// the nil session causes exec steps to run locally (no container).
 	caps := detectCapabilities(scenarios)
-	if caps.NeedsGRPC && *grpcTarget == "" {
+	if caps.NeedsGRPC && vf.grpcTarget == "" {
 		logger.Warn("scenarios contain gRPC steps but --grpc-target is not set; gRPC steps will fail")
 	}
-	if len(scenarios) > 1 {
-		logger.Warn("validating multiple scenarios against --target without container restart; state may accumulate between scenarios")
+
+	var targetURL string
+	var restartFn attractor.RestartFunc
+
+	if vf.code != "" {
+		cs, csErr := setupValidateContainer(ctx, logger, vf.code, vf.healthTimeout)
+		if csErr != nil {
+			return csErr
+		}
+		defer cs.cleanup()
+		targetURL = cs.url
+		restartFn = cs.restart
+	} else {
+		targetURL = vf.target
+		if len(scenarios) > 1 {
+			logger.Warn("validating multiple scenarios against --target without container restart; state may accumulate between scenarios")
+		}
 	}
+
 	agg, err := runAndScore(ctx, scenarios, executorOpts{
-		targetURL:     *target,
+		targetURL:     targetURL,
 		logger:        logger,
 		sessionGetter: func() *container.Session { return nil },
 		needsBrowser:  caps.NeedsBrowser,
 		needsWS:       caps.NeedsWS,
-		grpcTarget:    *grpcTarget,
-	}, clients.client, *judgeModel, nil)
+		grpcTarget:    vf.grpcTarget,
+	}, clients.client, vf.judgeModel, restartFn)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
 
-	return outputValidation(agg, *target, *threshold, *format, *verbose, os.Stdout)
+	return outputValidation(agg, targetURL, vf.threshold, vf.format, vf.verbose, os.Stdout)
+}
+
+// validateContainerState holds a running container's URL, restart function, and cleanup.
+type validateContainerState struct {
+	url     string
+	restart attractor.RestartFunc
+	cleanup func()
+}
+
+// setupValidateContainer builds, starts, and health-checks a container for validate --code.
+func setupValidateContainer(ctx context.Context, logger *slog.Logger, codeDir string, healthTimeout time.Duration) (validateContainerState, error) {
+	mgr, err := container.NewManager(logger)
+	if err != nil {
+		return validateContainerState{}, fmt.Errorf("validate: create container manager: %w", err)
+	}
+
+	tag := fmt.Sprintf("octog-validate-%d", time.Now().UnixNano())
+	if err := mgr.Build(ctx, codeDir, tag); err != nil {
+		_ = mgr.Close()
+		return validateContainerState{}, fmt.Errorf("validate: build container: %w", err)
+	}
+
+	runRes, stop, err := mgr.Run(ctx, tag)
+	if err != nil {
+		_ = mgr.Close()
+		return validateContainerState{}, fmt.Errorf("validate: run container: %w", err)
+	}
+
+	if err := mgr.WaitHealthy(ctx, runRes.URL, healthTimeout); err != nil {
+		stop()
+		_ = mgr.Close()
+		return validateContainerState{}, fmt.Errorf("validate: health check: %w", err)
+	}
+
+	currentStop := stop
+	restartFn := func(restartCtx context.Context) (string, error) {
+		currentStop()
+		currentStop = func() {}
+		newRes, newStop, rErr := mgr.Run(restartCtx, tag)
+		if rErr != nil {
+			return "", fmt.Errorf("validate: restart container: %w", rErr)
+		}
+		currentStop = newStop
+		if hErr := mgr.WaitHealthy(restartCtx, newRes.URL, healthTimeout); hErr != nil {
+			newStop()
+			currentStop = func() {}
+			return "", fmt.Errorf("validate: restart health check: %w", hErr)
+		}
+		return newRes.URL, nil
+	}
+
+	return validateContainerState{
+		url:     runRes.URL,
+		restart: restartFn,
+		cleanup: func() {
+			currentStop()
+			_ = mgr.Close()
+		},
+	}, nil
 }
 
 func outputValidation(agg scenario.AggregateResult, target string, threshold float64, format string, verbosity int, w io.Writer) error {

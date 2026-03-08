@@ -620,6 +620,28 @@ func TestValidateCmdInvalidFormat(t *testing.T) {
 	}
 }
 
+func TestValidateCmdCodeAndTargetConflict(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := validateCmd(ctx, logger, []string{
+		"--scenarios", "s/", "--target", "http://localhost:1", "--code", "/some/dir",
+	})
+	if !errors.Is(err, errCodeAndTargetConflict) {
+		t.Errorf("validateCmd(--code + --target) = %v, want %v", err, errCodeAndTargetConflict)
+	}
+}
+
+func TestValidateCmdMissingCodeAndTarget(t *testing.T) {
+	logger := testLogger()
+	ctx := context.Background()
+	err := validateCmd(ctx, logger, []string{
+		"--scenarios", "s/",
+	})
+	if !errors.Is(err, errScenariosAndTargetRequired) {
+		t.Errorf("validateCmd(no --target, no --code) = %v, want %v", err, errScenariosAndTargetRequired)
+	}
+}
+
 func TestStatusCmdInvalidFormat(t *testing.T) {
 	logger := testLogger()
 	ctx := context.Background()
