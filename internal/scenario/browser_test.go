@@ -3,10 +3,70 @@ package scenario
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestIsTransientCDPError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"unrelated", errors.New("connection refused"), false},
+		{"context lost", errors.New("Cannot find context with specified id"), true},
+		{"node lost", errors.New("No node with given id found"), true},
+		{"wrapped context lost", fmt.Errorf("run: %w", errors.New("Cannot find context")), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientCDPError(tt.err); got != tt.want {
+				t.Errorf("isTransientCDPError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildBrowserOutputTruncation(t *testing.T) {
+	// Build HTML that exceeds maxObservedHTML.
+	longHTML := strings.Repeat("a", maxObservedHTML+500)
+	out := buildBrowserOutput("http://localhost/", "text", longHTML, -1)
+
+	if !strings.Contains(out.Observed, "... (truncated)") {
+		t.Error("expected truncation marker in observed output")
+	}
+	// Full HTML should still be in capture sources.
+	if out.CaptureSources[BrowserSourceHTML] != longHTML {
+		t.Error("capture source HTML should contain full (untruncated) HTML")
+	}
+}
+
+func TestBuildBrowserOutputUTF8Truncation(t *testing.T) {
+	// Build HTML that has a multi-byte rune right at the truncation boundary.
+	// '€' is 3 bytes (0xE2 0x82 0xAC). Place it so the byte boundary splits it.
+	prefix := strings.Repeat("a", maxObservedHTML-1)
+	longHTML := prefix + "€" + strings.Repeat("b", 500)
+	out := buildBrowserOutput("http://localhost/", "text", longHTML, -1)
+
+	if !strings.Contains(out.Observed, "... (truncated)") {
+		t.Error("expected truncation marker")
+	}
+	// The observed output should be valid UTF-8.
+	observedHTML := strings.SplitN(out.Observed, "Page HTML:\n", 2)
+	if len(observedHTML) < 2 {
+		t.Fatal("could not find HTML section in observed output")
+	}
+	htmlPart := strings.TrimSuffix(observedHTML[1], "\n... (truncated)")
+	for _, r := range htmlPart {
+		if r == '\uFFFD' {
+			t.Error("found replacement character — truncation split a multi-byte rune")
+		}
+	}
+}
 
 func TestBrowserStepType(t *testing.T) {
 	step := Step{Browser: &BrowserRequest{Action: "navigate", URL: "/"}}

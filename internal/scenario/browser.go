@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 )
 
@@ -22,6 +22,7 @@ var (
 	errFillRequiresSelect   = errors.New("fill action requires selector")
 	errFillRequiresValue    = errors.New("fill action requires value")
 	errAssertRequiresSelect = errors.New("assert action requires selector")
+	errPageContextLost      = errors.New("page context lost after retries")
 )
 
 // BrowserExecutor executes browser automation steps using chromedp.
@@ -216,18 +217,66 @@ func (e *BrowserExecutor) doClick(ctx context.Context, req BrowserRequest) (Step
 		return StepOutput{}, fmt.Errorf("browser: click: %w", err)
 	}
 
-	var text, html, location string
-	err = chromedp.Run(ctx,
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.InnerHTML("body", &html, chromedp.ByQuery),
-		chromedp.Text("body", &text, chromedp.ByQuery),
-		chromedp.Location(&location),
-	)
-	if err != nil {
-		return StepOutput{}, fmt.Errorf("browser: click read: %w", err)
+	// Wait for form submission + redirect to complete. Server-rendered apps
+	// use POST → 303 redirect → GET, which needs time to round-trip through
+	// the server and for the browser to load the new page. Without this delay,
+	// the DOM read races against navigation and returns stale content.
+	select {
+	case <-ctx.Done():
+		return StepOutput{}, fmt.Errorf("browser: click wait: %w", ctx.Err())
+	case <-time.After(1 * time.Second):
 	}
 
-	return buildBrowserOutput(location, text, html, -1), nil
+	return e.readPageWithRetry(ctx, "click")
+}
+
+// isTransientCDPError returns true for Chrome DevTools Protocol errors that
+// indicate the page is mid-navigation (e.g., after a form submit triggers a
+// redirect). These are transient and resolve once navigation completes.
+func isTransientCDPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Cannot find context") ||
+		strings.Contains(msg, "No node with given id")
+}
+
+// readPageWithRetry reads DOM state, retrying on transient CDP errors that
+// occur when the page is mid-navigation (e.g. form submit → 303 redirect).
+func (e *BrowserExecutor) readPageWithRetry(ctx context.Context, action string) (StepOutput, error) {
+	const maxRetries = 5
+	const retryDelay = 200 * time.Millisecond
+
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, ctx.Err())
+			case <-time.After(retryDelay):
+			}
+		}
+
+		var text, html, location string
+		err := chromedp.Run(ctx,
+			chromedp.WaitReady("body", chromedp.ByQuery),
+			chromedp.InnerHTML("body", &html, chromedp.ByQuery),
+			chromedp.Text("body", &text, chromedp.ByQuery),
+			chromedp.Location(&location),
+		)
+		if err == nil {
+			return buildBrowserOutput(location, text, html, -1), nil
+		}
+
+		if !isTransientCDPError(err) {
+			return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, err)
+		}
+
+		e.Logger.Debug("page mid-navigation, retrying DOM read",
+			"action", action, "attempt", attempt+1, "max", maxRetries)
+	}
+
+	return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, errPageContextLost)
 }
 
 func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepOutput, error) {
@@ -245,31 +294,58 @@ func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepO
 		return StepOutput{}, fmt.Errorf("browser: fill: %w", err)
 	}
 
-	observed := fmt.Sprintf("URL: %s\nSelector: %s\nFilled value: %s\nPage content:\n%s",
-		location, req.Selector, inputValue, text)
+	out := buildBrowserOutput(location, text, html, -1)
+	// Prepend fill-specific info and add value capture source.
+	out.Observed = fmt.Sprintf("URL: %s\nSelector: %s\nFilled value: %s\n\n%s",
+		location, req.Selector, inputValue, out.Observed)
+	out.CaptureSources[BrowserSourceValue] = inputValue
 
-	return StepOutput{
-		Observed:    observed,
-		CaptureBody: text,
-		CaptureSources: map[string]string{
-			BrowserSourceText:     text,
-			BrowserSourceHTML:     html,
-			BrowserSourceLocation: location,
-			BrowserSourceValue:    inputValue,
-		},
-	}, nil
+	return out, nil
 }
 
 func (e *BrowserExecutor) doAssert(ctx context.Context, req BrowserRequest) (StepOutput, error) {
-	// Count matching elements.
-	var nodes []*cdp.Node
+	const maxRetries = 5
+	const retryDelay = 200 * time.Millisecond
+
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return StepOutput{}, fmt.Errorf("browser: assert: %w", ctx.Err())
+			case <-time.After(retryDelay):
+			}
+		}
+
+		out, err := e.doAssertOnce(ctx, req)
+		if err == nil {
+			return out, nil
+		}
+
+		if !isTransientCDPError(err) {
+			return StepOutput{}, err
+		}
+
+		e.Logger.Debug("page mid-navigation, retrying assert",
+			"attempt", attempt+1, "max", maxRetries)
+	}
+
+	return StepOutput{}, fmt.Errorf("browser: assert: %w", errPageContextLost)
+}
+
+func (e *BrowserExecutor) doAssertOnce(ctx context.Context, req BrowserRequest) (StepOutput, error) {
+	// Count matching elements using Evaluate to avoid chromedp.Nodes blocking
+	// when zero nodes match (Nodes waits for at least one, causing timeout on
+	// count=0 assertions like verifying an element was deleted).
+	var matchCount int
 	err := chromedp.Run(ctx,
-		chromedp.Nodes(req.Selector, &nodes, chromedp.ByQueryAll),
+		chromedp.Evaluate(
+			fmt.Sprintf(`document.querySelectorAll(%q).length`, req.Selector),
+			&matchCount,
+		),
 	)
 	if err != nil {
 		return StepOutput{}, fmt.Errorf("browser: assert query: %w", err)
 	}
-	matchCount := len(nodes)
 
 	// Get element text (from first match, if any).
 	var elemText, elemHTML, location string
@@ -330,8 +406,21 @@ func (e *BrowserExecutor) doAssert(ctx context.Context, req BrowserRequest) (Ste
 	}, nil
 }
 
+// maxObservedHTML caps the HTML included in observed output to avoid
+// excessive judge token usage while preserving document structure.
+const maxObservedHTML = 4000
+
 func buildBrowserOutput(location, text, html string, count int) StepOutput {
-	observed := fmt.Sprintf("URL: %s\nPage content:\n%s", location, text)
+	truncatedHTML := html
+	if len(truncatedHTML) > maxObservedHTML {
+		// Find last valid rune boundary to avoid splitting multi-byte UTF-8.
+		truncatedHTML = truncatedHTML[:maxObservedHTML]
+		for !utf8.ValidString(truncatedHTML) {
+			truncatedHTML = truncatedHTML[:len(truncatedHTML)-1]
+		}
+		truncatedHTML += "\n... (truncated)"
+	}
+	observed := fmt.Sprintf("URL: %s\nPage text:\n%s\n\nPage HTML:\n%s", location, text, truncatedHTML)
 
 	sources := map[string]string{
 		BrowserSourceText:     text,
