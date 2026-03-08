@@ -411,8 +411,16 @@ func (e *BrowserExecutor) doAssertOnce(ctx context.Context, req BrowserRequest) 
 	}, nil
 }
 
+// maxObservedHTML caps the HTML included in observed output to avoid
+// excessive judge token usage while preserving document structure.
+const maxObservedHTML = 4000
+
 func buildBrowserOutput(location, text, html string, count int) StepOutput {
-	observed := fmt.Sprintf("URL: %s\nPage content:\n%s", location, text)
+	truncatedHTML := html
+	if len(truncatedHTML) > maxObservedHTML {
+		truncatedHTML = truncatedHTML[:maxObservedHTML] + "\n... (truncated)"
+	}
+	observed := fmt.Sprintf("URL: %s\nPage text:\n%s\n\nPage HTML:\n%s", location, text, truncatedHTML)
 
 	sources := map[string]string{
 		BrowserSourceText:     text,
