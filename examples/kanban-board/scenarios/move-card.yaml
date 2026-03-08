@@ -25,7 +25,7 @@ steps:
     browser:
       action: click
       selector: "[data-card-id='{card_id}'] [data-testid='move-next']"
-    expect: "The card moves out of To Do."
+    expect: "After clicking, 'Deploy to prod' is no longer shown in the To Do column. It now appears in the In Progress column."
 
   - description: Verify card is no longer in To Do
     browser:
@@ -45,7 +45,7 @@ steps:
     browser:
       action: click
       selector: "[data-card-id='{card_id}'] [data-testid='move-next']"
-    expect: "The card moves out of In Progress."
+    expect: "After clicking, 'Deploy to prod' is no longer shown in the In Progress column. It now appears in the Done column."
 
   - description: Verify card is in Done
     browser:

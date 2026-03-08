@@ -21,7 +21,7 @@ steps:
     browser:
       action: click
       selector: "[data-testid='add-card-button']"
-    expect: "The form is submitted and the page refreshes."
+    expect: "After clicking, the page shows the card 'Write unit tests' in the To Do column."
 
   - description: Verify card appears in To Do column
     browser:

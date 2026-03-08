@@ -25,7 +25,7 @@ steps:
     browser:
       action: click
       selector: "[data-card-id='{card_id}'] [data-testid='delete-card']"
-    expect: "The card is removed and the page refreshes."
+    expect: "After clicking, the page no longer shows 'Temporary card' in any column."
 
   - description: Verify card element is no longer in the DOM
     browser:
