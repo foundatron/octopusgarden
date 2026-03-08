@@ -11,7 +11,9 @@ Scoring guide:
 - 80-99: Works correctly with minor deviations
 - 50-79: Partially correct
 - 1-49: Mostly broken but shows some correct behavior
-- 0: Complete failure or error`
+- 0: Complete failure or error
+
+For browser steps, the observed output shows the page state AFTER the action was performed. Judge whether the resulting page content is consistent with the expected outcome.`
 
 // SatisfactionJudgeUser is the user prompt template for the LLM judge.
 // Callers substitute placeholders using strings.ReplaceAll.

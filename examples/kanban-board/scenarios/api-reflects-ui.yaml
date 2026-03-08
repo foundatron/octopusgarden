@@ -21,10 +21,10 @@ steps:
     browser:
       action: click
       selector: "[data-testid='add-card-button']"
-    expect: "Form submitted and page refreshes."
+    expect: "After clicking, the page shows the card 'Sync test card' in the To Do column."
 
   - description: Verify card exists in the API
     request:
       method: GET
       path: /api/cards
-    expect: "Status 200. Response array contains at least one card with 'title' equal to 'Sync test card' and 'column' equal to 'todo'."
+    expect: "Status 200. Response array contains exactly one card with 'title' equal to 'Sync test card' and 'column' equal to 'todo'."

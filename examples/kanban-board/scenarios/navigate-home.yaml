@@ -30,3 +30,10 @@ steps:
       selector: "[data-column='done']"
       text: "Done"
     expect: "The Done column element exists and contains the text 'Done'."
+
+  - description: Verify columns appear in correct left-to-right order
+    browser:
+      action: assert
+      selector: "[data-column]"
+      count: 3
+    expect: "Exactly three data-column elements in the DOM. Their data-column attributes appear in this order: 'todo' first, 'in-progress' second, 'done' third."

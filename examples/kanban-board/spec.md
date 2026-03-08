@@ -24,6 +24,9 @@ attribute in the HTML.
 - `column` — string, one of `todo`, `in-progress`, `done`; default `todo`
 - `created_at` — ISO 8601 timestamp, generated server-side
 
+Data is stored in memory. Cards do not persist across server restarts. Cards are displayed in
+creation order within each column.
+
 ## HTML UI
 
 The application serves an HTML page at `GET /` that renders the Kanban board.
@@ -33,21 +36,27 @@ The application serves an HTML page at `GET /` that renders the Kanban board.
 - Page title: "Kanban Board" (in an `<h1>`)
 - Three columns displayed side by side, each with a heading showing the column name
 - Each column element has a `data-column` attribute set to the column slug
-- Each card shows its title and has a `data-card-id` attribute set to the card id
-- A form or input to create new cards with:
+- A form to create new cards with:
   - A text input with `data-testid="new-card-input"`
   - A submit button with `data-testid="add-card-button"`
-- Each card has a delete button with `data-testid="delete-card"`
-- Each card in "To Do" has a "Start" button with `data-testid="move-next"` to move it to "In
-  Progress"
-- Each card in "In Progress" has a "Done" button with `data-testid="move-next"` to move it to "Done"
+- Each card is rendered as an element with a `data-card-id` attribute set to the card id. Inside
+  each card element:
+  - The card title is displayed
+  - A delete button with `data-testid="delete-card"`
+  - If the card is in "To Do": a "Start" button with `data-testid="move-next"`
+  - If the card is in "In Progress": a "Done" button with `data-testid="move-next"`
+  - Cards in "Done" have no move button
 
 ### Behavior
 
-- Submitting the new card form creates a card in the "To Do" column and refreshes the view
-- Clicking "Start" or "Done" moves the card to the next column and refreshes the view
-- Clicking delete removes the card and refreshes the view
-- The page works without JavaScript (server-rendered with form submissions)
+All user actions (create, move, delete) use HTML `<form>` elements with `method="POST"`. No
+JavaScript is required.
+
+- Submitting the new card form creates a card in the "To Do" column and redirects back to the board
+- Clicking a card's "Start" or "Done" button submits a form that moves the card to the next column
+  and redirects back to the board
+- Clicking a card's delete button submits a form that removes the card and redirects back to the
+  board
 
 ## REST API
 
