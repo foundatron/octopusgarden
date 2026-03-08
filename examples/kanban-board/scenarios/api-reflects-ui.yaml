@@ -27,4 +27,4 @@ steps:
     request:
       method: GET
       path: /api/cards
-    expect: "Status 200. Response array contains at least one card with 'title' equal to 'Sync test card' and 'column' equal to 'todo'."
+    expect: "Status 200. Response array contains exactly one card with 'title' equal to 'Sync test card' and 'column' equal to 'todo'."

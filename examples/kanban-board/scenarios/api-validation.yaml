@@ -19,6 +19,14 @@ steps:
         title: ""
     expect: "Status 400. Response contains an error message about empty or missing title."
 
+  - description: Create card with title exceeding 200 characters
+    request:
+      method: POST
+      path: /api/cards
+      body:
+        title: "This title is intentionally over two hundred characters long to test the upper boundary of the title validation rule which says titles must be between one and two hundred characters inclusive and this exceeds that"
+    expect: "Status 400. Response contains an error message about title length."
+
   - description: Create a valid card for update tests
     request:
       method: POST

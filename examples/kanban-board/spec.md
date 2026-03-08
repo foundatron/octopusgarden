@@ -24,6 +24,9 @@ attribute in the HTML.
 - `column` — string, one of `todo`, `in-progress`, `done`; default `todo`
 - `created_at` — ISO 8601 timestamp, generated server-side
 
+Data is stored in memory. Cards do not persist across server restarts. Cards are displayed in
+creation order within each column.
+
 ## HTML UI
 
 The application serves an HTML page at `GET /` that renders the Kanban board.

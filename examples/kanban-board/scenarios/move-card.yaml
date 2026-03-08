@@ -27,6 +27,13 @@ steps:
       selector: "[data-card-id='{card_id}'] [data-testid='move-next']"
     expect: "The card moves out of To Do."
 
+  - description: Verify card is no longer in To Do
+    browser:
+      action: assert
+      selector: "[data-column='todo']"
+      text_absent: "Deploy to prod"
+    expect: "The To Do column no longer contains 'Deploy to prod'."
+
   - description: Verify card is in In Progress
     browser:
       action: assert

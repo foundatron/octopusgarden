@@ -27,12 +27,12 @@ steps:
       selector: "[data-card-id='{card_id}'] [data-testid='delete-card']"
     expect: "The card is removed and the page refreshes."
 
-  - description: Verify card is no longer visible
+  - description: Verify card element is no longer in the DOM
     browser:
       action: assert
-      selector: "[data-column='todo']"
-      text_absent: "Temporary card"
-    expect: "The To Do column no longer contains 'Temporary card'."
+      selector: "[data-card-id='{card_id}']"
+      count: 0
+    expect: "No element with data-card-id matching the deleted card exists on the page."
 
   - description: Verify card is gone from API
     request:
