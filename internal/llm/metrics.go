@@ -14,14 +14,17 @@ type usageMetrics struct {
 
 // log emits structured slog attributes for this metrics snapshot.
 // prefix distinguishes call types (e.g. "anthropic generate", "openai judge").
+// Info level gets a compact summary (model, cost, cache hit); Debug level gets full token breakdown.
 func (m *usageMetrics) log(logger *slog.Logger, prefix string) {
 	logger.Info(prefix,
 		"model", m.model,
+		"cost_usd", m.cost,
+		"cache_hit", m.cacheReadTokens > 0,
+	)
+	logger.Debug(prefix+" tokens",
 		"input_tokens", m.inputTokens,
 		"cache_creation_tokens", m.cacheCreationTokens,
 		"cache_read_tokens", m.cacheReadTokens,
 		"output_tokens", m.outputTokens,
-		"cost_usd", m.cost,
-		"cache_hit", m.cacheReadTokens > 0,
 	)
 }
