@@ -10,6 +10,7 @@ linters:
   enable:
     # Correctness
     - bodyclose       # HTTP response body must be closed
+    - depguard        # enforce internal package dependency boundaries
     - noctx           # net/http calls must pass context.Context
     - err113          # enforce sentinel errors / no inline errors.New()
     - errorlint       # find errors.Is/As misuse, non-wrapping comparisons
@@ -107,6 +108,27 @@ linters:
       errorf: true
       asserts: true
       comparison: true
+
+    depguard:
+      rules:
+        container-no-scenario:
+          list-mode: lax
+          files:
+            - "**/internal/container/**/*.go"
+          deny:
+            - pkg: github.com/foundatron/octopusgarden/internal/scenario
+              desc: "container must not import scenario (circular: scenario depends on container)"
+        llm-is-leaf:
+          list-mode: lax
+          files:
+            - "**/internal/llm/**/*.go"
+          deny:
+            - pkg: github.com/foundatron/octopusgarden/internal/attractor
+              desc: "llm is a leaf package and must not import attractor"
+            - pkg: github.com/foundatron/octopusgarden/internal/scenario
+              desc: "llm is a leaf package and must not import scenario"
+            - pkg: github.com/foundatron/octopusgarden/internal/container
+              desc: "llm is a leaf package and must not import container"
 
   exclusions:
     paths:

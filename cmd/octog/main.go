@@ -63,7 +63,7 @@ var (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel()}))
 
 	if err := loadConfig(logger); err != nil {
 		logger.Warn("failed to load config", "error", err)
@@ -108,6 +108,18 @@ func main() {
 		logger.Error(os.Args[1]+" failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+// parseLogLevel reads LOG_LEVEL from the environment and returns the
+// corresponding slog.Level. Defaults to Info on missing or invalid values.
+func parseLogLevel() slog.Level {
+	var level slog.Level
+	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
+		if err := level.UnmarshalText([]byte(lvl)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid LOG_LEVEL %q, using INFO\n", lvl)
+		}
+	}
+	return level
 }
 
 func printUsage() {
