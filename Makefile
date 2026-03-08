@@ -2,7 +2,7 @@
 
 BINARY := octog
 
-.PHONY: all help build test test-integration test-browser lint fmt generate clean docs docs-check
+.PHONY: all help build test test-integration test-browser coverage lint fmt generate clean docs docs-check
 
 all: build
 
@@ -21,6 +21,11 @@ test-integration: ## Run integration tests (no browser)
 
 test-browser: ## Run browser integration tests (requires Chrome)
 	go test -tags='integration browser' ./...
+
+coverage: ## Run tests with coverage and check threshold
+	go test -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out
+	@go tool cover -func=coverage.out | awk '/^total:/ { pct = $$3+0; if (pct < 50) { print "Coverage " $$3 " below 50% threshold"; exit 1 } }'
 
 lint: ## Run golangci-lint (full module)
 	golangci-lint run ./...
