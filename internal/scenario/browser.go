@@ -216,10 +216,16 @@ func (e *BrowserExecutor) doClick(ctx context.Context, req BrowserRequest) (Step
 		return StepOutput{}, fmt.Errorf("browser: click: %w", err)
 	}
 
-	// After a click that triggers form submission (server-rendered apps),
-	// the page may navigate via redirect. The old execution context becomes
-	// invalid before the new page loads. Retry the DOM read to ride out the
-	// navigation gap.
+	// Wait for form submission + redirect to complete. Server-rendered apps
+	// use POST → 303 redirect → GET, which needs time to round-trip through
+	// the server and for the browser to load the new page. Without this delay,
+	// the DOM read races against navigation and returns stale content.
+	select {
+	case <-ctx.Done():
+		return StepOutput{}, fmt.Errorf("browser: click wait: %w", ctx.Err())
+	case <-time.After(1 * time.Second):
+	}
+
 	return e.readPageWithRetry(ctx, "click")
 }
 
