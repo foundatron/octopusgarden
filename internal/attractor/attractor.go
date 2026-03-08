@@ -315,7 +315,7 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 	}
 
 	for iter := 1; iter <= opts.MaxIterations; iter++ {
-		a.logger.Info("iteration start", "run_id", s.runID, "iteration", iter, "cost_usd", s.totalCost, "best_satisfaction", s.bestSatisfaction)
+		a.logger.Debug("iteration start", "run_id", s.runID, "iteration", iter, "cost_usd", s.totalCost, "best_satisfaction", s.bestSatisfaction)
 
 		if s.budgetExceeded() {
 			result := s.result(iter-1, StatusBudgetExceeded)
@@ -442,11 +442,11 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 		return "", nil
 	}
 	s.totalCost += wonderResp.CostUSD
-	a.logger.Info("wonder phase complete", "iteration", iter, "cost_usd", wonderResp.CostUSD)
+	a.logger.Debug("wonder phase complete", "iteration", iter, "cost_usd", wonderResp.CostUSD)
 
 	// Check budget before proceeding to reflect phase.
 	if s.budgetExceeded() {
-		a.logger.Info("budget exceeded after wonder phase, skipping reflect", "iteration", iter)
+		a.logger.Debug("budget exceeded after wonder phase, skipping reflect", "iteration", iter)
 		return "", nil
 	}
 
@@ -480,7 +480,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 	s.totalCost += reflectResp.CostUSD
 	s.lastInputTokens = wonderResp.InputTokens + reflectResp.InputTokens
 	s.lastOutputTokens = wonderResp.OutputTokens + reflectResp.OutputTokens
-	a.logger.Info("reflect phase complete", "iteration", iter, "cost_usd", reflectResp.CostUSD)
+	a.logger.Debug("reflect phase complete", "iteration", iter, "cost_usd", reflectResp.CostUSD)
 
 	return reflectResp.Content, nil
 }
