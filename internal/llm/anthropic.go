@@ -36,53 +36,37 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger, opts ...option.Reque
 	}
 }
 
-// anthropicMetrics holds extracted token counts and cost from an Anthropic API response.
-type anthropicMetrics struct {
-	regularInput  int
-	cacheCreation int
-	cacheRead     int
-	output        int
-	cost          float64
-}
+// logUsage extracts token counts, calculates cost, logs structured metrics,
+// and returns a usageMetrics for the Anthropic API call.
+// The prefix distinguishes call types (e.g. "anthropic generate", "anthropic judge").
+func (c *AnthropicClient) logUsage(prefix, model string, usage anthropic.Usage) usageMetrics {
+	inputTokens := int(usage.InputTokens)
+	cacheCreationTokens := int(usage.CacheCreationInputTokens)
+	cacheReadTokens := int(usage.CacheReadInputTokens)
+	outputTokens := int(usage.OutputTokens)
 
-// logUsage extracts token counts, calculates cost, and logs structured metrics
-// for an Anthropic API call. The prefix distinguishes call types (e.g. "anthropic generate",
-// "anthropic judge").
-func (c *AnthropicClient) logUsage(prefix, model string, usage anthropic.Usage) anthropicMetrics {
-	cacheCreation := int(usage.CacheCreationInputTokens)
-	cacheRead := int(usage.CacheReadInputTokens)
-	regularInput := int(usage.InputTokens)
-	output := int(usage.OutputTokens)
-
-	cost, usingFallback := CalculateCost(model, regularInput, cacheCreation, cacheRead, output)
+	cost, usingFallback := CalculateCost(model, inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens)
 	if usingFallback {
 		c.logger.Warn("using fallback pricing for unknown model", "model", model)
 	}
 
-	c.logger.Info(prefix,
-		"model", model,
-		"input_tokens", regularInput,
-		"cache_creation_tokens", cacheCreation,
-		"cache_read_tokens", cacheRead,
-		"output_tokens", output,
-		"cost_usd", cost,
-		"cache_hit", cacheRead > 0,
-	)
-
-	return anthropicMetrics{
-		regularInput:  regularInput,
-		cacheCreation: cacheCreation,
-		cacheRead:     cacheRead,
-		output:        output,
-		cost:          cost,
+	m := usageMetrics{
+		model:               model,
+		inputTokens:         inputTokens,
+		cacheCreationTokens: cacheCreationTokens,
+		cacheReadTokens:     cacheReadTokens,
+		outputTokens:        outputTokens,
+		cost:                cost,
 	}
+	m.log(c.logger, prefix)
+	return m
 }
 
 // Generate calls the Anthropic Messages API to generate code.
 func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
-		maxTokens = 8192
+		maxTokens = defaultGenerateMaxTokens
 	}
 
 	// Build system prompt blocks.
@@ -138,9 +122,9 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 
 	return GenerateResponse{
 		Content:      content,
-		InputTokens:  m.regularInput + m.cacheCreation + m.cacheRead,
-		OutputTokens: m.output,
-		CacheHit:     m.cacheRead > 0,
+		InputTokens:  m.inputTokens + m.cacheCreationTokens + m.cacheReadTokens,
+		OutputTokens: m.outputTokens,
+		CacheHit:     m.cacheReadTokens > 0,
 		CostUSD:      m.cost,
 		FinishReason: string(resp.StopReason),
 	}, nil
@@ -192,7 +176,7 @@ func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRes
 
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(req.Model),
-		MaxTokens: 4096,
+		MaxTokens: defaultJudgeMaxTokens,
 		Messages:  messages,
 		System:    system,
 	}
