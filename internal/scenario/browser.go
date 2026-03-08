@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chromedp/chromedp"
 )
@@ -293,19 +294,13 @@ func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepO
 		return StepOutput{}, fmt.Errorf("browser: fill: %w", err)
 	}
 
-	observed := fmt.Sprintf("URL: %s\nSelector: %s\nFilled value: %s\nPage content:\n%s",
-		location, req.Selector, inputValue, text)
+	out := buildBrowserOutput(location, text, html, -1)
+	// Prepend fill-specific info and add value capture source.
+	out.Observed = fmt.Sprintf("URL: %s\nSelector: %s\nFilled value: %s\n\n%s",
+		location, req.Selector, inputValue, out.Observed)
+	out.CaptureSources[BrowserSourceValue] = inputValue
 
-	return StepOutput{
-		Observed:    observed,
-		CaptureBody: text,
-		CaptureSources: map[string]string{
-			BrowserSourceText:     text,
-			BrowserSourceHTML:     html,
-			BrowserSourceLocation: location,
-			BrowserSourceValue:    inputValue,
-		},
-	}, nil
+	return out, nil
 }
 
 func (e *BrowserExecutor) doAssert(ctx context.Context, req BrowserRequest) (StepOutput, error) {
@@ -418,7 +413,12 @@ const maxObservedHTML = 4000
 func buildBrowserOutput(location, text, html string, count int) StepOutput {
 	truncatedHTML := html
 	if len(truncatedHTML) > maxObservedHTML {
-		truncatedHTML = truncatedHTML[:maxObservedHTML] + "\n... (truncated)"
+		// Find last valid rune boundary to avoid splitting multi-byte UTF-8.
+		truncatedHTML = truncatedHTML[:maxObservedHTML]
+		for !utf8.ValidString(truncatedHTML) {
+			truncatedHTML = truncatedHTML[:len(truncatedHTML)-1]
+		}
+		truncatedHTML += "\n... (truncated)"
 	}
 	observed := fmt.Sprintf("URL: %s\nPage text:\n%s\n\nPage HTML:\n%s", location, text, truncatedHTML)
 
