@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +43,7 @@ func anthropicResponse(text string, inputTokens, cacheCreation, cacheRead, outpu
 }
 
 func TestAnthropicGenerate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		cacheCreation   int
@@ -74,6 +76,7 @@ func TestAnthropicGenerate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(anthropicResponse("generated code", 100, tt.cacheCreation, tt.cacheRead, 50)))
@@ -116,6 +119,7 @@ func TestAnthropicGenerate(t *testing.T) {
 }
 
 func TestAnthropicJudge(t *testing.T) {
+	t.Parallel()
 	judgeJSON := `{"score": 85, "reasoning": "mostly correct", "failures": ["minor issue"]}`
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +156,7 @@ func TestAnthropicJudge(t *testing.T) {
 }
 
 func TestAnthropicJudge_MalformedJSON(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(anthropicResponse("this is not valid json at all", 50, 0, 0, 30)))
@@ -180,6 +185,7 @@ func TestAnthropicJudge_MalformedJSON(t *testing.T) {
 }
 
 func TestCalculateCost(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		model         string
@@ -222,6 +228,7 @@ func TestCalculateCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, fallback := CalculateCost(tt.model, tt.regular, tt.cacheCreation, tt.cacheRead, tt.output)
 			if math.Abs(got-tt.wantUSD) > 0.001 {
 				t.Errorf("CalculateCost() = %f, want %f", got, tt.wantUSD)
@@ -234,6 +241,7 @@ func TestCalculateCost(t *testing.T) {
 }
 
 func TestCacheControlPropagation(t *testing.T) {
+	t.Parallel()
 	var capturedBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -280,6 +288,7 @@ func TestCacheControlPropagation(t *testing.T) {
 }
 
 func TestListModels(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -346,10 +355,11 @@ func TestListModels(t *testing.T) {
 // 529 "Overloaded" responses. With 48+ parallel judge calls during attractor
 // runs, we routinely hit this under burst traffic.
 func TestJudgeRetries529(t *testing.T) {
-	var attempts int
+	t.Parallel()
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts <= 2 {
+		n := attempts.Add(1)
+		if n <= 2 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(529)
 			w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))
@@ -377,7 +387,7 @@ func TestJudgeRetries529(t *testing.T) {
 	if resp.Score != 90 {
 		t.Errorf("score = %d, want 90", resp.Score)
 	}
-	if attempts != 3 {
-		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", attempts)
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
 	}
 }

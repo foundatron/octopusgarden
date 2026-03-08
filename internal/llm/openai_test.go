@@ -50,6 +50,7 @@ func newOpenAITestClient(serverURL string, zeroCost bool) *OpenAIClient {
 }
 
 func TestOpenAIGenerate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		content          string
@@ -130,6 +131,7 @@ func TestOpenAIGenerate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(openaiResponse(tt.content, tt.promptTokens, tt.completionTokens, tt.cachedTokens, tt.finishReason)))
@@ -169,6 +171,7 @@ func TestOpenAIGenerate(t *testing.T) {
 }
 
 func TestOpenAIGenerate_EmptySystemPrompt(t *testing.T) {
+	t.Parallel()
 	var capturedBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +211,7 @@ func TestOpenAIGenerate_EmptySystemPrompt(t *testing.T) {
 }
 
 func TestOpenAIJudge(t *testing.T) {
+	t.Parallel()
 	judgeJSON := `{"score": 85, "reasoning": "mostly correct", "failures": ["minor issue"]}`
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +246,7 @@ func TestOpenAIJudge(t *testing.T) {
 }
 
 func TestOpenAIJudge_MalformedJSON(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(openaiResponse("this is not valid json at all", 50, 30, 0, "stop")))
@@ -268,6 +273,7 @@ func TestOpenAIJudge_MalformedJSON(t *testing.T) {
 }
 
 func TestOpenAIGenerate_NoChoices(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{
 			"id":      "chatcmpl-test",
@@ -294,6 +300,7 @@ func TestOpenAIGenerate_NoChoices(t *testing.T) {
 }
 
 func TestOpenAIListModels(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -345,6 +352,7 @@ func TestOpenAIListModels(t *testing.T) {
 }
 
 func TestOpenAIGenerate_APIError(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
