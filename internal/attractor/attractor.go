@@ -600,7 +600,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		if err != nil {
 			return nil, err
 		}
-		if res.stalled != nil {
+		if res.stop == nil {
 			return res.stalled, nil
 		}
 		defer res.stop()

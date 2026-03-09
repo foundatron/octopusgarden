@@ -447,8 +447,8 @@ func (e *GRPCExecutor) startBackgroundStream(ctx context.Context, methodDesc pro
 	// Assign stream ID.
 	streamID := req.Stream.ID
 	if streamID == "" {
+		streamID = fmt.Sprintf("%d", e.bgCounter)
 		e.bgCounter++
-		streamID = fmt.Sprintf("bg-%d", e.bgCounter)
 	}
 
 	bg := &backgroundStream{done: make(chan struct{})}

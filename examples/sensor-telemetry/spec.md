@@ -49,9 +49,11 @@ service TelemetryService {
 
 ## Data Model
 
-- **Sensor**: `id` (string, generated), `name`, `type` (temperature|humidity|pressure), `location`
-- **Reading**: `sensor_id`, `value` (float64), `unit`, `timestamp`
-- **Stats**: `sensor_id`, `min`, `max`, `avg`, `count`
+- **Sensor**: `id` (string, generated), `name` (string), `type` (string:
+  "temperature"|"humidity"|"pressure"), `location` (string)
+- **Reading**: `sensor_id` (string), `value` (double), `unit` (string), `timestamp` (string, ISO
+  8601\)
+- **Stats**: `sensor_id` (string), `min` (double), `max` (double), `avg` (double), `count` (int64)
 
 ## Requirements
 
