@@ -624,12 +624,18 @@ func setupValidateContainer(ctx context.Context, logger *slog.Logger, codeDir st
 
 	runRes, stop, err := mgr.Run(ctx, tag)
 	if err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		mgr.RemoveImage(cleanupCtx, tag)
 		_ = mgr.Close()
 		return validateContainerState{}, fmt.Errorf("validate: run container: %w", err)
 	}
 
 	if err := mgr.WaitHealthy(ctx, runRes.URL, healthTimeout); err != nil {
 		stop()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		mgr.RemoveImage(cleanupCtx, tag)
 		_ = mgr.Close()
 		return validateContainerState{}, fmt.Errorf("validate: health check: %w", err)
 	}
@@ -656,6 +662,9 @@ func setupValidateContainer(ctx context.Context, logger *slog.Logger, codeDir st
 		restart: restartFn,
 		cleanup: func() {
 			currentStop()
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			mgr.RemoveImage(cleanupCtx, tag)
 			_ = mgr.Close()
 		},
 	}, nil

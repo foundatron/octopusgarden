@@ -20,6 +20,7 @@ import (
 	dockertypes "github.com/docker/docker/api/types"
 	dockerbuild "github.com/docker/docker/api/types/build"
 	dockercontainer "github.com/docker/docker/api/types/container"
+	dockerimage "github.com/docker/docker/api/types/image"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -53,6 +54,7 @@ type dockerAPI interface {
 	ContainerExecCreate(ctx context.Context, containerID string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error)
 	ContainerExecAttach(ctx context.Context, execID string, config dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error)
 	ContainerExecInspect(ctx context.Context, execID string) (dockercontainer.ExecInspect, error)
+	ImageRemove(ctx context.Context, imageID string, options dockerimage.RemoveOptions) ([]dockerimage.DeleteResponse, error)
 }
 
 // Compile-time check: *dockerclient.Client must implement dockerAPI.
@@ -209,6 +211,15 @@ func (m *Manager) Run(ctx context.Context, tag string) (RunResult, StopFunc, err
 	}
 	m.logger.Info("container started", "id", shortID, "url", containerURL)
 	return RunResult{URL: containerURL, ContainerID: containerID}, stopFn, nil
+}
+
+// RemoveImage removes a Docker image by tag. Errors are logged as warnings and not returned;
+// this is a best-effort cleanup operation.
+func (m *Manager) RemoveImage(ctx context.Context, tag string) {
+	_, err := m.docker.ImageRemove(ctx, tag, dockerimage.RemoveOptions{Force: false, PruneChildren: true})
+	if err != nil {
+		m.logger.Warn("container: remove image", "tag", tag, "error", err)
+	}
 }
 
 // stopAndRemove stops and forcibly removes a running container.
