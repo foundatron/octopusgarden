@@ -288,6 +288,15 @@ func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepO
 		chromedp.Clear(req.Selector, chromedp.ByQuery),
 		chromedp.SendKeys(req.Selector, req.Value, chromedp.ByQuery),
 		chromedp.Value(req.Selector, &inputValue, chromedp.ByQuery),
+		// Sync the HTML value attribute with the DOM property so captured
+		// HTML reflects the filled value (InnerHTML serializes attributes, not properties).
+		chromedp.ActionFunc(func(actionCtx context.Context) error {
+			return chromedp.Evaluate(
+				fmt.Sprintf(`document.querySelector(%q).setAttribute("value", document.querySelector(%q).value)`,
+					req.Selector, req.Selector),
+				nil,
+			).Do(actionCtx)
+		}),
 		chromedp.InnerHTML("body", &html, chromedp.ByQuery),
 		chromedp.Text("body", &text, chromedp.ByQuery),
 		chromedp.Location(&location),
