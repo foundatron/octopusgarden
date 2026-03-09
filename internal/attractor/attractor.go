@@ -635,7 +635,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	s.totalCost += valCost
 	s.lastFailures = failures
 
-	a.logger.Info("iteration result", "iteration", iter, "satisfaction", satisfaction, "failures", len(failures))
+	a.logIterationResult(iter, satisfaction, failures, s.opts.Threshold)
 
 	return a.processValidation(iter, satisfaction, failures, files, s)
 }
@@ -739,7 +739,8 @@ type grpcContainerResult struct {
 }
 
 // startGRPCContainer launches a container with gRPC port exposed and waits for readiness.
-// The caller must defer result.stop() when result.stalled is nil.
+// When startup fails, result.stop is nil and the container has already been stopped.
+// The caller must defer result.stop() only when result.stop is non-nil.
 func (a *Attractor) startGRPCContainer(ctx context.Context, iter int, tag string, caps ScenarioCapabilities, s *runState) (grpcContainerResult, error) {
 	runResult, stop, err := a.containerMgr.RunMultiPort(ctx, tag, []string{container.DefaultGRPCPort})
 	if err != nil {
@@ -783,6 +784,19 @@ func (a *Attractor) waitGRPCHealth(ctx context.Context, iter int, caps ScenarioC
 		}
 	}
 	return nil
+}
+
+func (a *Attractor) logIterationResult(iter int, satisfaction float64, failures []string, threshold float64) {
+	if satisfaction < threshold && len(failures) > 0 {
+		summaries := make([]string, 0, len(failures))
+		for _, f := range failures {
+			line, _, _ := strings.Cut(f, "\n")
+			summaries = append(summaries, line)
+		}
+		a.logger.Info("iteration result", "iteration", iter, "satisfaction", satisfaction, "failing", strings.Join(summaries, "; "))
+	} else {
+		a.logger.Info("iteration result", "iteration", iter, "satisfaction", satisfaction)
+	}
 }
 
 // processValidation handles post-validation logic: convergence, stall detection, checkpoint.

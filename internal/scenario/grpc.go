@@ -22,6 +22,10 @@ import (
 
 const defaultGRPCTimeout = 30 * time.Second
 
+// protoMarshaler emits zero-valued fields so the judge sees complete data
+// (e.g. {"count":"0","min":0} instead of {}).
+var protoMarshaler = protojson.MarshalOptions{EmitDefaultValues: true}
+
 var (
 	_ StepExecutor = (*GRPCExecutor)(nil)
 
@@ -191,7 +195,7 @@ func (e *GRPCExecutor) executeUnary(ctx context.Context, methodDesc protoreflect
 	err = e.conn.Invoke(ctx, fullMethod, inputMsg, outputMsg, grpc.Header(&headerMD))
 
 	st := status.Convert(err)
-	respJSON, _ := protojson.Marshal(outputMsg)
+	respJSON, _ := protoMarshaler.Marshal(outputMsg)
 
 	return buildGRPCOutput(req.Service, req.Method, "", st, headerMD, string(respJSON)), nil
 }
@@ -291,7 +295,7 @@ func (e *GRPCExecutor) executeClientStream(ctx context.Context, methodDesc proto
 	recvErr := stream.RecvMsg(outputMsg)
 
 	st := status.Convert(recvErr)
-	respJSON, _ := protojson.Marshal(outputMsg)
+	respJSON, _ := protoMarshaler.Marshal(outputMsg)
 	streamInfo := fmt.Sprintf("client-streaming, sent %d messages", len(req.Stream.Messages))
 
 	return buildGRPCOutput(req.Service, req.Method, streamInfo, st, headerMD, string(respJSON)), nil
@@ -374,7 +378,7 @@ func receiveMessages(ctx context.Context, stream grpc.ClientStream, methodDesc p
 		if err := stream.RecvMsg(outputMsg); err != nil {
 			return messages, err
 		}
-		respJSON, _ := protojson.Marshal(outputMsg)
+		respJSON, _ := protoMarshaler.Marshal(outputMsg)
 		messages = append(messages, string(respJSON))
 	}
 	return messages, nil
@@ -464,7 +468,7 @@ func (e *GRPCExecutor) startBackgroundStream(ctx context.Context, methodDesc pro
 				bg.mu.Unlock()
 				return
 			}
-			respJSON, _ := protojson.Marshal(outputMsg)
+			respJSON, _ := protoMarshaler.Marshal(outputMsg)
 			bg.mu.Lock()
 			bg.messages = append(bg.messages, string(respJSON))
 			bg.mu.Unlock()
@@ -540,10 +544,6 @@ loop:
 
 	captureBody := "[" + strings.Join(messages, ",") + "]"
 
-	var observed strings.Builder
-	fmt.Fprintf(&observed, "gRPC background stream %s: collected %d messages\n", streamID, len(messages))
-	fmt.Fprintf(&observed, "[%s]", strings.Join(messages, ", "))
-
 	// Derive gRPC status from background stream error if available.
 	grpcStatus := "OK"
 	bg.mu.Lock()
@@ -552,6 +552,11 @@ loop:
 		grpcStatus = st.Code().String()
 	}
 	bg.mu.Unlock()
+
+	var observed strings.Builder
+	fmt.Fprintf(&observed, "gRPC background stream %s: collected %d messages\n", streamID, len(messages))
+	fmt.Fprintf(&observed, "Status: %s\n", grpcStatus)
+	fmt.Fprintf(&observed, "[%s]", strings.Join(messages, ", "))
 
 	return StepOutput{
 		Observed:    observed.String(),
