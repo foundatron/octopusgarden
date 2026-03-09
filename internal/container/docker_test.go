@@ -20,6 +20,7 @@ import (
 	dockertypes "github.com/docker/docker/api/types"
 	dockerbuild "github.com/docker/docker/api/types/build"
 	dockercontainer "github.com/docker/docker/api/types/container"
+	dockerimage "github.com/docker/docker/api/types/image"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
@@ -37,6 +38,7 @@ type mockDockerAPI struct {
 	containerExecCreateFunc  func(ctx context.Context, containerID string, config dockercontainer.ExecOptions) (dockercontainer.ExecCreateResponse, error)
 	containerExecAttachFunc  func(ctx context.Context, execID string, config dockercontainer.ExecAttachOptions) (dockertypes.HijackedResponse, error)
 	containerExecInspectFunc func(ctx context.Context, execID string) (dockercontainer.ExecInspect, error)
+	imageRemoveFunc          func(ctx context.Context, imageID string, options dockerimage.RemoveOptions) ([]dockerimage.DeleteResponse, error)
 }
 
 func (m *mockDockerAPI) ImageBuild(ctx context.Context, buildContext io.Reader, options dockerbuild.ImageBuildOptions) (dockerbuild.ImageBuildResponse, error) {
@@ -82,6 +84,13 @@ func (m *mockDockerAPI) ContainerExecInspect(ctx context.Context, execID string)
 		return m.containerExecInspectFunc(ctx, execID)
 	}
 	return dockercontainer.ExecInspect{}, nil
+}
+
+func (m *mockDockerAPI) ImageRemove(ctx context.Context, imageID string, options dockerimage.RemoveOptions) ([]dockerimage.DeleteResponse, error) {
+	if m.imageRemoveFunc != nil {
+		return m.imageRemoveFunc(ctx, imageID, options)
+	}
+	return nil, nil
 }
 
 // roundTripFunc adapts a function to http.RoundTripper.
@@ -827,4 +836,45 @@ func TestSessionExecPassesEnv(t *testing.T) {
 	if !foundEnv {
 		t.Errorf("expected FOO=bar in exec env, got %v", gotConfig.Env)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// RemoveImage tests
+// ---------------------------------------------------------------------------
+
+func TestRemoveImage(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var gotImageID string
+		var gotOptions dockerimage.RemoveOptions
+		mock := &mockDockerAPI{
+			imageRemoveFunc: func(_ context.Context, imageID string, options dockerimage.RemoveOptions) ([]dockerimage.DeleteResponse, error) {
+				gotImageID = imageID
+				gotOptions = options
+				return nil, nil
+			},
+		}
+		m := newManager(mock, nil, newTestLogger())
+		m.RemoveImage(context.Background(), "test:latest")
+
+		if gotImageID != "test:latest" {
+			t.Errorf("ImageRemove called with %q, want %q", gotImageID, "test:latest")
+		}
+		if gotOptions.Force {
+			t.Error("expected Force=false")
+		}
+		if !gotOptions.PruneChildren {
+			t.Error("expected PruneChildren=true")
+		}
+	})
+
+	t.Run("error_does_not_propagate", func(t *testing.T) {
+		mock := &mockDockerAPI{
+			imageRemoveFunc: func(_ context.Context, _ string, _ dockerimage.RemoveOptions) ([]dockerimage.DeleteResponse, error) {
+				return nil, errors.New("image not found")
+			},
+		}
+		m := newManager(mock, nil, newTestLogger())
+		// Must not panic or propagate the error.
+		m.RemoveImage(context.Background(), "test:latest")
+	})
 }
