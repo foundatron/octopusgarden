@@ -1550,16 +1550,15 @@ func TestOutputValidationVerbosity(t *testing.T) {
 		noLines   []string
 	}{
 		{
-			name:      "v0 shows summary only",
+			name:      "v0 shows summary with reasoning",
 			verbosity: 0,
-			wantLines: []string{"failing-scenario", "Aggregate satisfaction: 55.0/100"},
-			noLines:   []string{"Step detail:", "expected 200 got 404"},
+			wantLines: []string{"failing-scenario", "Aggregate satisfaction: 55.0/100", "Reasoning: expected 200 got 404"},
+			noLines:   []string{"Step detail:"},
 		},
 		{
 			name:      "v1 shows per-scenario summary line",
 			verbosity: 1,
-			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "failing-scenario"},
-			noLines:   []string{"expected 200 got 404"},
+			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "failing-scenario", "Reasoning: expected 200 got 404"},
 		},
 		{
 			name:      "v2 shows full step detail with reasoning",

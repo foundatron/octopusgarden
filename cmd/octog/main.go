@@ -1312,6 +1312,9 @@ func fprintValidationResult(w io.Writer, agg scenario.AggregateResult) {
 				label = "FAIL"
 			}
 			_, _ = fmt.Fprintf(w, "    [%s]  %3d  %s\n", label, step.StepScore.Score, step.StepResult.Description)
+			if label == "FAIL" && step.StepScore.Reasoning != "" {
+				_, _ = fmt.Fprintf(w, "           Reasoning: %s\n", step.StepScore.Reasoning)
+			}
 		}
 	}
 
