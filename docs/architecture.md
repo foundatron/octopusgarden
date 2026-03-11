@@ -97,6 +97,118 @@ Key constraint: `internal/attractor` never imports `internal/scenario`. The attr
 content and failure feedback as strings. The validator (scenario runner + judge) is invoked by
 `cmd/octog`, not by the attractor. Store interaction is also owned by `cmd/octog`.
 
+## Package Scope Registry
+
+| Package | Purpose | Key Files | Dependencies |
+| ------- | ------- | --------- | ------------ |
+| `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go` | `llm`, `spec`, `container` |
+| `container` | Docker image build, container run, health check, exec sessions | `docker.go` | docker SDK |
+| `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go` | `llm` |
+| `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
+| `llm` | Model-agnostic LLM client, cost tracking, prompt templates | `client.go`, `anthropic.go`, `openai.go`, `models.go`, `json.go`, `prompt.go` | anthropic-sdk, openai-sdk |
+| `gene` | Scan exemplar codebases, LLM pattern extraction | `gene.go`, `scan.go`, `analyze.go` | `llm`, `spec` |
+| `preflight` | Pre-run quality assessment of specs and scenarios | `preflight.go`, `scenario.go` | `llm` |
+| `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go` | (none) |
+| `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
+| `store` | SQLite run/iteration persistence | `db.go`, `types.go` | modernc.org/sqlite |
+| `view` | JSON view models for CLI output | `*.go` | (none) |
+| `limits` | Shared constants (MaxResponseBytes) | `limits.go` | (none) |
+| `testutil` | Test helpers | `*.go` | (none) |
+| `e2e` | End-to-end integration tests | `*.go` | multiple |
+
+## Capabilities & Algorithms
+
+### Cap: Convergence Detection
+
+- **Status**: Implemented
+- **Files**: `attractor/convergence.go`
+- **Method**: Sliding-window trend classification (improving/plateau/regressing/converged) over satisfaction score history. Convergence = score >= threshold.
+- **Limitations**: Binary threshold with no prediction of iterations remaining. No Bayesian or curve-fitting estimation of convergence probability.
+
+### Cap: Oscillation Detection
+
+- **Status**: Implemented
+- **Files**: `attractor/oscillation.go`
+- **Method**: SHA-256 hash of each iteration's file set. Detects A-B-A-B pattern over last 4 hashes. Injects steering text when detected.
+- **Limitations**: Only detects period-2 oscillations. Longer cycles (period-3+) or near-miss oscillations (semantically equivalent but hash-different outputs) are invisible.
+
+### Cap: Stall Recovery
+
+- **Status**: Implemented
+- **Files**: `attractor/diagnosis.go`
+- **Method**: Two-phase LLM process: wonder (high temp, diagnose failures) then reflect (low temp, generate fix from diagnosis). Falls back to normal generation on failure.
+- **Limitations**: Single diagnosis attempt per stall. No ensemble of hypotheses, no automated hypothesis testing, no causal reasoning beyond what the LLM infers from context.
+
+### Cap: Model Escalation
+
+- **Status**: Implemented
+- **Files**: `attractor/escalation.go`
+- **Method**: Start at frugal tier, escalate to primary after 2 non-improving iterations, downgrade after 5 improving. Binary tier system.
+- **Limitations**: Only two tiers. No cost-aware routing based on task difficulty. No per-scenario model selection. No dynamic budget allocation across iterations.
+
+### Cap: LLM-as-Judge Scoring
+
+- **Status**: Implemented
+- **Files**: `scenario/judge.go`, `llm/prompt.go`, `llm/json.go`
+- **Method**: Each step scored independently by LLM (0-100 JSON response). Per-scenario = mean of step scores. Overall = weighted mean of scenario scores.
+- **Limitations**: No judge calibration or consistency checking. No reference-based scoring. No multi-judge consensus. Score variance across runs is uncharacterized.
+
+### Cap: Feedback Fidelity
+
+- **Status**: Implemented
+- **Files**: `attractor/prompts.go`
+- **Method**: Three tiers (compact/standard/full) scaling detail and byte limits by iteration number. Stalls escalate fidelity.
+- **Limitations**: Fixed tier boundaries. No adaptive selection based on failure type or information content. No ranking of which failures are most informative.
+
+### Cap: Spec Summarization
+
+- **Status**: Implemented
+- **Files**: `spec/summary.go`
+- **Method**: Multi-level pyramid (full, section summaries with expansion, outline, abstract, truncated). SelectContent picks richest representation within token budget.
+- **Limitations**: Summarization is static per spec. No failure-aware dynamic summarization that emphasizes sections most relevant to current failures (expansion is coarse-grained).
+
+### Cap: Gene Transfusion
+
+- **Status**: Implemented
+- **Files**: `gene/scan.go`, `gene/analyze.go`, `gene/gene.go`, `attractor/prompts.go`
+- **Method**: Scan exemplar codebase for high-signal files within 20K token budget. LLM extracts structured pattern guide. Injected into system prompt.
+- **Limitations**: Single exemplar only. No multi-repo synthesis. No incremental update as generated code evolves. Patterns are extracted once, not refined based on generation outcomes.
+
+### Cap: Regression Tracking
+
+- **Status**: Implemented
+- **Files**: `attractor/regression.go`
+- **Method**: Per-scenario score comparison between consecutive validated iterations. Regression = score drops below threshold after being at/above it. Injected as feedback.
+- **Limitations**: Only tracks threshold crossings, not gradual degradation. No root-cause attribution for regressions. No automatic rollback of regressive changes.
+
+### Cap: Preflight Quality Assessment
+
+- **Status**: Implemented
+- **Files**: `preflight/preflight.go`, `preflight/scenario.go`
+- **Method**: LLM-based scoring of spec clarity (goal/constraint/success) and scenario quality (coverage/feasibility/isolation/chains).
+- **Limitations**: Single-pass assessment. No iterative refinement suggestions. No automated spec or scenario repair.
+
+### Cap: Scenario Execution
+
+- **Status**: Implemented
+- **Files**: `scenario/runner.go`, `scenario/grpc.go`, step executors
+- **Method**: Sequential step execution with variable capture/substitution. Pluggable executors: HTTP, exec, browser (chromedp), gRPC (reflection), WebSocket. Setup steps fatal, judged steps non-fatal.
+- **Limitations**: Sequential execution only. No parallel step groups. No conditional branching. JSONPath is dot-notation only (no filters, array slicing, or recursive descent).
+
+## Known Gaps & Improvement Opportunities
+
+- **Convergence prediction**: Bayesian or GP-based models to estimate iterations-to-convergence and inform budget/model decisions early
+- **Judge calibration**: Reference-based scoring, multi-judge voting, or calibration sets to reduce score variance and improve reliability
+- **Cost-aware model routing**: Per-iteration difficulty estimation to dynamically select model tier (not just binary escalation)
+- **Oscillation breaking**: Detect period-3+ cycles; use semantic similarity (embeddings or AST diff) instead of exact hash matching
+- **Feedback selection**: Rank failures by information content or novelty; prioritize feedback that is most likely to drive improvement
+- **Search strategies**: Beam search (maintain N candidate solutions), tree-of-thought, or MCTS-style exploration instead of single-path iteration
+- **Incremental patching**: AST-level diff and merge instead of full-file regeneration to preserve working code and reduce token cost
+- **Spec-failure alignment**: Dynamically weight spec sections in the prompt based on which sections are causing current failures
+- **Multi-exemplar gene synthesis**: Combine patterns from multiple codebases; update gene guide based on generation outcomes
+- **Parallel scenario execution**: Run independent scenarios concurrently during validation for faster iteration cycles
+- **Automated spec repair**: Use preflight failures to suggest or auto-fix spec ambiguities before entering the attractor loop
+
 ## LLM Client Interface
 
 [embedmd]:# (../internal/llm/client.go go /^\/\/ Client is/ /^}/)
