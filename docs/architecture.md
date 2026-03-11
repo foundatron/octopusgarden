@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # Architecture
 
 ## System Overview
@@ -118,77 +120,77 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 
 ## Capabilities & Algorithms
 
-### Cap: Convergence Detection
+### Convergence Detection
 
 - **Status**: Implemented
 - **Files**: `attractor/convergence.go`
 - **Method**: Sliding-window trend classification (improving/plateau/regressing/converged) over satisfaction score history. Convergence = score >= threshold.
 - **Limitations**: Binary threshold with no prediction of iterations remaining. No Bayesian or curve-fitting estimation of convergence probability.
 
-### Cap: Oscillation Detection
+### Oscillation Detection
 
 - **Status**: Implemented
 - **Files**: `attractor/oscillation.go`
 - **Method**: SHA-256 hash of each iteration's file set. Detects A-B-A-B pattern over last 4 hashes. Injects steering text when detected.
 - **Limitations**: Only detects period-2 oscillations. Longer cycles (period-3+) or near-miss oscillations (semantically equivalent but hash-different outputs) are invisible.
 
-### Cap: Stall Recovery
+### Stall Recovery
 
 - **Status**: Implemented
 - **Files**: `attractor/diagnosis.go`
 - **Method**: Two-phase LLM process: wonder (high temp, diagnose failures) then reflect (low temp, generate fix from diagnosis). Falls back to normal generation on failure.
 - **Limitations**: Single diagnosis attempt per stall. No ensemble of hypotheses, no automated hypothesis testing, no causal reasoning beyond what the LLM infers from context.
 
-### Cap: Model Escalation
+### Model Escalation
 
 - **Status**: Implemented
 - **Files**: `attractor/escalation.go`
 - **Method**: Start at frugal tier, escalate to primary after 2 non-improving iterations, downgrade after 5 improving. Binary tier system.
 - **Limitations**: Only two tiers. No cost-aware routing based on task difficulty. No per-scenario model selection. No dynamic budget allocation across iterations.
 
-### Cap: LLM-as-Judge Scoring
+### LLM-as-Judge Scoring
 
 - **Status**: Implemented
 - **Files**: `scenario/judge.go`, `llm/prompt.go`, `llm/json.go`
 - **Method**: Each step scored independently by LLM (0-100 JSON response). Per-scenario = mean of step scores. Overall = weighted mean of scenario scores.
 - **Limitations**: No judge calibration or consistency checking. No reference-based scoring. No multi-judge consensus. Score variance across runs is uncharacterized.
 
-### Cap: Feedback Fidelity
+### Feedback Fidelity
 
 - **Status**: Implemented
 - **Files**: `attractor/prompts.go`
 - **Method**: Three tiers (compact/standard/full) scaling detail and byte limits by iteration number. Stalls escalate fidelity.
 - **Limitations**: Fixed tier boundaries. No adaptive selection based on failure type or information content. No ranking of which failures are most informative.
 
-### Cap: Spec Summarization
+### Spec Summarization
 
 - **Status**: Implemented
 - **Files**: `spec/summary.go`
 - **Method**: Multi-level pyramid (full, section summaries with expansion, outline, abstract, truncated). SelectContent picks richest representation within token budget.
 - **Limitations**: Summarization is static per spec. No failure-aware dynamic summarization that emphasizes sections most relevant to current failures (expansion is coarse-grained).
 
-### Cap: Gene Transfusion
+### Gene Transfusion
 
 - **Status**: Implemented
 - **Files**: `gene/scan.go`, `gene/analyze.go`, `gene/gene.go`, `attractor/prompts.go`
 - **Method**: Scan exemplar codebase for high-signal files within 20K token budget. LLM extracts structured pattern guide. Injected into system prompt.
 - **Limitations**: Single exemplar only. No multi-repo synthesis. No incremental update as generated code evolves. Patterns are extracted once, not refined based on generation outcomes.
 
-### Cap: Regression Tracking
+### Regression Tracking
 
 - **Status**: Implemented
 - **Files**: `attractor/regression.go`
 - **Method**: Per-scenario score comparison between consecutive validated iterations. Regression = score drops below threshold after being at/above it. Injected as feedback.
 - **Limitations**: Only tracks threshold crossings, not gradual degradation. No root-cause attribution for regressions. No automatic rollback of regressive changes.
 
-### Cap: Preflight Quality Assessment
+### Preflight Quality Assessment
 
 - **Status**: Implemented
 - **Files**: `preflight/preflight.go`, `preflight/scenario.go`
 - **Method**: LLM-based scoring of spec clarity (goal/constraint/success) and scenario quality (coverage/feasibility/isolation/chains).
 - **Limitations**: Single-pass assessment. No iterative refinement suggestions. No automated spec or scenario repair.
 
-### Cap: Scenario Execution
+### Scenario Execution
 
 - **Status**: Implemented
 - **Files**: `scenario/runner.go`, `scenario/grpc.go`, step executors
