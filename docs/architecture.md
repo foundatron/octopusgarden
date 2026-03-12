@@ -195,7 +195,8 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 - **Status**: Implemented
 - **Files**: `scenario/runner.go`, `scenario/grpc.go`, step executors
 - **Method**: Sequential step execution with variable capture/substitution. Pluggable executors: HTTP, exec, browser (chromedp), gRPC (reflection), WebSocket. Setup steps fatal, judged steps non-fatal.
-- **Limitations**: Sequential execution only. No parallel step groups. No conditional branching. JSONPath is dot-notation only (no filters, array slicing, or recursive descent).
+- **Parallelism**: `validate --parallel-scenarios N` runs up to N scenarios concurrently using a semaphore-bounded goroutine pool. Each goroutine owns its own `Runner`, `Judge`, and executor instances. Container restart is disabled when `N > 1` (scenarios share container state); use `--parallel-scenarios 1` (the default) when clean state between scenarios is required.
+- **Limitations**: Sequential steps within a scenario only. No parallel step groups. No conditional branching. JSONPath is dot-notation only (no filters, array slicing, or recursive descent).
 
 ## Known Gaps & Improvement Opportunities
 
@@ -208,7 +209,6 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 - **Incremental patching**: AST-level diff and merge instead of full-file regeneration to preserve working code and reduce token cost
 - **Spec-failure alignment**: Dynamically weight spec sections in the prompt based on which sections are causing current failures
 - **Multi-exemplar gene synthesis**: Combine patterns from multiple codebases; update gene guide based on generation outcomes
-- **Parallel scenario execution**: Run independent scenarios concurrently during validation for faster iteration cycles
 - **Automated spec repair**: Use preflight failures to suggest or auto-fix spec ambiguities before entering the attractor loop
 
 ## LLM Client Interface

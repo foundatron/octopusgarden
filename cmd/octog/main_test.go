@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,7 +92,7 @@ func TestRunAndScore(t *testing.T) {
 		targetURL:     srv.URL,
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001", nil)
+	}, mock, "claude-haiku-4-5-20251001", nil, 1)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestRunAndScoreSetupFailure(t *testing.T) {
 		targetURL:     "http://127.0.0.1:1",
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001", nil)
+	}, mock, "claude-haiku-4-5-20251001", nil, 1)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -319,7 +320,7 @@ func TestValidateThreshold(t *testing.T) {
 				targetURL:     srv.URL,
 				logger:        testLogger(),
 				sessionGetter: func() *container.Session { return nil },
-			}, mock, "claude-haiku-4-5-20251001", nil)
+			}, mock, "claude-haiku-4-5-20251001", nil, 1)
 			if err != nil {
 				t.Fatalf("runAndScore: %v", err)
 			}
@@ -1636,7 +1637,7 @@ func TestRunAndScoreSequentialOrder(t *testing.T) {
 		targetURL:     srv.URL,
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001", nil)
+	}, mock, "claude-haiku-4-5-20251001", nil, 1)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -1673,7 +1674,7 @@ func TestRunAndScoreRestartCalledBetweenScenarios(t *testing.T) {
 		targetURL:     srv.URL,
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001", restart)
+	}, mock, "claude-haiku-4-5-20251001", restart, 1)
 	if err != nil {
 		t.Fatalf("runAndScore: %v", err)
 	}
@@ -1707,7 +1708,7 @@ func TestRunAndScoreRestartErrorPropagation(t *testing.T) {
 		targetURL:     srv.URL,
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001", restart)
+	}, mock, "claude-haiku-4-5-20251001", restart, 1)
 	if err == nil {
 		t.Fatal("expected error from restart, got nil")
 	}
@@ -1732,11 +1733,238 @@ func TestRunAndScoreNilRestart(t *testing.T) {
 		targetURL:     srv.URL,
 		logger:        testLogger(),
 		sessionGetter: func() *container.Session { return nil },
-	}, mock, "claude-haiku-4-5-20251001", nil)
+	}, mock, "claude-haiku-4-5-20251001", nil, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(agg.Scenarios) != 2 {
 		t.Fatalf("expected 2 scenarios, got %d", len(agg.Scenarios))
+	}
+}
+
+func TestParseValidateFlagsParallelScenarios(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	t.Run("valid flag parsed", func(t *testing.T) {
+		vf, err := parseValidateFlags([]string{
+			"--scenarios", "testdata/scenarios",
+			"--target", srv.URL,
+			"--parallel-scenarios", "4",
+		})
+		if err != nil {
+			// Flag parsing is tested here; missing testdata dir is OK as long as flag is accepted.
+			if strings.Contains(err.Error(), "flag provided but not defined") {
+				t.Fatalf("--parallel-scenarios flag not recognized: %v", err)
+			}
+		} else if vf.parallelScenarios != 4 {
+			t.Errorf("expected parallelScenarios=4, got %d", vf.parallelScenarios)
+		}
+	})
+
+	t.Run("zero returns errInvalidParallelScenarios", func(t *testing.T) {
+		_, err := parseValidateFlags([]string{
+			"--scenarios", "testdata/scenarios",
+			"--target", srv.URL,
+			"--parallel-scenarios", "0",
+		})
+		if !errors.Is(err, errInvalidParallelScenarios) {
+			t.Errorf("expected errInvalidParallelScenarios, got: %v", err)
+		}
+	})
+}
+
+func TestRunAndScoreParallelMatchesSequential(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+		simpleScenario("s3"),
+	}
+
+	mock := &mockLLMClient{
+		judgeFn: func(_ context.Context, _ llm.JudgeRequest) (llm.JudgeResponse, error) {
+			return llm.JudgeResponse{Score: 75, CostUSD: 0.001}, nil
+		},
+	}
+	opts := executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}
+	const judgeModel = "claude-haiku-4-5-20251001"
+
+	seqAgg, err := runAndScore(context.Background(), scenarios, opts, mock, judgeModel, nil, 1)
+	if err != nil {
+		t.Fatalf("sequential runAndScore: %v", err)
+	}
+
+	parAgg, err := runAndScore(context.Background(), scenarios, opts, mock, judgeModel, nil, 3)
+	if err != nil {
+		t.Fatalf("parallel runAndScore: %v", err)
+	}
+
+	if len(seqAgg.Scenarios) != len(parAgg.Scenarios) {
+		t.Fatalf("scenario count mismatch: seq=%d par=%d", len(seqAgg.Scenarios), len(parAgg.Scenarios))
+	}
+	for i := range seqAgg.Scenarios {
+		if seqAgg.Scenarios[i].ScenarioID != parAgg.Scenarios[i].ScenarioID {
+			t.Errorf("scenario[%d] ID: seq=%q par=%q", i, seqAgg.Scenarios[i].ScenarioID, parAgg.Scenarios[i].ScenarioID)
+		}
+		if seqAgg.Scenarios[i].Score != parAgg.Scenarios[i].Score {
+			t.Errorf("scenario[%d] score: seq=%.1f par=%.1f", i, seqAgg.Scenarios[i].Score, parAgg.Scenarios[i].Score)
+		}
+	}
+	if seqAgg.Satisfaction != parAgg.Satisfaction {
+		t.Errorf("satisfaction: seq=%.1f par=%.1f", seqAgg.Satisfaction, parAgg.Satisfaction)
+	}
+}
+
+func TestRunAndScoreParallelContextCancellation(t *testing.T) {
+	// blocking channel: all goroutines will block until context is canceled.
+	block := make(chan struct{})
+
+	var callCount atomic.Int32
+	mock := &mockLLMClient{
+		judgeFn: func(ctx context.Context, _ llm.JudgeRequest) (llm.JudgeResponse, error) {
+			callCount.Add(1)
+			select {
+			case <-block:
+				return llm.JudgeResponse{Score: 90}, nil
+			case <-ctx.Done():
+				return llm.JudgeResponse{}, ctx.Err()
+			}
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// Cancel after judge calls have started.
+		for callCount.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+	}
+	_, err := runAndScore(ctx, scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001", nil, 2)
+	if err == nil {
+		t.Fatal("expected error from context cancellation, got nil")
+	}
+}
+
+func TestRunAndScoreParallelConcurrencyBound(t *testing.T) {
+	// Use a blocking channel inside a mock executor to verify that at most
+	// parallelism goroutines run concurrently. The mock LLM client blocks
+	// inside Judge until we release it, so we can count concurrent calls.
+	const parallelism = 2
+	const numScenarios = 4
+
+	var concurrent atomic.Int32
+	var maxConcurrent atomic.Int32
+	release := make(chan struct{})
+
+	mock := &mockLLMClient{
+		judgeFn: func(_ context.Context, _ llm.JudgeRequest) (llm.JudgeResponse, error) {
+			cur := concurrent.Add(1)
+			defer concurrent.Add(-1)
+
+			for {
+				prev := maxConcurrent.Load()
+				if cur <= prev || maxConcurrent.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+
+			<-release
+			return llm.JudgeResponse{Score: 90}, nil
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	scenarios := make([]scenario.Scenario, numScenarios)
+	for i := range scenarios {
+		scenarios[i] = simpleScenario(fmt.Sprintf("s%d", i+1))
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = runAndScore(context.Background(), scenarios, executorOpts{
+			targetURL:     srv.URL,
+			logger:        testLogger(),
+			sessionGetter: func() *container.Session { return nil },
+		}, mock, "claude-haiku-4-5-20251001", nil, parallelism)
+	}()
+
+	// Wait until parallelism goroutines are blocked inside Judge.
+	deadline := time.Now().Add(5 * time.Second)
+	for concurrent.Load() < parallelism && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if concurrent.Load() > parallelism {
+		t.Errorf("concurrent goroutines exceeded parallelism: got %d, want <= %d", concurrent.Load(), parallelism)
+	}
+
+	// Unblock all goroutines.
+	close(release)
+	<-done
+
+	if got := maxConcurrent.Load(); got > parallelism {
+		t.Errorf("max concurrent goroutines=%d exceeded parallelism=%d", got, parallelism)
+	}
+}
+
+func TestRunAndScoreParallelRestartSkipped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var restartCalls atomic.Int32
+	restart := attractor.RestartFunc(func(_ context.Context) (string, error) {
+		restartCalls.Add(1)
+		return srv.URL, nil
+	})
+
+	scenarios := []scenario.Scenario{
+		simpleScenario("s1"),
+		simpleScenario("s2"),
+		simpleScenario("s3"),
+	}
+
+	mock := &mockLLMClient{}
+	_, err := runAndScore(context.Background(), scenarios, executorOpts{
+		targetURL:     srv.URL,
+		logger:        testLogger(),
+		sessionGetter: func() *container.Session { return nil },
+	}, mock, "claude-haiku-4-5-20251001", restart, 2)
+	if err != nil {
+		t.Fatalf("runAndScore: %v", err)
+	}
+	if got := restartCalls.Load(); got != 0 {
+		t.Errorf("expected restart not called when parallelism>1, got %d calls", got)
 	}
 }

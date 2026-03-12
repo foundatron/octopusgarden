@@ -22,6 +22,8 @@ var (
 )
 
 // Runner executes scenario steps by dispatching to registered StepExecutors.
+// Each Runner instance is single-use and not safe for concurrent use; callers
+// running scenarios in parallel must create a separate Runner per goroutine.
 type Runner struct {
 	Executors map[string]StepExecutor
 	Logger    *slog.Logger

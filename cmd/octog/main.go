@@ -19,6 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/gene"
@@ -51,6 +53,7 @@ var (
 	errNoJudgeModelPricing        = errors.New("judge model has no pricing entry")
 	errInvalidFormat              = errors.New("--format must be \"text\" or \"json\"")
 	errInvalidProvider            = errors.New("--provider must be \"anthropic\" or \"openai\"")
+	errInvalidParallelScenarios   = errors.New("--parallel-scenarios must be >= 1")
 	errInvalidLanguage            = errors.New("--language must be one of: go, python, node, rust, auto")
 	errListModelsUnsupported      = errors.New("provider does not support listing models")
 	errPreflightFailed            = errors.New("preflight: spec clarity below threshold")
@@ -492,16 +495,17 @@ func applyModelDefaults(model, judgeModel *string, provider string) {
 
 // validateFlags holds parsed flags for the validate subcommand.
 type validateFlags struct {
-	scenarios     string
-	target        string
-	code          string
-	healthTimeout time.Duration
-	grpcTarget    string
-	provider      string
-	judgeModel    string
-	threshold     float64
-	format        string
-	verbose       int
+	scenarios         string
+	target            string
+	code              string
+	healthTimeout     time.Duration
+	grpcTarget        string
+	provider          string
+	judgeModel        string
+	threshold         float64
+	format            string
+	verbose           int
+	parallelScenarios int
 }
 
 func parseValidateFlags(args []string) (validateFlags, error) {
@@ -517,6 +521,7 @@ func parseValidateFlags(args []string) (validateFlags, error) {
 	fs.Float64Var(&vf.threshold, "threshold", 0, "minimum satisfaction score (0-100); non-zero enables exit code 1 on failure")
 	fs.StringVar(&vf.format, "format", "text", "output format: text or json")
 	fs.IntVar(&vf.verbose, "v", 0, "verbosity level: 0=standard, 1=per-scenario summary, 2=full step detail with judge reasoning")
+	fs.IntVar(&vf.parallelScenarios, "parallel-scenarios", 1, "number of scenarios to run concurrently (>1 disables container restart; scenarios share container state)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog validate [flags]\n\nFlags:\n")
@@ -529,6 +534,9 @@ func parseValidateFlags(args []string) (validateFlags, error) {
 
 	if vf.format != "text" && vf.format != "json" {
 		return validateFlags{}, errInvalidFormat
+	}
+	if vf.parallelScenarios < 1 {
+		return validateFlags{}, errInvalidParallelScenarios
 	}
 	if vf.code != "" && vf.target != "" {
 		return validateFlags{}, errCodeAndTargetConflict
@@ -594,7 +602,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		needsBrowser:  caps.NeedsBrowser,
 		needsWS:       caps.NeedsWS,
 		grpcTarget:    vf.grpcTarget,
-	}, clients.client, vf.judgeModel, restartFn)
+	}, clients.client, vf.judgeModel, restartFn, vf.parallelScenarios)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -1187,7 +1195,14 @@ func buildExecutors(opts executorOpts) (map[string]scenario.StepExecutor, func()
 	return executors, cleanup
 }
 
-func runAndScore(ctx context.Context, scenarios []scenario.Scenario, opts executorOpts, llmClient llm.Client, judgeModel string, restart attractor.RestartFunc) (scenario.AggregateResult, error) {
+func runAndScore(ctx context.Context, scenarios []scenario.Scenario, opts executorOpts, llmClient llm.Client, judgeModel string, restart attractor.RestartFunc, parallelism int) (scenario.AggregateResult, error) {
+	if parallelism <= 1 {
+		return runAndScoreSequential(ctx, scenarios, opts, llmClient, judgeModel, restart)
+	}
+	return runAndScoreParallel(ctx, scenarios, opts, llmClient, judgeModel, parallelism)
+}
+
+func runAndScoreSequential(ctx context.Context, scenarios []scenario.Scenario, opts executorOpts, llmClient llm.Client, judgeModel string, restart attractor.RestartFunc) (scenario.AggregateResult, error) {
 	scored := make([]scenario.ScoredScenario, 0, len(scenarios))
 
 	for i, sc := range scenarios {
@@ -1233,12 +1248,62 @@ func runAndScore(ctx context.Context, scenarios []scenario.Scenario, opts execut
 	return scenario.Aggregate(scored), nil
 }
 
+func runAndScoreParallel(ctx context.Context, scenarios []scenario.Scenario, opts executorOpts, llmClient llm.Client, judgeModel string, parallelism int) (scenario.AggregateResult, error) {
+	if opts.logger != nil {
+		opts.logger.Info("running scenarios in parallel", "count", len(scenarios), "parallelism", parallelism)
+	}
+
+	results := make([]scenario.ScoredScenario, len(scenarios))
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(parallelism)
+
+	for i, sc := range scenarios {
+		g.Go(func() error {
+			executors, cleanup := buildExecutors(opts)
+			runner := scenario.NewRunner(executors, opts.logger)
+			judge := scenario.NewJudge(llmClient, judgeModel, opts.logger)
+
+			result, runErr := runner.Run(gctx, sc)
+			cleanup()
+			if runErr != nil {
+				weight := 1.0
+				if sc.Weight != nil {
+					weight = *sc.Weight
+				}
+				if opts.logger != nil {
+					opts.logger.Warn("scenario setup failed", "scenario", sc.ID, "error", runErr)
+				}
+				results[i] = scenario.ScoredScenario{
+					ScenarioID: sc.ID,
+					Weight:     weight,
+					Score:      0,
+				}
+				return nil
+			}
+
+			ss, err := judge.ScoreScenario(gctx, sc, result)
+			if err != nil {
+				return fmt.Errorf("score scenario %s: %w", sc.ID, err)
+			}
+			results[i] = ss
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return scenario.AggregateResult{}, err
+	}
+
+	return scenario.Aggregate(results), nil
+}
+
 func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string) attractor.ValidateFn {
 	return func(ctx context.Context, url string, restart attractor.RestartFunc) (float64, []string, float64, error) {
 		opts := baseOpts
 		opts.targetURL = url
 		opts.grpcTarget = grpcTargetGetter()
-		agg, err := runAndScore(ctx, scenarios, opts, llmClient, judgeModel, restart)
+		agg, err := runAndScore(ctx, scenarios, opts, llmClient, judgeModel, restart, 1)
 		if err != nil {
 			return 0, nil, 0, err
 		}
