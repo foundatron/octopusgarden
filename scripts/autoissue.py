@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Fully automated GitHub issue solver for OctopusGarden.
 
-6-phase pipeline with information barriers between phases:
+7-phase pipeline with information barriers between phases:
   Phase 1: Plan          -> plan.md
   Phase 2: Review Plan   -> reviewed-plan.md (+ complexity rating)
   Phase 3: Implement     -> git commit (model chosen by complexity)
-  Phase 4: Review Code   -> review-findings.md
-  Phase 5: Fix Findings  -> amended commit, push, PR
-  Phase 6: CI Retry      -> fix CI failures (max 2 retries), merge
+  Phase 4: Simplify      -> review diff for reuse/quality/efficiency, fix in-place
+  Phase 5: Review Code   -> review-findings.md
+  Phase 6: Fix Findings  -> amended commit, push, PR
+  Phase 7: CI Retry      -> fix CI failures (max 2 retries), merge
 
 Usage:
   ./scripts/autoissue.py <issue-number>... [options]
@@ -558,7 +559,7 @@ def ci_retry_loop(
 
         write_prompt(prompt_file, ci_fix_prompt(ci_logs))
         run_phase_nocapture(
-            f"Phase 6: CI Fix (retry {ci_retries})", impl_model, prompt_file, budget
+            f"Phase 7: CI Fix (retry {ci_retries})", impl_model, prompt_file, budget
         )
         push_with_retry(branch, prompt_file, impl_model, budget)
 
@@ -650,6 +651,35 @@ Instructions:
 3. Run `make build && make test && make lint && make docs` and fix any issues.
 4. Stage and commit all changes with a conventional commit message (e.g., feat(package): description).
 5. Do NOT push the branch. Do NOT create a PR. Only commit locally."""
+
+
+def simplify_prompt(diff_for_review: str) -> str:
+    return f"""\
+You are reviewing recent changes to the octopusgarden project for simplification opportunities.
+
+Here is the diff of all changes on this branch:
+
+<diff>
+{diff_for_review}
+</diff>
+
+Review the changed code across three dimensions:
+
+1. **Code Reuse** -- Search the existing codebase for utilities, helpers, or patterns that overlap
+   with the new code. If existing code already does what the new code does, refactor to reuse it.
+   Do NOT introduce new abstractions -- only reuse what already exists.
+
+2. **Code Quality** -- Look for redundant state, parameter sprawl, copy-paste duplication, leaky
+   abstractions, or unnecessary complexity in the changed code. Simplify where possible.
+
+3. **Efficiency** -- Identify unnecessary work, missed concurrency opportunities, or memory waste
+   in the changed code. Only fix clear inefficiencies, not speculative optimizations.
+
+Instructions:
+- If you find issues, fix them directly in the code.
+- Run `make build && make test && make lint` to verify your changes.
+- If you made changes, stage and amend the commit: `git add -A && git commit --amend --no-edit`
+- If the code is already clean and nothing needs simplifying, do nothing. Not every diff needs changes."""
 
 
 def review_code_prompt(diff_for_review: str) -> str:
@@ -862,7 +892,7 @@ def main() -> None:
 
         if args.dry_run:
             budget_display = args.budget or "unlimited"
-            log(f"[dry-run] 6-phase pipeline for issue #{issue_number}:")
+            log(f"[dry-run] 7-phase pipeline for issue #{issue_number}:")
             log(
                 f"[dry-run]   Phase 1: Plan            model={args.plan_model}    budget={budget_display}"
             )
@@ -876,13 +906,16 @@ def main() -> None:
                 f"[dry-run]     (simple/moderate -> {impl_model}, complex -> {args.plan_model})"
             )
             log(
-                f"[dry-run]   Phase 4: Review Code     model={args.review_model}  budget={budget_display}"
+                f"[dry-run]   Phase 4: Simplify        model={impl_model}    budget={budget_display}"
             )
             log(
-                f"[dry-run]   Phase 5: Fix Findings    model={impl_model}    budget={budget_display}"
+                f"[dry-run]   Phase 5: Review Code     model={args.review_model}  budget={budget_display}"
             )
             log(
-                f"[dry-run]   Phase 6: CI Retry        model={impl_model}    budget={budget_display} (max 2 retries)"
+                f"[dry-run]   Phase 6: Fix Findings    model={impl_model}    budget={budget_display}"
+            )
+            log(
+                f"[dry-run]   Phase 7: CI Retry        model={impl_model}    budget={budget_display} (max 2 retries)"
             )
             continue
 
@@ -938,12 +971,25 @@ def main() -> None:
             sys.exit(1)
         log(f"  Phase 3 produced {commit_count} commit(s)")
 
-        # Phase 4: Review Code
-        log(f"Phase 4: Review Code (model: {args.review_model})...")
+        # Phase 4: Simplify
+        log(f"Phase 4: Simplify (model: {impl_model})...")
+        diff_for_simplify = get_diff_for_review()
+        write_prompt(prompt_file, simplify_prompt(diff_for_simplify))
+        try:
+            run_phase_nocapture(
+                "Phase 4: Simplify", impl_model, prompt_file, args.budget
+            )
+        except PhaseError:
+            log("  WARNING: Phase 4 failed, discarding partial changes")
+            subprocess.run(["git", "checkout", "--", "."], check=True)
+            subprocess.run(["git", "clean", "-fd"], check=True)
+
+        # Phase 5: Review Code
+        log(f"Phase 5: Review Code (model: {args.review_model})...")
         diff_for_review = get_diff_for_review()
         write_prompt(prompt_file, review_code_prompt(diff_for_review))
         run_phase(
-            "Phase 4: Review Code",
+            "Phase 5: Review Code",
             args.review_model,
             issue_work_dir / "review-findings.md",
             prompt_file,
@@ -958,22 +1004,22 @@ def main() -> None:
             print(line)
         print("---")
 
-        # Phase 5: Fix Findings
+        # Phase 6: Fix Findings
         assessment = parse_assessment(issue_work_dir / "review-findings.md")
         if assessment == "pass":
-            log("Phase 5: Skipped (review assessment: PASS)")
+            log("Phase 6: Skipped (review assessment: PASS)")
         else:
-            log(f"Phase 5: Fix Findings (model: {impl_model})...")
+            log(f"Phase 6: Fix Findings (model: {impl_model})...")
             review_findings_content = (
                 issue_work_dir / "review-findings.md"
             ).read_text()
             write_prompt(prompt_file, fix_findings_prompt(review_findings_content))
             try:
                 run_phase_nocapture(
-                    "Phase 5: Fix Findings", impl_model, prompt_file, args.budget
+                    "Phase 6: Fix Findings", impl_model, prompt_file, args.budget
                 )
             except PhaseError:
-                log("  WARNING: Phase 5 failed, discarding partial changes")
+                log("  WARNING: Phase 6 failed, discarding partial changes")
                 subprocess.run(["git", "checkout", "--", "."], check=True)
                 subprocess.run(["git", "clean", "-fd"], check=True)
 
@@ -995,8 +1041,8 @@ def main() -> None:
             unlock_issue(issue_number)
             continue
 
-        # Phase 6: CI Retry Loop
-        log("Phase 6: CI check and retry...")
+        # Phase 7: CI Retry Loop
+        log("Phase 7: CI check and retry...")
         ci_passed = ci_retry_loop(
             pr_number, branch, prompt_file, impl_model, args.budget, pr_url
         )
