@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math"
@@ -349,6 +350,341 @@ func TestListModels(t *testing.T) {
 	if models[1].DisplayName != "Claude Haiku 4.5" {
 		t.Errorf("models[1].DisplayName = %q, want %q", models[1].DisplayName, "Claude Haiku 4.5")
 	}
+}
+
+// anthropicToolUseResponse builds a canned Anthropic API JSON response with a single tool_use block.
+func anthropicToolUseResponse(id, name, inputJSON string, inputTokens, outputTokens int) string {
+	resp := map[string]any{
+		"id":   "msg_test",
+		"type": "message",
+		"role": "assistant",
+		"content": []map[string]any{
+			{
+				"type":  "tool_use",
+				"id":    id,
+				"name":  name,
+				"input": json.RawMessage(inputJSON),
+			},
+		},
+		"model":         "claude-sonnet-4-20250514",
+		"stop_reason":   "tool_use",
+		"stop_sequence": nil,
+		"usage": map[string]any{
+			"input_tokens":                inputTokens,
+			"cache_creation_input_tokens": 0,
+			"cache_read_input_tokens":     0,
+			"output_tokens":               outputTokens,
+		},
+	}
+	b, _ := json.Marshal(resp)
+	return string(b)
+}
+
+// anthropicMultiToolResponse builds a canned response with multiple tool_use blocks.
+func anthropicMultiToolResponse(tools []map[string]any, inputTokens, outputTokens int) string {
+	resp := map[string]any{
+		"id":            "msg_test",
+		"type":          "message",
+		"role":          "assistant",
+		"content":       tools,
+		"model":         "claude-sonnet-4-20250514",
+		"stop_reason":   "tool_use",
+		"stop_sequence": nil,
+		"usage": map[string]any{
+			"input_tokens":                inputTokens,
+			"cache_creation_input_tokens": 0,
+			"cache_read_input_tokens":     0,
+			"output_tokens":               outputTokens,
+		},
+	}
+	b, _ := json.Marshal(resp)
+	return string(b)
+}
+
+func TestAnthropicAgentLoop_SingleTurn(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(anthropicResponse("done", 100, 0, 0, 20)))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	resp, err := client.AgentLoop(context.Background(), AgentRequest{
+		SystemPrompt: "you are helpful",
+		Messages:     []Message{{Role: "user", Content: "hello"}},
+		Model:        "claude-sonnet-4-20250514",
+		MaxTurns:     5,
+	}, func(_ context.Context, _ ToolCall) (string, error) {
+		t.Fatal("handler should not be called on end_turn")
+		return "", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "done" {
+		t.Errorf("content = %q, want %q", resp.Content, "done")
+	}
+	if resp.Turns != 1 {
+		t.Errorf("turns = %d, want 1", resp.Turns)
+	}
+}
+
+func TestAnthropicAgentLoop_MultiTurn(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Int32
+	var handlerCallID, handlerCallName string
+	var handlerCallInput json.RawMessage
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		n := counter.Add(1)
+		switch n {
+		case 1:
+			w.Write([]byte(anthropicToolUseResponse("call_1", "my_tool", `{"x":1}`, 100, 30)))
+		default:
+			w.Write([]byte(anthropicResponse("result", 120, 0, 0, 25)))
+		}
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	resp, err := client.AgentLoop(context.Background(), AgentRequest{
+		Messages: []Message{{Role: "user", Content: "run tool"}},
+		Model:    "claude-sonnet-4-20250514",
+		MaxTurns: 5,
+	}, func(_ context.Context, call ToolCall) (string, error) {
+		handlerCallID = call.ID
+		handlerCallName = call.Name
+		handlerCallInput = call.Input
+		return "tool output", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "result" {
+		t.Errorf("content = %q, want %q", resp.Content, "result")
+	}
+	if resp.Turns != 2 {
+		t.Errorf("turns = %d, want 2", resp.Turns)
+	}
+	if handlerCallID != "call_1" {
+		t.Errorf("handler call ID = %q, want %q", handlerCallID, "call_1")
+	}
+	if handlerCallName != "my_tool" {
+		t.Errorf("handler call name = %q, want %q", handlerCallName, "my_tool")
+	}
+	if string(handlerCallInput) != `{"x":1}` {
+		t.Errorf("handler call input = %s, want %s", handlerCallInput, `{"x":1}`)
+	}
+}
+
+func TestAnthropicAgentLoop_MultipleToolsPerTurn(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Int32
+	var handlerCalls []string // records tool names in order
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		n := counter.Add(1)
+		switch n {
+		case 1:
+			body := anthropicMultiToolResponse([]map[string]any{
+				{"type": "tool_use", "id": "call_a", "name": "tool_a", "input": json.RawMessage(`{"q":"a"}`)},
+				{"type": "tool_use", "id": "call_b", "name": "tool_b", "input": json.RawMessage(`{"q":"b"}`)},
+			}, 100, 40)
+			w.Write([]byte(body))
+		default:
+			w.Write([]byte(anthropicResponse("done", 150, 0, 0, 20)))
+		}
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	resp, err := client.AgentLoop(context.Background(), AgentRequest{
+		Messages: []Message{{Role: "user", Content: "run two tools"}},
+		Model:    "claude-sonnet-4-20250514",
+		MaxTurns: 5,
+	}, func(_ context.Context, call ToolCall) (string, error) {
+		handlerCalls = append(handlerCalls, call.Name)
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Turns != 2 {
+		t.Errorf("turns = %d, want 2", resp.Turns)
+	}
+	if len(handlerCalls) != 2 {
+		t.Fatalf("handler called %d times, want 2", len(handlerCalls))
+	}
+	if handlerCalls[0] != "tool_a" || handlerCalls[1] != "tool_b" {
+		t.Errorf("handler calls = %v, want [tool_a tool_b]", handlerCalls)
+	}
+}
+
+func TestAnthropicAgentLoop_MaxTurnsExceeded(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(anthropicToolUseResponse("call_x", "tool_x", `{}`, 50, 20)))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	resp, err := client.AgentLoop(context.Background(), AgentRequest{
+		Messages: []Message{{Role: "user", Content: "loop"}},
+		Model:    "claude-sonnet-4-20250514",
+		MaxTurns: 2,
+	}, func(_ context.Context, _ ToolCall) (string, error) {
+		return "ok", nil
+	})
+	if !errors.Is(err, ErrMaxTurnsExceeded) {
+		t.Fatalf("expected ErrMaxTurnsExceeded, got %v", err)
+	}
+	if resp.Turns != 2 {
+		t.Errorf("turns = %d, want 2", resp.Turns)
+	}
+}
+
+func TestAnthropicAgentLoop_HandlerError(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counter.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(anthropicToolUseResponse("call_e", "err_tool", `{}`, 50, 20)))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	_, err := client.AgentLoop(context.Background(), AgentRequest{
+		Messages: []Message{{Role: "user", Content: "go"}},
+		Model:    "claude-sonnet-4-20250514",
+		MaxTurns: 5,
+	}, func(_ context.Context, _ ToolCall) (string, error) {
+		return "", errors.New("handler failed")
+	})
+	if err == nil || !containsString(err.Error(), "handler failed") {
+		t.Fatalf("expected error containing 'handler failed', got %v", err)
+	}
+	if n := counter.Load(); n != 1 {
+		t.Errorf("server hit %d times, want 1 (aborts on handler error)", n)
+	}
+}
+
+func TestAnthropicAgentLoop_ContextCancellation(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(anthropicResponse("ok", 50, 0, 0, 10)))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before call
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	_, err := client.AgentLoop(ctx, AgentRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		Model:    "claude-sonnet-4-20250514",
+	}, func(_ context.Context, _ ToolCall) (string, error) { return "", nil })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestAnthropicAgentLoop_CostAccumulation(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		n := counter.Add(1)
+		switch n {
+		case 1:
+			w.Write([]byte(anthropicToolUseResponse("call_c", "cost_tool", `{}`, 100, 50)))
+		default:
+			w.Write([]byte(anthropicResponse("final", 200, 0, 0, 30)))
+		}
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	resp, err := client.AgentLoop(context.Background(), AgentRequest{
+		Messages: []Message{{Role: "user", Content: "cost test"}},
+		Model:    "claude-sonnet-4-20250514",
+		MaxTurns: 5,
+	}, func(_ context.Context, _ ToolCall) (string, error) {
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.InputTokens != 300 {
+		t.Errorf("input_tokens = %d, want 300", resp.InputTokens)
+	}
+	if resp.OutputTokens != 80 {
+		t.Errorf("output_tokens = %d, want 80", resp.OutputTokens)
+	}
+	if resp.TotalCost <= 0 {
+		t.Errorf("total_cost = %f, want > 0", resp.TotalCost)
+	}
+	if resp.Turns != 2 {
+		t.Errorf("turns = %d, want 2", resp.Turns)
+	}
+}
+
+func TestAnthropicAgentLoop_CacheControl(t *testing.T) {
+	t.Parallel()
+	var capturedBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(anthropicResponse("cached", 100, 0, 0, 10)))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(), option.WithBaseURL(server.URL))
+	_, err := client.AgentLoop(context.Background(), AgentRequest{
+		SystemPrompt: "system with cache",
+		Messages:     []Message{{Role: "user", Content: "go"}},
+		Model:        "claude-sonnet-4-20250514",
+		CacheControl: &CacheControl{Type: "ephemeral"},
+	}, func(_ context.Context, _ ToolCall) (string, error) { return "", nil })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	system, ok := capturedBody["system"].([]any)
+	if !ok || len(system) == 0 {
+		t.Fatal("expected system blocks in request body")
+	}
+	block, ok := system[0].(map[string]any)
+	if !ok {
+		t.Fatal("expected system block to be an object")
+	}
+	cc, ok := block["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatal("expected cache_control in system block")
+	}
+	if cc["type"] != "ephemeral" {
+		t.Errorf("cache_control.type = %v, want ephemeral", cc["type"])
+	}
+}
+
+// containsString reports whether s contains substr.
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := range len(s) - len(substr) + 1 {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
 }
 
 // TestJudgeRetries529 verifies that the SDK retries Anthropic's non-standard

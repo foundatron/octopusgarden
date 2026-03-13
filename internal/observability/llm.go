@@ -51,6 +51,35 @@ func (t *TracingLLMClient) Generate(ctx context.Context, req llm.GenerateRequest
 	return resp, nil
 }
 
+// AgentLoop delegates to the inner client if it implements AgentClient, recording an llm.agent_loop span.
+// Returns ErrAgentLoopNotSupported if the inner client does not implement AgentClient.
+func (t *TracingLLMClient) AgentLoop(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+	ac, ok := t.inner.(llm.AgentClient)
+	if !ok {
+		return llm.AgentResponse{}, llm.ErrAgentLoopNotSupported
+	}
+
+	ctx, span := t.tracer.Start(ctx, "llm.agent_loop", trace.WithAttributes(
+		attribute.String("llm.model", req.Model),
+	))
+	defer span.End()
+
+	resp, err := ac.AgentLoop(ctx, req, handler)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return resp, err
+	}
+
+	span.SetAttributes(
+		attribute.Int("llm.turns", resp.Turns),
+		attribute.Int("llm.input_tokens", resp.InputTokens),
+		attribute.Int("llm.output_tokens", resp.OutputTokens),
+		attribute.Float64("llm.cost_usd", resp.TotalCost),
+	)
+	return resp, nil
+}
+
 // Judge delegates to the inner client and records an llm.judge span.
 func (t *TracingLLMClient) Judge(ctx context.Context, req llm.JudgeRequest) (llm.JudgeResponse, error) {
 	ctx, span := t.tracer.Start(ctx, "llm.judge", trace.WithAttributes(

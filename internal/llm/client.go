@@ -1,6 +1,16 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+)
+
+// Sentinel errors for agent loop operations.
+var (
+	ErrAgentLoopNotSupported = errors.New("agent loop not supported by this client")
+	ErrMaxTurnsExceeded      = errors.New("agent loop exceeded max turns")
+)
 
 const (
 	defaultGenerateMaxTokens = 8192
@@ -58,4 +68,46 @@ type JudgeResponse struct {
 type Message struct {
 	Role    string // "user" or "assistant"
 	Content string
+}
+
+// ToolDef defines a tool available to the agent.
+type ToolDef struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+}
+
+// ToolCall represents a tool invocation by the model.
+type ToolCall struct {
+	ID    string
+	Name  string
+	Input json.RawMessage
+}
+
+// ToolHandler processes a tool call and returns the result.
+type ToolHandler func(ctx context.Context, call ToolCall) (string, error)
+
+// AgentRequest contains parameters for an agent loop call.
+type AgentRequest struct {
+	SystemPrompt string
+	Messages     []Message
+	Tools        []ToolDef
+	Model        string
+	MaxTokens    int
+	MaxTurns     int
+	CacheControl *CacheControl
+}
+
+// AgentResponse contains the result of an agent loop call.
+type AgentResponse struct {
+	Content      string
+	Turns        int
+	InputTokens  int
+	OutputTokens int
+	TotalCost    float64
+}
+
+// AgentClient extends Client with an agentic tool-use loop.
+type AgentClient interface {
+	AgentLoop(ctx context.Context, req AgentRequest, handler ToolHandler) (AgentResponse, error)
 }

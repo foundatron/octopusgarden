@@ -176,6 +176,59 @@ func TestTracingLLMClientJudge(t *testing.T) {
 	}
 }
 
+type mockAgentLLMClient struct {
+	mockLLMClient
+	agentLoopFn func(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error)
+}
+
+func (m *mockAgentLLMClient) AgentLoop(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+	return m.agentLoopFn(ctx, req, handler)
+}
+
+func TestTracingLLMClient_AgentLoop_Delegates(t *testing.T) {
+	exp, tp := newTestTP()
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	want := llm.AgentResponse{Content: "ok", Turns: 1, InputTokens: 50, OutputTokens: 20, TotalCost: 0.01}
+	client := &mockAgentLLMClient{
+		agentLoopFn: func(_ context.Context, _ llm.AgentRequest, _ llm.ToolHandler) (llm.AgentResponse, error) {
+			return want, nil
+		},
+	}
+
+	traced := NewTracingLLMClient(client, tp)
+	got, err := traced.AgentLoop(context.Background(), llm.AgentRequest{Model: "test-model"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("response = %+v, want %+v", got, want)
+	}
+
+	_ = tp.ForceFlush(context.Background())
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	if spans[0].Name != "llm.agent_loop" {
+		t.Errorf("span name = %q, want %q", spans[0].Name, "llm.agent_loop")
+	}
+	assertAttrString(t, spans[0].Attributes, "llm.model", "test-model")
+	assertAttrInt(t, spans[0].Attributes, "llm.turns", want.Turns)
+	assertAttrFloat64(t, spans[0].Attributes, "llm.cost_usd", want.TotalCost)
+}
+
+func TestTracingLLMClient_AgentLoop_NotSupported(t *testing.T) {
+	tp := noop.NewTracerProvider()
+	client := &mockLLMClient{}
+
+	traced := NewTracingLLMClient(client, tp)
+	_, err := traced.AgentLoop(context.Background(), llm.AgentRequest{}, nil)
+	if !errors.Is(err, llm.ErrAgentLoopNotSupported) {
+		t.Fatalf("expected ErrAgentLoopNotSupported, got %v", err)
+	}
+}
+
 func TestTracingLLMClientNoopCreatesNoSpans(t *testing.T) {
 	tp := noop.NewTracerProvider()
 	client := &mockLLMClient{
