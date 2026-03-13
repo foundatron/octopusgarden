@@ -9,6 +9,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -354,30 +356,9 @@ func TestListModels(t *testing.T) {
 
 // anthropicToolUseResponse builds a canned Anthropic API JSON response with a single tool_use block.
 func anthropicToolUseResponse(id, name, inputJSON string, inputTokens, outputTokens int) string {
-	resp := map[string]any{
-		"id":   "msg_test",
-		"type": "message",
-		"role": "assistant",
-		"content": []map[string]any{
-			{
-				"type":  "tool_use",
-				"id":    id,
-				"name":  name,
-				"input": json.RawMessage(inputJSON),
-			},
-		},
-		"model":         "claude-sonnet-4-20250514",
-		"stop_reason":   "tool_use",
-		"stop_sequence": nil,
-		"usage": map[string]any{
-			"input_tokens":                inputTokens,
-			"cache_creation_input_tokens": 0,
-			"cache_read_input_tokens":     0,
-			"output_tokens":               outputTokens,
-		},
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
+	return anthropicMultiToolResponse([]map[string]any{
+		{"type": "tool_use", "id": id, "name": name, "input": json.RawMessage(inputJSON)},
+	}, inputTokens, outputTokens)
 }
 
 // anthropicMultiToolResponse builds a canned response with multiple tool_use blocks.
@@ -482,7 +463,8 @@ func TestAnthropicAgentLoop_MultiTurn(t *testing.T) {
 func TestAnthropicAgentLoop_MultipleToolsPerTurn(t *testing.T) {
 	t.Parallel()
 	var counter atomic.Int32
-	var handlerCalls []string // records tool names in order
+	var mu sync.Mutex
+	var handlerCalls []string // protected by mu; tools run in parallel
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -506,7 +488,9 @@ func TestAnthropicAgentLoop_MultipleToolsPerTurn(t *testing.T) {
 		Model:    "claude-sonnet-4-20250514",
 		MaxTurns: 5,
 	}, func(_ context.Context, call ToolCall) (string, error) {
+		mu.Lock()
 		handlerCalls = append(handlerCalls, call.Name)
+		mu.Unlock()
 		return "ok", nil
 	})
 	if err != nil {
@@ -518,8 +502,13 @@ func TestAnthropicAgentLoop_MultipleToolsPerTurn(t *testing.T) {
 	if len(handlerCalls) != 2 {
 		t.Fatalf("handler called %d times, want 2", len(handlerCalls))
 	}
-	if handlerCalls[0] != "tool_a" || handlerCalls[1] != "tool_b" {
-		t.Errorf("handler calls = %v, want [tool_a tool_b]", handlerCalls)
+	// Tool calls run in parallel; order is non-deterministic.
+	names := make(map[string]bool, len(handlerCalls))
+	for _, n := range handlerCalls {
+		names[n] = true
+	}
+	if !names["tool_a"] || !names["tool_b"] {
+		t.Errorf("handler calls = %v, want both tool_a and tool_b", handlerCalls)
 	}
 }
 
@@ -565,11 +554,25 @@ func TestAnthropicAgentLoop_HandlerError(t *testing.T) {
 	}, func(_ context.Context, _ ToolCall) (string, error) {
 		return "", errors.New("handler failed")
 	})
-	if err == nil || !containsString(err.Error(), "handler failed") {
+	if err == nil || !strings.Contains(err.Error(), "handler failed") {
 		t.Fatalf("expected error containing 'handler failed', got %v", err)
 	}
 	if n := counter.Load(); n != 1 {
 		t.Errorf("server hit %d times, want 1 (aborts on handler error)", n)
+	}
+}
+
+func TestBuildAgentToolParams_InvalidSchema(t *testing.T) {
+	t.Parallel()
+	tools := []ToolDef{
+		{Name: "bad_tool", Description: "broken", InputSchema: json.RawMessage(`not valid json`)},
+	}
+	_, err := buildAgentToolParams(tools)
+	if err == nil {
+		t.Fatal("expected error for invalid schema JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "bad_tool") {
+		t.Errorf("error = %q, want it to contain tool name %q", err.Error(), "bad_tool")
 	}
 }
 
@@ -672,19 +675,6 @@ func TestAnthropicAgentLoop_CacheControl(t *testing.T) {
 	if cc["type"] != "ephemeral" {
 		t.Errorf("cache_control.type = %v, want ephemeral", cc["type"])
 	}
-}
-
-// containsString reports whether s contains substr.
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := range len(s) - len(substr) + 1 {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}())
 }
 
 // TestJudgeRetries529 verifies that the SDK retries Anthropic's non-standard

@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -10,8 +11,14 @@ import (
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
 
-// Compile-time interface satisfaction check.
-var _ llm.Client = (*TracingLLMClient)(nil)
+// Compile-time interface satisfaction checks.
+// TracingLLMClient always satisfies AgentClient at the type level; callers doing
+// client.(AgentClient) will always get ok=true. AgentLoop returns
+// ErrAgentLoopNotSupported at runtime when the inner client does not implement AgentClient.
+var (
+	_ llm.Client      = (*TracingLLMClient)(nil)
+	_ llm.AgentClient = (*TracingLLMClient)(nil)
+)
 
 // TracingLLMClient wraps an llm.Client with OpenTelemetry spans.
 type TracingLLMClient struct {
@@ -66,8 +73,13 @@ func (t *TracingLLMClient) AgentLoop(ctx context.Context, req llm.AgentRequest, 
 
 	resp, err := ac.AgentLoop(ctx, req, handler)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		if errors.Is(err, llm.ErrMaxTurnsExceeded) {
+			// Max turns is an expected control-flow outcome, not an API failure.
+			span.SetAttributes(attribute.Bool("llm.max_turns_exceeded", true))
+		} else {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 		return resp, err
 	}
 

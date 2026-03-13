@@ -9,6 +9,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"golang.org/x/sync/errgroup"
 )
 
 // Compile-time checks that AnthropicClient implements Client and AgentClient.
@@ -20,6 +21,9 @@ var (
 // maxRetries is set higher than the SDK default (2) to handle sustained
 // bursts of 529 Overloaded responses during parallel judge calls.
 const maxRetries = 5
+
+// defaultMaxTurns is the fallback when AgentRequest.MaxTurns is zero.
+const defaultMaxTurns = 10
 
 // AnthropicClient implements Client using the Anthropic API with prompt caching.
 type AnthropicClient struct {
@@ -164,7 +168,7 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]AvailableModel, err
 func (c *AnthropicClient) AgentLoop(ctx context.Context, req AgentRequest, handler ToolHandler) (AgentResponse, error) {
 	maxTurns := req.MaxTurns
 	if maxTurns == 0 {
-		maxTurns = 10
+		maxTurns = defaultMaxTurns
 	}
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
@@ -254,24 +258,9 @@ func (c *AnthropicClient) AgentLoop(ctx context.Context, req AgentRequest, handl
 func buildAgentToolParams(tools []ToolDef) ([]anthropic.ToolUnionParam, error) {
 	params := make([]anthropic.ToolUnionParam, len(tools))
 	for i, td := range tools {
-		var schemaMap map[string]any
-		if err := json.Unmarshal(td.InputSchema, &schemaMap); err != nil {
-			return nil, fmt.Errorf("anthropic agent loop: unmarshal tool schema %q: %w", td.Name, err)
-		}
-		inputSchema := anthropic.ToolInputSchemaParam{}
-		if props, ok := schemaMap["properties"]; ok {
-			inputSchema.Properties = props
-		}
-		if reqd, ok := schemaMap["required"]; ok {
-			if reqSlice, ok := reqd.([]any); ok {
-				required := make([]string, 0, len(reqSlice))
-				for _, r := range reqSlice {
-					if s, ok := r.(string); ok {
-						required = append(required, s)
-					}
-				}
-				inputSchema.Required = required
-			}
+		inputSchema, err := toolInputSchema(td)
+		if err != nil {
+			return nil, err
 		}
 		params[i] = anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
@@ -282,6 +271,45 @@ func buildAgentToolParams(tools []ToolDef) ([]anthropic.ToolUnionParam, error) {
 		}
 	}
 	return params, nil
+}
+
+// toolInputSchema converts a ToolDef's JSON schema into a ToolInputSchemaParam.
+// All JSON schema fields are preserved: properties and required map to dedicated
+// struct fields; remaining fields (e.g. additionalProperties, enum, oneOf) go
+// into ExtraFields so they survive marshaling.
+// "type" is omitted — ToolInputSchemaParam always marshals it as "object".
+func toolInputSchema(td ToolDef) (anthropic.ToolInputSchemaParam, error) {
+	var schemaMap map[string]any
+	if err := json.Unmarshal(td.InputSchema, &schemaMap); err != nil {
+		return anthropic.ToolInputSchemaParam{}, fmt.Errorf("anthropic agent loop: unmarshal tool schema %q: %w", td.Name, err)
+	}
+	inputSchema := anthropic.ToolInputSchemaParam{}
+	if props, ok := schemaMap["properties"]; ok {
+		inputSchema.Properties = props
+	}
+	if reqd, ok := schemaMap["required"]; ok {
+		if reqSlice, ok := reqd.([]any); ok {
+			required := make([]string, 0, len(reqSlice))
+			for _, r := range reqSlice {
+				if s, ok := r.(string); ok {
+					required = append(required, s)
+				}
+			}
+			inputSchema.Required = required
+		}
+	}
+	for k, v := range schemaMap {
+		switch k {
+		case "type", "properties", "required":
+			// handled above or fixed constant
+		default:
+			if inputSchema.ExtraFields == nil {
+				inputSchema.ExtraFields = make(map[string]any)
+			}
+			inputSchema.ExtraFields[k] = v
+		}
+	}
+	return inputSchema, nil
 }
 
 // buildAgentMessages converts a Message slice into Anthropic SDK message params.
@@ -311,13 +339,22 @@ func agentExtractText(content []anthropic.ContentBlockUnion) string {
 }
 
 // agentProcessToolUse builds the assistant echo message and calls the handler for each
-// tool_use block, returning the echo blocks and result blocks to append to messages.
+// tool_use block in parallel, returning the echo blocks and result blocks to append to messages.
+// Result order matches the order of tool_use blocks in content.
 func (c *AnthropicClient) agentProcessToolUse(
 	ctx context.Context,
 	content []anthropic.ContentBlockUnion,
 	handler ToolHandler,
 ) ([]anthropic.ContentBlockParamUnion, []anthropic.ContentBlockParamUnion, error) {
+	type toolWork struct {
+		idx   int
+		id    string
+		name  string
+		input json.RawMessage
+	}
+
 	echo := make([]anthropic.ContentBlockParamUnion, 0, len(content))
+	var works []toolWork
 	for _, block := range content {
 		switch block.Type {
 		case "text":
@@ -325,20 +362,28 @@ func (c *AnthropicClient) agentProcessToolUse(
 		case "tool_use":
 			tu := block.AsToolUse()
 			echo = append(echo, anthropic.NewToolUseBlock(tu.ID, tu.Input, tu.Name))
+			works = append(works, toolWork{idx: len(works), id: tu.ID, name: tu.Name, input: tu.Input})
 		}
 	}
 
-	results := make([]anthropic.ContentBlockParamUnion, 0, len(content))
-	for _, block := range content {
-		if block.Type != "tool_use" {
-			continue
-		}
-		tu := block.AsToolUse()
-		result, err := handler(ctx, ToolCall{ID: tu.ID, Name: tu.Name, Input: tu.Input})
-		if err != nil {
-			return nil, nil, fmt.Errorf("anthropic agent loop: tool %q: %w", tu.Name, err)
-		}
-		results = append(results, anthropic.NewToolResultBlock(tu.ID, result, false))
+	if len(works) == 0 {
+		return echo, nil, nil
+	}
+
+	results := make([]anthropic.ContentBlockParamUnion, len(works))
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, w := range works {
+		g.Go(func() error {
+			result, err := handler(gCtx, ToolCall{ID: w.id, Name: w.name, Input: w.input})
+			if err != nil {
+				return fmt.Errorf("anthropic agent loop: tool %q: %w", w.name, err)
+			}
+			results[w.idx] = anthropic.NewToolResultBlock(w.id, result, false)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
 	}
 	return echo, results, nil
 }

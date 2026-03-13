@@ -218,6 +218,38 @@ func TestTracingLLMClient_AgentLoop_Delegates(t *testing.T) {
 	assertAttrFloat64(t, spans[0].Attributes, "llm.cost_usd", want.TotalCost)
 }
 
+func TestTracingLLMClient_AgentLoop_MaxTurnsExceeded(t *testing.T) {
+	exp, tp := newTestTP()
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	partial := llm.AgentResponse{Turns: 10, InputTokens: 200, OutputTokens: 100}
+	client := &mockAgentLLMClient{
+		agentLoopFn: func(_ context.Context, _ llm.AgentRequest, _ llm.ToolHandler) (llm.AgentResponse, error) {
+			return partial, llm.ErrMaxTurnsExceeded
+		},
+	}
+
+	traced := NewTracingLLMClient(client, tp)
+	got, err := traced.AgentLoop(context.Background(), llm.AgentRequest{Model: "test-model"}, nil)
+	if !errors.Is(err, llm.ErrMaxTurnsExceeded) {
+		t.Fatalf("expected ErrMaxTurnsExceeded, got %v", err)
+	}
+	if got != partial {
+		t.Errorf("response = %+v, want %+v", got, partial)
+	}
+
+	_ = tp.ForceFlush(context.Background())
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	// ErrMaxTurnsExceeded is control-flow, not an API error — span must not be Error.
+	if spans[0].Status.Code == codes.Error {
+		t.Error("expected span status NOT to be Error for ErrMaxTurnsExceeded")
+	}
+	assertHasAttr(t, spans[0].Attributes, "llm.max_turns_exceeded")
+}
+
 func TestTracingLLMClient_AgentLoop_NotSupported(t *testing.T) {
 	tp := noop.NewTracerProvider()
 	client := &mockLLMClient{}
