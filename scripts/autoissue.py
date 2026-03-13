@@ -8,7 +8,7 @@
   Phase 4: Simplify      -> review diff for reuse/quality/efficiency, fix in-place
   Phase 5: Review Code   -> review-findings.md
   Phase 6: Fix Findings  -> amended commit, push, PR
-  Phase 7: CI Retry      -> fix CI failures (max 2 retries), merge
+  Phase 7: CI Retry      -> fix CI failures (max 4 retries), merge
 
 Usage:
   ./scripts/autoissue.py <issue-number>... [options]
@@ -915,7 +915,7 @@ def main() -> None:
                 f"[dry-run]   Phase 6: Fix Findings    model={impl_model}    budget={budget_display}"
             )
             log(
-                f"[dry-run]   Phase 7: CI Retry        model={impl_model}    budget={budget_display} (max 2 retries)"
+                f"[dry-run]   Phase 7: CI Retry        model={impl_model}    budget={budget_display} (max {MAX_CI_RETRIES} retries)"
             )
             continue
 
