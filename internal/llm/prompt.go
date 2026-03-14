@@ -4,7 +4,9 @@ package llm
 const SatisfactionJudgeSystem = `You are a QA evaluator. Score how well this software behavior matches the expected behavior.
 
 Respond with JSON only:
-{"score": <0-100>, "reasoning": "<brief explanation>", "failures": ["<specific failure>"]}
+{"score": <0-100>, "reasoning": "<brief explanation>", "failures": ["<specific failure>"], "diagnostics": [{"category": "<slug>", "detail": "<one-line detail>"}]}
+
+Include the diagnostics array only when score < 100; each entry has a short category slug and a one-line detail string.
 
 Scoring guide:
 - 100: Perfect match to expected behavior

@@ -56,12 +56,19 @@ type JudgeRequest struct {
 	CacheControl *CacheControl
 }
 
+// Diagnostic holds a structured failure detail from the judge.
+type Diagnostic struct {
+	Category string `json:"category"`
+	Detail   string `json:"detail"`
+}
+
 // JudgeResponse contains the result of a judge call.
 type JudgeResponse struct {
-	Score     int
-	Reasoning string
-	Failures  []string
-	CostUSD   float64
+	Score       int
+	Reasoning   string
+	Failures    []string
+	Diagnostics []Diagnostic
+	CostUSD     float64
 }
 
 // Message represents a single message in a conversation.

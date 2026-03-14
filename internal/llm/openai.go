@@ -168,10 +168,11 @@ func (c *OpenAIClient) Judge(ctx context.Context, req JudgeRequest) (JudgeRespon
 	}
 
 	return JudgeResponse{
-		Score:     result.Score,
-		Reasoning: result.Reasoning,
-		Failures:  result.Failures,
-		CostUSD:   m.cost,
+		Score:       result.Score,
+		Reasoning:   result.Reasoning,
+		Failures:    result.Failures,
+		Diagnostics: result.Diagnostics,
+		CostUSD:     m.cost,
 	}, nil
 }
 

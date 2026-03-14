@@ -54,11 +54,17 @@ func (j *Judge) Score(ctx context.Context, scenario Scenario, step Step, observe
 		"cost", resp.CostUSD,
 	)
 
+	var diagnostics []llm.Diagnostic
+	if len(resp.Diagnostics) > 0 {
+		diagnostics = resp.Diagnostics
+	}
+
 	return StepScore{
-		Score:     resp.Score,
-		Reasoning: resp.Reasoning,
-		Failures:  resp.Failures,
-		CostUSD:   resp.CostUSD,
+		Score:       resp.Score,
+		Reasoning:   resp.Reasoning,
+		Failures:    resp.Failures,
+		Diagnostics: diagnostics,
+		CostUSD:     resp.CostUSD,
 	}, nil
 }
 
