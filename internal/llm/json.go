@@ -4,9 +4,10 @@ import "strings"
 
 // judgeResult is the expected JSON structure from the judge LLM.
 type judgeResult struct {
-	Score     int      `json:"score"`
-	Reasoning string   `json:"reasoning"`
-	Failures  []string `json:"failures"`
+	Score       int          `json:"score"`
+	Reasoning   string       `json:"reasoning"`
+	Failures    []string     `json:"failures"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 
 // ExtractJSON strips markdown code fences from LLM output to get raw JSON.

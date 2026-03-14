@@ -1,13 +1,18 @@
 package scenario
 
-import "time"
+import (
+	"time"
+
+	"github.com/foundatron/octopusgarden/internal/llm"
+)
 
 // StepScore holds the LLM judge's evaluation of a single step.
 type StepScore struct {
-	Score     int
-	Reasoning string
-	Failures  []string
-	CostUSD   float64
+	Score       int
+	Reasoning   string
+	Failures    []string
+	Diagnostics []llm.Diagnostic
+	CostUSD     float64
 }
 
 // StepResult captures the outcome of executing a single scenario step.

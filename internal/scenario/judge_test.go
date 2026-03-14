@@ -231,6 +231,95 @@ func TestJudgeScoreScenarioStepCountMismatch(t *testing.T) {
 	}
 }
 
+func TestJudgeScoreDiagnosticsPresent(t *testing.T) {
+	client := &mockClient{
+		judgeFunc: func(_ context.Context, _ llm.JudgeRequest) (llm.JudgeResponse, error) {
+			return llm.JudgeResponse{
+				Score:     40,
+				Reasoning: "Multiple issues",
+				Diagnostics: []llm.Diagnostic{
+					{Category: "missing_endpoint", Detail: "POST /users returned 404"},
+					{Category: "wrong_response_shape", Detail: "missing email field"},
+				},
+				CostUSD: 0.002,
+			}, nil
+		},
+	}
+
+	judge := NewJudge(client, "test-model", newTestLogger())
+	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "201 with user"}, "HTTP 404\nBody:\nnot found")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(score.Diagnostics) != 2 {
+		t.Fatalf("got %d diagnostics, want 2", len(score.Diagnostics))
+	}
+	if score.Diagnostics[0].Category != "missing_endpoint" {
+		t.Errorf("diagnostics[0].Category = %q, want %q", score.Diagnostics[0].Category, "missing_endpoint")
+	}
+	if score.Diagnostics[0].Detail != "POST /users returned 404" {
+		t.Errorf("diagnostics[0].Detail = %q, want %q", score.Diagnostics[0].Detail, "POST /users returned 404")
+	}
+	if score.Diagnostics[1].Category != "wrong_response_shape" {
+		t.Errorf("diagnostics[1].Category = %q, want %q", score.Diagnostics[1].Category, "wrong_response_shape")
+	}
+}
+
+func TestJudgeScoreDiagnosticsAbsent(t *testing.T) {
+	client := &mockClient{
+		judgeFunc: func(_ context.Context, _ llm.JudgeRequest) (llm.JudgeResponse, error) {
+			return llm.JudgeResponse{
+				Score:     100,
+				Reasoning: "Perfect",
+				CostUSD:   0.001,
+			}, nil
+		},
+	}
+
+	judge := NewJudge(client, "test-model", newTestLogger())
+	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "200 OK"}, "HTTP 200\nBody:\nok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if score.Diagnostics != nil {
+		t.Errorf("got diagnostics %v, want nil", score.Diagnostics)
+	}
+}
+
+func TestJudgeScoreDiagnosticsWithFailures(t *testing.T) {
+	client := &mockClient{
+		judgeFunc: func(_ context.Context, _ llm.JudgeRequest) (llm.JudgeResponse, error) {
+			return llm.JudgeResponse{
+				Score:     30,
+				Reasoning: "Broken",
+				Failures:  []string{"status code wrong", "body malformed"},
+				Diagnostics: []llm.Diagnostic{
+					{Category: "bad_status", Detail: "expected 200 got 500"},
+				},
+				CostUSD: 0.003,
+			}, nil
+		},
+	}
+
+	judge := NewJudge(client, "test-model", newTestLogger())
+	score, err := judge.Score(context.Background(), Scenario{Description: "Test"}, Step{Description: "Step 1", Expect: "200 with body"}, "HTTP 500\nBody:\nerror")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(score.Failures) != 2 {
+		t.Errorf("got %d failures, want 2", len(score.Failures))
+	}
+	if len(score.Diagnostics) != 1 {
+		t.Errorf("got %d diagnostics, want 1", len(score.Diagnostics))
+	}
+	if score.Diagnostics[0].Category != "bad_status" {
+		t.Errorf("diagnostics[0].Category = %q, want %q", score.Diagnostics[0].Category, "bad_status")
+	}
+}
+
 func TestAggregateSingleScenario(t *testing.T) {
 	scenarios := []ScoredScenario{
 		{
