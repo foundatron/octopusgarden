@@ -78,7 +78,8 @@ octopusgarden/
 │   │   ├── spec.md               # Spec file
 │   │   └── scenarios/            # Scenario YAML files
 │   └── exemplars/                # Reference implementations for gene extraction
-│       └── go-rest/              # Go stdlib REST API (CRUD, pagination, in-memory store)
+│       ├── go-rest/              # Go stdlib REST API (CRUD, pagination, in-memory store)
+│       └── python-rest/          # Python stdlib REST API (CRUD, pagination, in-memory store)
 └── docs/architecture.md          # This file
 ```
 
