@@ -26,10 +26,14 @@ import (
 
 // mockLLMClient implements llm.Client for testing.
 type mockLLMClient struct {
-	judgeFn func(ctx context.Context, req llm.JudgeRequest) (llm.JudgeResponse, error)
+	generateFn func(ctx context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error)
+	judgeFn    func(ctx context.Context, req llm.JudgeRequest) (llm.JudgeResponse, error)
 }
 
-func (m *mockLLMClient) Generate(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+func (m *mockLLMClient) Generate(ctx context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+	if m.generateFn != nil {
+		return m.generateFn(ctx, req)
+	}
 	return llm.GenerateResponse{}, nil
 }
 
@@ -976,6 +980,113 @@ func TestWriteConfigFile(t *testing.T) {
 	if anthIdx > openIdx {
 		t.Errorf("ANTHROPIC_API_KEY should come before OPENAI_API_KEY in output")
 	}
+}
+
+func TestInterviewRun(t *testing.T) {
+	tests := []struct {
+		name       string
+		responses  []string  // Generate responses in order: opening question, then final spec
+		costs      []float64 // CostUSD per Generate call
+		userInput  string    // lines typed by the user
+		wantSpec   string    // expected content written to output file
+		wantErrOut string    // expected fragment in errOut
+		wantErr    bool
+	}{
+		{
+			name:       "happy path writes spec and reports cost",
+			responses:  []string{"What are you building?", "## My Spec\n\nA task manager."},
+			costs:      []float64{0.001, 0.002},
+			userInput:  "done\n",
+			wantSpec:   "## My Spec\n\nA task manager.",
+			wantErrOut: "$0.0030",
+		},
+		{
+			name:       "zero cost prints free",
+			responses:  []string{"What are you building?", "## Spec\n\nFree spec."},
+			costs:      []float64{0, 0},
+			userInput:  "done\n",
+			wantSpec:   "## Spec\n\nFree spec.",
+			wantErrOut: "free",
+		},
+		{
+			name:      "LLM error propagates",
+			responses: nil,
+			costs:     nil,
+			userInput: "",
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callIdx := 0
+			client := &mockLLMClient{
+				generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+					if tt.responses == nil {
+						return llm.GenerateResponse{}, errors.New("LLM unavailable")
+					}
+					if callIdx >= len(tt.responses) {
+						t.Fatalf("unexpected Generate call %d", callIdx)
+					}
+					resp := llm.GenerateResponse{
+						Content: tt.responses[callIdx],
+						CostUSD: tt.costs[callIdx],
+					}
+					callIdx++
+					return resp, nil
+				},
+			}
+
+			dir := t.TempDir()
+			outputPath := filepath.Join(dir, "spec.md")
+			in := strings.NewReader(tt.userInput)
+			var out, errOut bytes.Buffer
+
+			err := interviewRun(context.Background(), client, "test-model", "What would you like to build?", outputPath, in, &out, &errOut)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("interviewRun: %v", err)
+			}
+
+			content, readErr := os.ReadFile(outputPath)
+			if readErr != nil {
+				t.Fatalf("read output file: %v", readErr)
+			}
+			if string(content) != tt.wantSpec {
+				t.Errorf("spec content = %q, want %q", string(content), tt.wantSpec)
+			}
+
+			if tt.wantErrOut != "" && !strings.Contains(errOut.String(), tt.wantErrOut) {
+				t.Errorf("errOut = %q, want it to contain %q", errOut.String(), tt.wantErrOut)
+			}
+		})
+	}
+
+	t.Run("file write error returns error", func(t *testing.T) {
+		callIdx := 0
+		responses := []string{"Question?", "## Spec"}
+		client := &mockLLMClient{
+			generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+				resp := llm.GenerateResponse{Content: responses[callIdx]}
+				callIdx++
+				return resp, nil
+			},
+		}
+		// Use a path under a non-existent nested directory to force write failure.
+		badPath := filepath.Join(t.TempDir(), "does-not-exist", "sub", "spec.md")
+		in := strings.NewReader("done\n")
+		var out, errOut bytes.Buffer
+
+		err := interviewRun(context.Background(), client, "model", "start", badPath, in, &out, &errOut)
+		if err == nil {
+			t.Fatal("expected write error, got nil")
+		}
+	})
 }
 
 func TestExtractCmdSourceDirNotExist(t *testing.T) {

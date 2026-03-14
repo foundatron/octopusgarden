@@ -77,6 +77,13 @@ octog configure
 export ANTHROPIC_API_KEY=sk-...
 ```
 
+Draft a spec interactively:
+
+```bash
+# Conversational spec-drafting (outputs spec.md by default)
+octog interview --output my-spec.md
+```
+
 Run the factory on the included examples:
 
 ```bash
