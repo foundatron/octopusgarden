@@ -24,6 +24,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/attractor"
 	"github.com/foundatron/octopusgarden/internal/container"
 	"github.com/foundatron/octopusgarden/internal/gene"
+	"github.com/foundatron/octopusgarden/internal/interview"
 	"github.com/foundatron/octopusgarden/internal/lint"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/observability"
@@ -95,6 +96,8 @@ func main() {
 		err = modelsCmd(ctx, logger, os.Args[2:])
 	case "extract":
 		err = extractCmd(ctx, logger, os.Args[2:])
+	case "interview":
+		err = interviewCmd(ctx, logger, os.Args[2:])
 	case "preflight":
 		err = preflightCmd(ctx, logger, os.Args[2:])
 	case "configure":
@@ -130,6 +133,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage: octog <command> [flags]
 
 Commands:
+  interview  Interactively draft a spec through conversation
   run        Run the attractor loop to generate software from a spec
   validate   Validate a running service against scenarios
   preflight  Assess spec clarity before running the attractor loop
@@ -1585,6 +1589,55 @@ func printResult(result *attractor.RunResult, language string) {
 	fmt.Printf("  Satisfaction: %.1f%%\n", result.Satisfaction)
 	fmt.Printf("  Cost:         $%.4f\n", result.CostUSD)
 	fmt.Printf("  Output:       %s\n", result.OutputDir)
+}
+
+func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("interview", flag.ContinueOnError)
+	output := fs.String("output", "spec.md", "output file path for the generated spec")
+	model := fs.String("model", "", "LLM model to use (default: provider-specific)")
+	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+	prompt := fs.String("prompt", "What would you like to build?", "opening question to start the interview")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: octog interview [flags]\n\nInteractively draft a spec through conversation.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	clients, err := newLLMClient(*provider, logger)
+	if err != nil {
+		return err
+	}
+	if *model == "" {
+		*model = defaultModel(clients.provider)
+	}
+	logger.Info("starting interview", "provider", clients.provider, "model", *model)
+
+	return interviewRun(ctx, clients.client, *model, *prompt, *output, os.Stdin, os.Stdout, os.Stderr)
+}
+
+// interviewRun runs the interview conversation and writes the resulting spec to
+// outputPath. Separated from interviewCmd for testability.
+func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath string, in io.Reader, out, errOut io.Writer) error {
+	iv := interview.New(client, in, out, model)
+	spec, cost, err := iv.Run(ctx, initialPrompt)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(outputPath, []byte(spec), 0o644); err != nil { //nolint:gosec // G306: spec.md is a user-facing document, 0644 is intentional
+		return fmt.Errorf("write spec: %w", err)
+	}
+
+	costStr := fmt.Sprintf("$%.4f", cost)
+	if cost == 0 {
+		costStr = "free"
+	}
+	fmt.Fprintf(errOut, "Spec written to %s (cost: %s)\n", outputPath, costStr) //nolint:gosec,errcheck // G705 false positive: writing to stderr, not an HTTP response
+	return nil
 }
 
 func configureCmd(_ context.Context, _ *slog.Logger, args []string) error {

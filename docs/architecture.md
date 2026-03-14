@@ -60,6 +60,7 @@ octopusgarden/
 │   │   ├── models.go             # Model registry, cost tracking
 │   │   └── prompt.go             # Prompt templates
 │   ├── gene/                     # Gene transfusion (scan, analyze, gene types)
+│   ├── interview/                # Conversational spec-drafting assistant
 │   ├── lint/                     # Spec and scenario structural linting
 │   ├── preflight/                # LLM-based spec/scenario quality assessment
 │   │   ├── preflight.go          # Check(): spec clarity (goal, constraint, success)
@@ -85,6 +86,8 @@ cmd/octog
     │       ├── internal/llm
     │       ├── internal/spec
     │       └── internal/container
+    ├── internal/interview      (conversational spec-drafting, multi-turn LLM)
+    │       └── internal/llm
     ├── internal/preflight      (spec clarity, scenario quality assessment)
     │       └── internal/llm
     ├── internal/gene           (scan, analyze, gene types)
@@ -115,6 +118,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
 | `llm` | Model-agnostic LLM client, cost tracking, prompt templates | `client.go`, `anthropic.go`, `openai.go`, `models.go`, `json.go`, `prompt.go` | anthropic-sdk, openai-sdk |
 | `gene` | Scan exemplar codebases, LLM pattern extraction | `gene.go`, `scan.go`, `analyze.go` | `llm`, `spec` |
+| `interview` | Conversational spec-drafting via multi-turn LLM interview | `interview.go`, `prompt.go` | `llm` |
 | `preflight` | Pre-run quality assessment of specs and scenarios | `preflight.go`, `scenario.go` | `llm` |
 | `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go` | (none) |
 | `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
@@ -924,6 +928,7 @@ implement it). The service name is `octog`.
 ## CLI Interface
 
 ```text
+octog interview  [--output spec.md] [--model ...] [--provider anthropic|openai] [--prompt "What would you like to build?"]
 octog run        --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--frugal-model ...] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--block-on-regression] [--context-budget 0] [--otel-endpoint ...] [--skip-preflight] [--preflight-threshold 0.8] [-v 0|1|2] [--provider anthropic|openai]
 octog validate   --scenarios <dir> --target <url> [--grpc-target host:port] [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [-v 0|1|2] [--provider anthropic|openai]
 octog preflight  [--judge-model claude-haiku-4-5] [--threshold 0.8] [--verbose] [--scenarios <dir>] <spec-path>
@@ -934,7 +939,7 @@ octog models     [--provider anthropic|openai]
 octog configure
 ```
 
-Subcommands: `run`, `validate`, `preflight`, `status`, `lint`, `extract`, `models`, `configure`.
+Subcommands: `interview`, `run`, `validate`, `preflight`, `status`, `lint`, `extract`, `models`, `configure`.
 
 Provider is auto-detected from which API key is set. Use `--provider` to disambiguate when both are
 present. Config file (`~/.octopusgarden/config`) supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`;
