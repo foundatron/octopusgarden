@@ -1269,3 +1269,103 @@ func capsSuffix(caps ScenarioCapabilities) string {
 		return "default"
 	}
 }
+
+func TestBuildAgenticSystemPrompt(t *testing.T) {
+	spec := "Build a REST API for managing widgets"
+	prompt := buildAgenticSystemPrompt(spec, ScenarioCapabilities{NeedsHTTP: true}, "go", "", "")
+
+	if !strings.Contains(prompt, spec) {
+		t.Error("agentic system prompt should contain the spec")
+	}
+	if !strings.Contains(prompt, "write_file") {
+		t.Error("agentic system prompt should mention write_file tool")
+	}
+	// Must NOT contain the === FILE: format instruction.
+	if strings.Contains(prompt, "=== FILE:") {
+		t.Error("agentic system prompt must not contain === FILE: format instruction")
+	}
+	// Must NOT contain the EXAMPLE block.
+	if strings.Contains(prompt, "=== FILE: main.go ===") {
+		t.Error("agentic system prompt must not contain language example block")
+	}
+}
+
+func TestBuildAgenticSystemPromptContainsGenes(t *testing.T) {
+	genes := "Use dependency injection pattern"
+	prompt := buildAgenticSystemPrompt("some spec", ScenarioCapabilities{}, "", genes, "")
+	if !strings.Contains(prompt, genes) {
+		t.Error("agentic system prompt should include gene content when provided")
+	}
+}
+
+func TestBuildAgenticMessages_Iteration1(t *testing.T) {
+	msgs := buildAgenticMessages(1, nil)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Errorf("expected role user, got %q", msgs[0].Role)
+	}
+	if !strings.Contains(msgs[0].Content, "write_file") {
+		t.Error("iteration 1 message should mention write_file tool")
+	}
+	// Must NOT contain the === FILE: format instruction.
+	if strings.Contains(msgs[0].Content, "=== FILE:") {
+		t.Error("agentic message must not contain === FILE: format instruction")
+	}
+}
+
+func TestBuildAgenticMessages_Iteration2(t *testing.T) {
+	history := []iterationFeedback{
+		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 50.0/100\nneeds work"},
+	}
+	msgs := buildAgenticMessages(2, history)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content, "write_file") {
+		t.Error("iteration 2 message should mention write_file tool")
+	}
+	if !strings.Contains(msgs[0].Content, "previous attempt") {
+		t.Error("iteration 2 message should reference previous attempt")
+	}
+	// Must NOT contain the === FILE: format instruction.
+	if strings.Contains(msgs[0].Content, "=== FILE:") {
+		t.Error("agentic message must not contain === FILE: format instruction")
+	}
+}
+
+func TestBuildAgenticPatchMessages(t *testing.T) {
+	bestFiles := map[string]string{
+		"main.go":    "package main\n",
+		"Dockerfile": "FROM scratch\n",
+	}
+	history := []iterationFeedback{
+		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 60.0/100\nmissing endpoint"},
+	}
+	msgs := buildAgenticPatchMessages(history, bestFiles, 60.0)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	content := msgs[0].Content
+
+	// Should list file paths, not file content.
+	if !strings.Contains(content, "main.go") {
+		t.Error("patch message should list main.go path")
+	}
+	if !strings.Contains(content, "Dockerfile") {
+		t.Error("patch message should list Dockerfile path")
+	}
+	// Should mention read_file for inspection.
+	if !strings.Contains(content, "read_file") {
+		t.Error("patch message should mention read_file for inspecting files")
+	}
+	// Should mention write_file for output.
+	if !strings.Contains(content, "write_file") {
+		t.Error("patch message should mention write_file for output")
+	}
+	// Must NOT embed full file content.
+	if strings.Contains(content, "package main") {
+		t.Error("agentic patch message must not embed file content inline")
+	}
+}

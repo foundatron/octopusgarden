@@ -651,6 +651,99 @@ func buildMinimalismSuffix(score float64, failedScenarios map[string]float64) st
 	return b.String()
 }
 
+// buildAgenticSystemPrompt creates the system prompt for agentic (tool-use) code generation.
+// Structurally similar to buildSystemPrompt but replaces the file-format suffix with
+// tool-use instructions via buildAgenticCapabilitySuffix.
+func buildAgenticSystemPrompt(spec string, caps ScenarioCapabilities, language, genes, geneLanguage string) string {
+	var b strings.Builder
+	b.WriteString(systemPromptPrefix)
+	b.WriteString(spec)
+	if genes != "" {
+		b.WriteString(buildGeneSection(genes, language, geneLanguage))
+	}
+	b.WriteString(buildAgenticCapabilitySuffix(caps, language))
+	b.WriteString(buildDepRules(language))
+	return b.String()
+}
+
+// buildAgenticCapabilitySuffix assembles instruction text for agentic tool-use mode.
+// Uses the same capability instructions as buildCapabilitySuffix but replaces the
+// === FILE: === format instructions with write_file tool-use instructions.
+// No language example block is included.
+func buildAgenticCapabilitySuffix(caps ScenarioCapabilities, language string) string {
+	var b strings.Builder
+	b.WriteString("\n\nINSTRUCTIONS:\n")
+	b.WriteString(capabilityInstructions(caps))
+	b.WriteString("\n- Use the write_file tool to create each file in the workspace")
+	if _, ok := LookupLanguage(language); ok {
+		b.WriteString("\n- Use read_file to inspect existing files and list_files to see what is present")
+	}
+	b.WriteString("\n- Write ALL required files; do not skip any file needed for a working application\n")
+	b.WriteString("- Minimize explanatory text; focus on writing the files\n")
+	b.WriteString(capabilityTrailingInstructions(caps))
+	return b.String()
+}
+
+// buildAgenticMessages constructs the user message for agentic generation.
+// Iteration 1 gets a simple "Generate" prompt using tool calls.
+// Subsequent iterations include failure feedback.
+func buildAgenticMessages(iter int, history []iterationFeedback) []llm.Message {
+	if iter == 1 || len(history) == 0 {
+		return []llm.Message{
+			{Role: "user", Content: "Generate the application according to the specification. Use the write_file tool to create each file."},
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("The previous attempt did not fully satisfy the specification. Here is the feedback:\n\n")
+
+	if steeringText := buildSteeringText(history); steeringText != "" {
+		b.WriteString(steeringText)
+		b.WriteString("\n")
+	}
+
+	start := max(len(history)-maxFeedbackEntries, 0)
+	writeCategorizedFeedback(&b, history[start:])
+
+	b.WriteString("Please generate a corrected version of the application. Use the write_file tool to create ALL required files.")
+
+	return []llm.Message{
+		{Role: "user", Content: b.String()},
+	}
+}
+
+// buildAgenticPatchMessages constructs the user message for agentic patch mode.
+// Lists current files as paths only (agent can read_file to inspect content).
+// Includes failure feedback and asks the agent to use write_file to update files.
+func buildAgenticPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64) []llm.Message {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The current best version scored %.1f/100. Current files in the workspace:\n\n", bestScore)
+
+	paths := slices.Sorted(maps.Keys(bestFiles))
+	for _, p := range paths {
+		fmt.Fprintf(&b, "- %s\n", p)
+	}
+	b.WriteString("\nUse read_file to inspect any file you need to review before making changes.\n\n")
+
+	if steeringText := buildSteeringText(history); steeringText != "" {
+		b.WriteString(steeringText)
+		b.WriteString("\n")
+	}
+
+	if len(history) > 0 {
+		b.WriteString("Here is the feedback:\n\n")
+		start := max(len(history)-maxFeedbackEntries, 0)
+		writeCategorizedFeedback(&b, history[start:])
+	}
+
+	b.WriteString("Use the write_file tool to write any files that need to change. ")
+	b.WriteString("You only need to write files that require modification; unchanged files are already present.")
+
+	return []llm.Message{
+		{Role: "user", Content: b.String()},
+	}
+}
+
 // formatScoreTrajectory formats a slice of scores as "50 → 45 → 40".
 func formatScoreTrajectory(scores []float64) string {
 	parts := make([]string, len(scores))

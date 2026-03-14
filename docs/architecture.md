@@ -676,6 +676,8 @@ type RunOptions struct {
 	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
 	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
 	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
+	Agentic           bool                 // if true, use AgentLoop for code generation (tool-use mode)
+	AgentMaxTurns     int                  // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
 }
 ```
 
@@ -764,6 +766,7 @@ type IterationProgress struct {
 	OutputTokens     int
 	Failures         []string
 	Model            string // model used for generation in this iteration
+	Turns            int    // number of agent turns used (0 for non-agentic iterations)
 }
 ```
 
