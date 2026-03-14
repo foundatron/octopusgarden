@@ -760,13 +760,17 @@ Here is the diff of all changes on this branch:
 </diff>
 
 Instructions:
-1. Read `docs/architecture.md` and `README.md`.
+1. Read `docs/architecture.md`, `docs/gene-transfusion.md`, and `README.md`.
 2. Review the diff above and determine if the documentation needs updates to reflect the changes.
-3. The two docs serve different audiences:
+3. The three docs serve different audiences:
    - `docs/architecture.md` is a reference for AI agents and LLMs that work on this codebase.
      It should be comprehensive and information-dense -- optimized for machine consumption,
      not human readability. Include type signatures, interface definitions, package relationships,
      and behavioral details that help an LLM understand the system quickly.
+   - `docs/gene-transfusion.md` is a user-facing guide for the gene transfusion feature. It covers
+     extraction, gene JSON format, components, composed convergence, cross-language synthesis, and
+     CLI reference. Update it when gene-related code changes (internal/gene/*, attractor component
+     logic, scenario component field, CLI flags for --genes/--language).
    - `README.md` is for human developers. Keep it concise, user-friendly, and focused on
      usage, quick start, and high-level concepts.
 4. Common updates include:
@@ -775,6 +779,7 @@ Instructions:
    - Changed data structures or type definitions
    - New capabilities, algorithms, or features
    - Updated package dependency DAG
+   - Gene/component changes reflected in gene-transfusion.md
 5. If documentation needs updates, make the changes directly. Keep the existing style and structure.
    Only update sections that are affected by the code changes -- do not rewrite unrelated sections.
 6. Run `make docs` to sync any embedded code blocks (embedmd).
