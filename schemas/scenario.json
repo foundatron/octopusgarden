@@ -26,6 +26,12 @@
       "exclusiveMinimum": 0,
       "description": "Relative weight for aggregate satisfaction scoring. Defaults to 1.0."
     },
+    "tier": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3,
+      "description": "Difficulty tier (1=simple, 2=moderate, 3=complex). Auto-inferred from step count and capture usage when omitted."
+    },
     "component": {
       "type": "string",
       "description": "Component name for composed convergence. Empty or omitted means integration scenario (validated against composed app)."

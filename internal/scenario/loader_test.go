@@ -213,6 +213,87 @@ func TestLoad_requestFields(t *testing.T) {
 	}
 }
 
+func TestTierInference(t *testing.T) {
+	makeSteps := func(n int) []Step {
+		steps := make([]Step, n)
+		for i := range steps {
+			steps[i] = Step{Request: &Request{Method: "GET", Path: "/items"}}
+		}
+		return steps
+	}
+	makeStepsWithCaptures := func(n, withCap int) []Step {
+		steps := makeSteps(n)
+		for i := range withCap {
+			steps[i].Capture = []Capture{{Name: "x", JSONPath: "$.id"}}
+		}
+		return steps
+	}
+
+	// Explicit tier round-trips through YAML without inference.
+	t.Run("explicit tier round-trips", func(t *testing.T) {
+		input := "id: t\ntier: 2\nsteps:\n  - request:\n      method: GET\n      path: /items\n    expect: ok\n"
+		s, err := Load(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if s.Tier != 2 {
+			t.Errorf("Tier = %d, want 2", s.Tier)
+		}
+	})
+
+	tests := []struct {
+		name     string
+		scenario Scenario
+		wantTier int
+	}{
+		{
+			name:     "2 steps no captures -> tier 1",
+			scenario: Scenario{ID: "t", Steps: makeSteps(2)},
+			wantTier: 1,
+		},
+		{
+			name:     "4 steps no captures -> tier 2",
+			scenario: Scenario{ID: "t", Steps: makeSteps(4)},
+			wantTier: 2,
+		},
+		{
+			name:     "3 steps 1 capture -> tier 2",
+			scenario: Scenario{ID: "t", Steps: makeStepsWithCaptures(3, 1)},
+			wantTier: 2,
+		},
+		{
+			name:     "8 steps no captures -> tier 3",
+			scenario: Scenario{ID: "t", Steps: makeSteps(8)},
+			wantTier: 3,
+		},
+		{
+			name:     "3 steps 3 captures -> tier 3",
+			scenario: Scenario{ID: "t", Steps: makeStepsWithCaptures(3, 3)},
+			wantTier: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := inferTier(tt.scenario)
+			if got != tt.wantTier {
+				t.Errorf("inferTier() = %d, want %d", got, tt.wantTier)
+			}
+		})
+	}
+
+	// sampleYAML: 2 judged steps, setup-only capture -> tier 1
+	t.Run("sampleYAML infers tier 1", func(t *testing.T) {
+		s, err := Load(strings.NewReader(sampleYAML))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if s.Tier != 1 {
+			t.Errorf("Tier = %d, want 1", s.Tier)
+		}
+	})
+}
+
 func TestComponentFieldRoundTrip(t *testing.T) {
 	const yaml = `
 id: models-crud

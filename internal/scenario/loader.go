@@ -92,5 +92,30 @@ func parseScenario(data []byte) (Scenario, error) {
 		s.Weight = &w
 	}
 
+	if s.Tier == 0 {
+		s.Tier = inferTier(s)
+	}
+
 	return s, nil
+}
+
+// inferTier assigns a difficulty tier based on step count and capture usage.
+// Tier 3: more than 6 judged steps, or 3+ steps with captures.
+// Tier 2: more than 3 judged steps, or at least 1 step with captures.
+// Tier 1: everything else.
+func inferTier(s Scenario) int {
+	stepsWithCaptures := 0
+	for _, step := range s.Steps {
+		if len(step.Capture) > 0 {
+			stepsWithCaptures++
+		}
+	}
+	switch {
+	case len(s.Steps) > 6 || stepsWithCaptures >= 3:
+		return 3
+	case len(s.Steps) > 3 || stepsWithCaptures >= 1:
+		return 2
+	default:
+		return 1
+	}
 }

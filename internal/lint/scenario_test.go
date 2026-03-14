@@ -993,6 +993,50 @@ steps:
 			wantErrors: 1,
 			wantMsg:    "exec files must be a mapping",
 		},
+		{
+			name: "tier 0 is invalid",
+			yaml: `id: test
+tier: 0
+steps:
+  - description: A step
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "tier must be between 1 and 3",
+		},
+		{
+			name: "tier 4 is invalid",
+			yaml: `id: test
+tier: 4
+steps:
+  - description: A step
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "tier must be between 1 and 3",
+		},
+		{
+			name: "tier 2 is valid",
+			yaml: `id: test
+tier: 2
+steps:
+  - description: A step
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
 	}
 
 	for _, tt := range tests {
