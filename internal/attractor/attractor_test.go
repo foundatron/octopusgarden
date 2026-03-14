@@ -2838,6 +2838,81 @@ func TestComposedConvergence_AgenticSkip(t *testing.T) {
 	}
 }
 
+func TestComposedConvergence_TransitiveDeps(t *testing.T) {
+	// Components: A (no deps), B (depends on A), C (depends on B only, NOT A).
+	// C's build context must contain A's files (transitive through B).
+	componentOutput := func(filename, content string) string {
+		return fmt.Sprintf("=== FILE: %s ===\n%s\n=== END FILE ===\n=== FILE: Dockerfile ===\nFROM scratch\n=== END FILE ===", filename, content)
+	}
+
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			// Detect which component we're generating for via the interface text.
+			switch {
+			case strings.Contains(req.SystemPrompt, "iface-A"):
+				return llm.GenerateResponse{Content: componentOutput("a.go", "package a"), CostUSD: 0.01}, nil
+			case strings.Contains(req.SystemPrompt, "iface-B"):
+				return llm.GenerateResponse{Content: componentOutput("b.go", "package b"), CostUSD: 0.01}, nil
+			case strings.Contains(req.SystemPrompt, "iface-C"):
+				return llm.GenerateResponse{Content: componentOutput("c.go", "package c"), CostUSD: 0.01}, nil
+			default:
+				return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+			}
+		},
+	}
+
+	var cBuildDir string
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, dir, tag string) error {
+			if strings.Contains(tag, "comp-C-") {
+				cBuildDir = dir
+			}
+			return nil
+		},
+	}
+
+	componentValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+	integrationValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.GeneComponents = []gene.Component{
+		{Name: "A", Interface: "iface-A"},
+		{Name: "B", Interface: "iface-B", DependsOn: []string{"A"}},
+		{Name: "C", Interface: "iface-C", DependsOn: []string{"B"}}, // NOT directly depending on A
+	}
+	opts.ComponentValidators = map[string]ValidateFn{
+		"A": componentValidate,
+		"B": componentValidate,
+		"C": componentValidate,
+		"":  integrationValidate,
+	}
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, componentValidate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+
+	// Verify C's build directory contains A's files (transitive dep).
+	if cBuildDir == "" {
+		t.Fatal("C component build was never called")
+	}
+	aContent, err := os.ReadFile(filepath.Join(cBuildDir, "a.go"))
+	if err != nil {
+		t.Fatalf("C's build context missing transitive dep file a.go: %v", err)
+	}
+	if string(aContent) != "package a\n" {
+		t.Errorf("unexpected a.go content in C's build: %q", string(aContent))
+	}
+}
+
 func TestComposedConvergence_IntegrationFail(t *testing.T) {
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {

@@ -22,23 +22,26 @@ Gene transfusion is a three-stage pipeline:
 
 ```text
 Source Directory ──→ Scan ──→ Analyze (LLM) ──→ Gene JSON
-                      │            │
-               select files   extract patterns
-               detect lang    produce guide
+                      │            │                  │
+               select files   extract patterns   extract components
+               detect lang    produce guide      (if multi-layer)
 ```
 
-1. **Scan** (`internal/gene/scan.go`) — walks the source directory and selects high-signal files:
+1. **Scan** (`internal/gene/scan.go`) -- walks the source directory and selects high-signal files:
    project markers (`go.mod`, `package.json`), README (truncated to 100 lines), Dockerfile,
    entrypoint, largest handler file, and largest model file. Skips test files, generated files, lock
    files, and binary assets. Enforces a ~20,000 token budget by dropping lower-priority files.
 
-1. **Analyze** (`internal/gene/analyze.go`) — sends the selected files to an LLM with a structured
+1. **Analyze** (`internal/gene/analyze.go`) -- sends the selected files to an LLM with a structured
    extraction prompt. The LLM produces a concise guide covering: architectural pattern, invariants,
-   edge case handling, stack, directory structure, boot sequence, and build strategy. Uses the
-   judge-tier model (e.g. `claude-haiku-4-5`) since extraction is a summarization task.
+   edge case handling, stack, directory structure, boot sequence, and build strategy. For
+   multi-layer codebases, the LLM also identifies **components** with their interfaces, patterns,
+   and dependency relationships. Uses the judge-tier model (e.g. `claude-haiku-4-5`) since
+   extraction is a summarization task.
 
-1. **Gene JSON** (`internal/gene/gene.go`) — the guide is stored as a versioned JSON file with
-   metadata: source directory, detected language, extraction timestamp, guide text, and token count.
+1. **Gene JSON** (`internal/gene/gene.go`) -- the guide and optional components are stored as a
+   versioned JSON file with metadata: source directory, detected language, extraction timestamp,
+   guide text, token count, and component definitions.
 
 ### Prompt Injection
 
@@ -71,18 +74,134 @@ semantics.
   "language": "go",
   "extracted_at": "2026-03-06T14:30:00Z",
   "guide": "**PATTERN** — Layered architecture with...",
-  "token_count": 2320
+  "token_count": 2320,
+  "components": [
+    {
+      "name": "models",
+      "interface": "Data model types and validation",
+      "patterns": "Struct tags for JSON/DB mapping, builder pattern for complex types",
+      "depends_on": []
+    },
+    {
+      "name": "routes",
+      "interface": "HTTP handlers and middleware",
+      "patterns": "Chi router, middleware chain, request/response DTOs",
+      "depends_on": ["models"]
+    }
+  ]
 }
 ```
 
-| Field          | Type   | Description                                          |
-| -------------- | ------ | ---------------------------------------------------- |
-| `version`      | int    | Schema version (currently 1)                         |
-| `source`       | string | Path to the source directory that was scanned        |
-| `language`     | string | Detected language: `go`, `python`, `node`, or `rust` |
-| `extracted_at` | string | ISO 8601 timestamp of extraction                     |
-| `guide`        | string | The extracted pattern guide (LLM-generated text)     |
-| `token_count`  | int    | Estimated token count of the guide                   |
+| Field          | Type        | Description                                          |
+| -------------- | ----------- | ---------------------------------------------------- |
+| `version`      | int         | Schema version (currently 1)                         |
+| `source`       | string      | Path to the source directory that was scanned        |
+| `language`     | string      | Detected language: `go`, `python`, `node`, or `rust` |
+| `extracted_at` | string      | ISO 8601 timestamp of extraction                     |
+| `guide`        | string      | The extracted pattern guide (LLM-generated text)     |
+| `token_count`  | int         | Estimated token count of the guide                   |
+| `components`   | Component[] | Optional array of architectural components           |
+
+### Component Fields
+
+| Field        | Type     | Description                                                |
+| ------------ | -------- | ---------------------------------------------------------- |
+| `name`       | string   | Unique component name (e.g. `models`, `routes`, `storage`) |
+| `interface`  | string   | What this component exposes to callers                     |
+| `patterns`   | string   | Key implementation patterns for this component             |
+| `depends_on` | string[] | Names of components this one depends on (must form a DAG)  |
+
+Components are optional. Simple single-package applications omit them entirely, and the gene file
+works exactly as before. Components are extracted automatically when the LLM detects clear module
+boundaries in the exemplar.
+
+### Component Validation
+
+Gene files with components are validated on load:
+
+- Component names must be non-empty and unique
+- All entries in `depends_on` must reference a component that exists in the array
+- The dependency graph must be a DAG (no cycles)
+
+## Composed Convergence
+
+When a gene file contains components and scenarios declare a `component` field, the attractor loop
+uses **composed convergence** instead of the monolithic loop. Each component converges independently
+in dependency order, then the composed output is validated with integration scenarios.
+
+```text
+Gene Components ──→ Topological Sort ──→ Per-Component Mini-Loops ──→ File Merge ──→ Integration Validation
+                                               │    ▲                                        │
+                                               │    │ feedback                               ▼
+                                               │    └───────────────── LLM Judge        Converged / Fallback
+```
+
+### Convergence Algorithm
+
+1. **Topological sort** -- components are ordered so dependencies converge first (Kahn's algorithm).
+   For chain A -> B -> C, A converges first, then B (with A's files available), then C.
+
+1. **Per-component mini-loops** -- each component runs a mini convergence loop (max 5 iterations,
+   stall limit 2). The component's system prompt includes:
+
+   - The full spec (cacheable prefix via `cache_control: ephemeral`)
+   - `COMPONENT CONTRACT` -- the component's interface description
+   - `COMPONENT PATTERNS` -- implementation patterns (if provided)
+   - `DEPENDENCY INTERFACES` -- interfaces of declared dependencies only
+
+1. **Transitive dependency files** -- each component's build context includes all files from
+   previously converged components (not just direct dependencies). This ensures transitive
+   dependencies are available for compilation.
+
+1. **File merge** -- after all components converge, their files are merged in topological order.
+   Later components win on file path conflicts (logged as debug).
+
+1. **Integration validation** -- the composed output is validated against integration scenarios
+   (scenarios with empty `component` field). If integration fails, the entire composed attempt is
+   abandoned and the attractor falls back to the monolithic loop.
+
+1. **Fallback** -- if any component fails to converge, the budget is exceeded, or integration
+   validation fails, the attractor falls back to a standard monolithic convergence loop. The cost
+   from the composed attempt is carried forward.
+
+### Scenario Component Field
+
+Scenarios can declare which component they validate using the `component` field:
+
+```yaml
+id: models-crud
+description: Verify model CRUD operations
+component: models          # validates only the "models" component
+steps:
+  - method: POST
+    path: /api/models
+    # ...
+
+---
+
+id: full-integration
+description: End-to-end workflow
+# component: (empty or omitted) = integration scenario
+steps:
+  - method: POST
+    path: /api/workflow
+    # ...
+```
+
+- Scenarios with `component: <name>` are used for per-component validation during mini-loops
+- Scenarios with empty or omitted `component` are integration scenarios, used for the final composed
+  validation gate
+- The `""` key in `ComponentValidators` maps to integration scenarios
+
+### Limitations
+
+- **Not supported in agentic mode.** When `--agentic` is set, composed convergence is skipped and
+  the attractor falls back to the monolithic loop. Agentic mode uses multi-turn tool-use generation
+  which doesn't fit the sequential component model.
+- **No partial retry.** If one component fails, the entire composed attempt is abandoned. There is
+  no mechanism to retry individual components while keeping others.
+- **Compile-time limits.** The max iterations (5) and stall limit (2) for component mini-loops are
+  compile-time constants, not configurable via CLI flags.
 
 ## Cross-Language Synthesis
 
@@ -97,7 +216,7 @@ idiomatic Python constructs, libraries, and conventions.
 ```
 
 This is useful when you have a well-structured project in one language and want to generate an
-equivalent in another — the architectural patterns transfer even when the idioms differ.
+equivalent in another -- the architectural patterns transfer even when the idioms differ.
 
 ## Language Auto-Detection
 
@@ -138,7 +257,8 @@ INFO auto-detected language from genes (override with --language) language=go
 | `--language` | `go`     | Target language (`go`, `python`, `node`, `rust`, or `auto`) |
 
 When `--genes` is provided and `--language` is not explicitly set, the target language is inferred
-from the gene file.
+from the gene file. If the gene contains components and scenarios declare `component` fields,
+composed convergence activates automatically.
 
 ## File Selection
 
@@ -162,7 +282,7 @@ assets (`.exe`, `.png`, `.woff`).
 
 ## Best Practices
 
-- **Extract from your best project.** The gene captures patterns from the source directory — pick a
+- **Extract from your best project.** The gene captures patterns from the source directory -- pick a
   well-structured exemplar that represents the conventions you want.
 - **Re-extract after major refactors.** Gene files are snapshots. If the exemplar's architecture
   evolves, re-run `octog extract` to update the gene.
@@ -170,7 +290,12 @@ assets (`.exe`, `.png`, `.woff`).
   them alongside your specs and scenarios.
 - **Share across projects.** The same gene file can bootstrap multiple specs targeting the same
   language and stack.
-- **Use cross-language for migrations.** Extract from a Go service, generate a Python equivalent —
+- **Use cross-language for migrations.** Extract from a Go service, generate a Python equivalent --
   the structural patterns transfer.
 - **Stdout mode for pipelines.** Use `--output -` to pipe gene JSON into other tools or inspect
   without writing a file.
+- **Use components for multi-layer apps.** When your exemplar has distinct service layers (models,
+  routes, storage), the extracted components enable composed convergence -- each layer converges
+  independently with faster feedback loops.
+- **Tag scenarios with components.** Add `component: <name>` to scenarios that test a specific
+  layer. Leave integration scenarios untagged to serve as the final gate.

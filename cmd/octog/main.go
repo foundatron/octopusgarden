@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/foundatron/octopusgarden/internal/attractor"
@@ -386,7 +387,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 			sessionGetter: sessionGetter,
 			needsBrowser:  caps.NeedsBrowser,
 			needsWS:       caps.NeedsWS,
-		}, grpcTargetGetter)
+		}, grpcTargetGetter, tp)
 	}
 
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
@@ -1346,7 +1347,7 @@ func runAndScoreParallel(ctx context.Context, scenarios []scenario.Scenario, opt
 // buildComponentValidators creates a map of per-component ValidateFn closures.
 // Scenarios are grouped by their Component field in a single pass.
 // The "" key maps to scenarios with empty Component (integration scenarios).
-func buildComponentValidators(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string) map[string]attractor.ValidateFn {
+func buildComponentValidators(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string, tp trace.TracerProvider) map[string]attractor.ValidateFn {
 	// Group scenarios by component in a single pass.
 	grouped := make(map[string][]scenario.Scenario)
 	for _, sc := range scenarios {
@@ -1355,7 +1356,8 @@ func buildComponentValidators(scenarios []scenario.Scenario, llmClient llm.Clien
 
 	validators := make(map[string]attractor.ValidateFn, len(grouped))
 	for name, group := range grouped {
-		validators[name] = buildValidateFn(group, llmClient, judgeModel, baseOpts, grpcTargetGetter)
+		validators[name] = observability.WrapValidateFn(
+			buildValidateFn(group, llmClient, judgeModel, baseOpts, grpcTargetGetter), tp)
 	}
 	return validators
 }
