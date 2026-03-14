@@ -472,6 +472,7 @@ func (a *Attractor) runComposed(ctx context.Context, rawSpec string, opts RunOpt
 	))
 	defer composedSpan.End()
 
+	accumulatedFiles := make(map[string]string)
 	componentFiles := make(map[string]map[string]string, len(sorted))
 	depInterfaces := make(map[string]string, len(sorted))
 
@@ -481,7 +482,7 @@ func (a *Attractor) runComposed(ctx context.Context, rawSpec string, opts RunOpt
 			return nil, s.totalCost, errComponentFallback
 		}
 
-		compFiles, compErr := a.convergeComponent(ctx, rawSpec, comp, depInterfaces, componentFiles, s)
+		compFiles, compErr := a.convergeComponent(ctx, rawSpec, comp, depInterfaces, accumulatedFiles, s)
 		if compErr != nil {
 			a.logger.Warn("component convergence failed, falling back to monolithic",
 				"component", comp.Name, "error", compErr)
@@ -490,6 +491,7 @@ func (a *Attractor) runComposed(ctx context.Context, rawSpec string, opts RunOpt
 			return nil, s.totalCost, errComponentFallback
 		}
 		componentFiles[comp.Name] = compFiles
+		maps.Copy(accumulatedFiles, compFiles)
 		depInterfaces[comp.Name] = comp.Interface
 	}
 
@@ -637,7 +639,7 @@ type componentLoopState struct {
 
 // convergeComponent runs a mini convergence loop for a single component.
 // Uses local state for history/stallCount/etc. Only totalCost accumulates into s.
-func (a *Attractor) convergeComponent(ctx context.Context, rawSpec string, comp gene.Component, depInterfaces map[string]string, componentFiles map[string]map[string]string, s *runState) (map[string]string, error) {
+func (a *Attractor) convergeComponent(ctx context.Context, rawSpec string, comp gene.Component, depInterfaces map[string]string, baseFiles map[string]string, s *runState) (map[string]string, error) {
 	ctx, span := a.tracer.Start(ctx, "attractor.composed.component", trace.WithAttributes(
 		attribute.String("component", comp.Name),
 		attribute.String("run_id", s.runID),
@@ -645,7 +647,6 @@ func (a *Attractor) convergeComponent(ctx context.Context, rawSpec string, comp 
 	defer span.End()
 
 	validate := s.opts.ComponentValidators[comp.Name]
-	baseFiles := buildDepFileSet(comp, componentFiles)
 	cs := &componentLoopState{}
 
 	a.logger.Info("converging component", "component", comp.Name, "max_iterations", componentMiniLoopMaxIter)
@@ -746,17 +747,6 @@ func (a *Attractor) evaluateComponent(ctx context.Context, iterDir, compName str
 		failedScenarios: parseFailedScenarios(failures),
 	})
 	return nil, nil
-}
-
-// buildDepFileSet merges files from all converged dependencies into a base file set.
-func buildDepFileSet(comp gene.Component, componentFiles map[string]map[string]string) map[string]string {
-	base := make(map[string]string)
-	for _, dep := range comp.DependsOn {
-		if depFiles, ok := componentFiles[dep]; ok {
-			maps.Copy(base, depFiles)
-		}
-	}
-	return base
 }
 
 // buildAndValidateComponent builds a container and runs validation for a component.
