@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Fully automated GitHub issue solver for OctopusGarden.
 
-7-phase pipeline with information barriers between phases:
+8-phase pipeline with information barriers between phases:
   Phase 1: Plan          -> plan.md
   Phase 2: Review Plan   -> reviewed-plan.md (+ complexity rating)
   Phase 3: Implement     -> git commit (model chosen by complexity)
   Phase 4: Simplify      -> review diff for reuse/quality/efficiency, fix in-place
   Phase 5: Review Code   -> review-findings.md
-  Phase 6: Fix Findings  -> amended commit, push, PR
+  Phase 6: Fix Findings  -> amended commit
+  Phase 6.5: Update Docs -> update architecture.md + README.md, run make docs, push, PR
   Phase 7: CI Retry      -> fix CI failures (max 4 retries), merge
 
 Usage:
@@ -748,6 +749,40 @@ Instructions:
 5. Do NOT push. Do NOT create a PR."""
 
 
+def docs_update_prompt(diff_for_review: str) -> str:
+    return f"""\
+You are updating documentation for the octopusgarden project to reflect recent code changes.
+
+Here is the diff of all changes on this branch:
+
+<diff>
+{diff_for_review}
+</diff>
+
+Instructions:
+1. Read `docs/architecture.md` and `README.md`.
+2. Review the diff above and determine if the documentation needs updates to reflect the changes.
+3. The two docs serve different audiences:
+   - `docs/architecture.md` is a reference for AI agents and LLMs that work on this codebase.
+     It should be comprehensive and information-dense -- optimized for machine consumption,
+     not human readability. Include type signatures, interface definitions, package relationships,
+     and behavioral details that help an LLM understand the system quickly.
+   - `README.md` is for human developers. Keep it concise, user-friendly, and focused on
+     usage, quick start, and high-level concepts.
+4. Common updates include:
+   - New packages, files, or interfaces added to the architecture doc
+   - New CLI flags or commands added to README
+   - Changed data structures or type definitions
+   - New capabilities, algorithms, or features
+   - Updated package dependency DAG
+5. If documentation needs updates, make the changes directly. Keep the existing style and structure.
+   Only update sections that are affected by the code changes -- do not rewrite unrelated sections.
+6. Run `make docs` to sync any embedded code blocks (embedmd).
+7. If you made any changes, stage and amend the commit: `git add -A && git commit --amend --no-edit`
+8. If the documentation is already up-to-date and nothing needs changing, do nothing.
+9. Do NOT push. Do NOT create a PR."""
+
+
 def push_fix_prompt(push_output: str) -> str:
     return f"""\
 The git push failed because pre-push hooks found issues in the octopusgarden project.
@@ -915,6 +950,9 @@ def main() -> None:
                 f"[dry-run]   Phase 6: Fix Findings    model={impl_model}    budget={budget_display}"
             )
             log(
+                f"[dry-run]   Phase 6.5: Update Docs   model={impl_model}    budget={budget_display}"
+            )
+            log(
                 f"[dry-run]   Phase 7: CI Retry        model={impl_model}    budget={budget_display} (max {MAX_CI_RETRIES} retries)"
             )
             continue
@@ -1023,27 +1061,18 @@ def main() -> None:
                 subprocess.run(["git", "checkout", "--", "."], check=True)
                 subprocess.run(["git", "clean", "-fd"], check=True)
 
-        # Docs sync: ensure embedmd blocks are up-to-date
-        log("Syncing docs (make docs)...")
-        docs_result = subprocess.run(
-            ["make", "docs"],
-            capture_output=True,
-            text=True,
-        )
-        if docs_result.returncode != 0:
-            log(f"  WARNING: make docs failed: {(docs_result.stderr or '').strip()}")
-        else:
-            # Stage any docs changes and amend if needed
-            docs_diff = subprocess.run(
-                ["git", "diff", "--quiet", "--", "docs/"],
+        # Phase 6.5: Update Docs
+        log(f"Phase 6.5: Update Docs (model: {impl_model})...")
+        diff_for_docs = get_diff_for_review()
+        write_prompt(prompt_file, docs_update_prompt(diff_for_docs))
+        try:
+            run_phase_nocapture(
+                "Phase 6.5: Update Docs", impl_model, prompt_file, args.budget
             )
-            if docs_diff.returncode != 0:
-                log("  Docs changed, amending commit...")
-                subprocess.run(["git", "add", "docs/"], check=True)
-                subprocess.run(
-                    ["git", "commit", "--amend", "--no-edit"],
-                    check=True,
-                )
+        except PhaseError:
+            log("  WARNING: Phase 6.5 failed, discarding partial changes")
+            subprocess.run(["git", "checkout", "--", "."], check=True)
+            subprocess.run(["git", "clean", "-fd"], check=True)
 
         # Push and create PR
         log("Pushing branch and creating PR...")
