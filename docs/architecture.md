@@ -73,10 +73,12 @@ octopusgarden/
 │   ├── store/                    # SQLite run history (db.go, types.go)
 │   ├── testutil/                 # Test helpers
 │   └── e2e/                      # End-to-end integration tests
-├── examples/                     # Example specs and scenarios
-│   └── <name>/
-│       ├── spec.md               # Spec file
-│       └── scenarios/            # Scenario YAML files
+├── examples/                     # Example specs, scenarios, and reference implementations
+│   ├── <name>/
+│   │   ├── spec.md               # Spec file
+│   │   └── scenarios/            # Scenario YAML files
+│   └── exemplars/                # Reference implementations for gene extraction
+│       └── go-rest/              # Go stdlib REST API (CRUD, pagination, in-memory store)
 └── docs/architecture.md          # This file
 ```
 

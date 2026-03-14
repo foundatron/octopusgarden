@@ -6,8 +6,11 @@ attractor loop, bootstrapping code generation with proven architectural decision
 ## Quick Start
 
 ```bash
-# 1. Extract patterns from your best project
+# 1. Extract patterns from your best project (or use the bundled go-rest exemplar)
 octog extract --source-dir /path/to/exemplar --output genes.json
+
+# Bundled Go REST exemplar — good starting point for Go HTTP services
+octog extract --source-dir examples/exemplars/go-rest --output genes.json
 
 # 2. Run the factory with extracted genes
 octog run \
@@ -283,7 +286,8 @@ assets (`.exe`, `.png`, `.woff`).
 ## Best Practices
 
 - **Extract from your best project.** The gene captures patterns from the source directory -- pick a
-  well-structured exemplar that represents the conventions you want.
+  well-structured exemplar that represents the conventions you want. The bundled
+  `examples/exemplars/go-rest` exemplar is a ready-made starting point for Go HTTP services.
 - **Re-extract after major refactors.** Gene files are snapshots. If the exemplar's architecture
   evolves, re-run `octog extract` to update the gene.
 - **Commit gene files.** They're small JSON files (~2-5 KB) that encode team conventions. Version
