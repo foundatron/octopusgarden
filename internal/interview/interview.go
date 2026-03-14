@@ -41,10 +41,21 @@ func New(client llm.Client, in io.Reader, out io.Writer, model string) *Intervie
 // Run conducts the interview starting with initialPrompt and returns the final
 // spec content and total LLM cost in USD.
 func (i *Interviewer) Run(ctx context.Context, initialPrompt string) (string, float64, error) {
-	messages := []llm.Message{{Role: "user", Content: initialPrompt}}
+	return i.run(ctx, systemPrompt, []llm.Message{{Role: "user", Content: initialPrompt}})
+}
 
+// RunWithSeed conducts the interview starting from an existing spec, asking
+// targeted questions to improve it. Returns the final spec and total LLM cost in USD.
+func (i *Interviewer) RunWithSeed(ctx context.Context, seedSpec string) (string, float64, error) {
+	userMsg := "Here is my current spec. Please review it for completeness and ask questions " +
+		"about anything that's missing or ambiguous:\n\n" + seedSpec
+	return i.run(ctx, seedSystemPrompt, []llm.Message{{Role: "user", Content: userMsg}})
+}
+
+// run is the shared conversation loop used by Run and RunWithSeed.
+func (i *Interviewer) run(ctx context.Context, sysPrompt string, messages []llm.Message) (string, float64, error) {
 	resp, err := i.client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: systemPrompt,
+		SystemPrompt: sysPrompt,
 		Messages:     messages,
 		Model:        i.model,
 	})
@@ -76,13 +87,13 @@ func (i *Interviewer) Run(ctx context.Context, initialPrompt string) (string, fl
 			if round >= maxRounds {
 				fmt.Fprintln(i.out, "Maximum rounds reached. Generating spec now.") //nolint:errcheck
 			}
-			spec, cost, genErr := i.generateFinal(ctx, messages)
+			spec, cost, genErr := i.generateFinal(ctx, sysPrompt, messages)
 			return spec, totalCost + cost, genErr
 		}
 
 		messages = append(messages, llm.Message{Role: "user", Content: trimmed})
 		resp, err = i.client.Generate(ctx, llm.GenerateRequest{
-			SystemPrompt: systemPrompt,
+			SystemPrompt: sysPrompt,
 			Messages:     messages,
 			Model:        i.model,
 		})
@@ -101,16 +112,16 @@ func (i *Interviewer) Run(ctx context.Context, initialPrompt string) (string, fl
 	}
 
 	// EOF without "done" — treat as auto-generate.
-	spec, cost, err := i.generateFinal(ctx, messages)
+	spec, cost, err := i.generateFinal(ctx, sysPrompt, messages)
 	return spec, totalCost + cost, err
 }
 
-func (i *Interviewer) generateFinal(ctx context.Context, messages []llm.Message) (string, float64, error) {
+func (i *Interviewer) generateFinal(ctx context.Context, sysPrompt string, messages []llm.Message) (string, float64, error) {
 	msgs := make([]llm.Message, len(messages), len(messages)+1)
 	copy(msgs, messages)
 	msgs = append(msgs, llm.Message{Role: "user", Content: finalInstruction})
 	resp, err := i.client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: systemPrompt,
+		SystemPrompt: sysPrompt,
 		Messages:     msgs,
 		Model:        i.model,
 	})

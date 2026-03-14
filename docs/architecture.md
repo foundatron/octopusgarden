@@ -936,6 +936,30 @@ Four dimensions, each scored 0.0–1.0 (unweighted average):
 
 Returns per-scenario issues with dimension and actionable detail.
 
+## Conversational Spec-Drafting (`interview.Interviewer`)
+
+`interview.New(client llm.Client, in io.Reader, out io.Writer, model string) *Interviewer` — creates
+an interviewer that conducts a multi-turn conversation to produce a spec.
+
+```go
+func (i *Interviewer) Run(ctx context.Context, initialPrompt string) (string, float64, error)
+func (i *Interviewer) RunWithSeed(ctx context.Context, seedSpec string) (string, float64, error)
+```
+
+`Run` starts from scratch with an opening question (`initialPrompt`). `RunWithSeed` starts from an
+existing spec (`seedSpec`), injecting it into the first user message and switching to
+`seedSystemPrompt` — a variant that instructs the LLM to identify gaps and ambiguities rather than
+elicit requirements from scratch. Both methods share the same internal conversation loop (`run`),
+which accumulates messages, reads user replies from `in`, and terminates on `"done"` or EOF.
+
+Two system prompts live in `prompt.go`:
+
+- `systemPrompt` — standard spec-drafting persona
+- `seedSystemPrompt` — review/improvement persona; composed by prepending review instructions to
+  `systemPrompt` so the NLSpec dimension list stays in sync automatically
+
+`--seed` and `--prompt` are mutually exclusive (`errSeedAndPromptConflict`).
+
 ## Spec-Completeness Scoring (`interview.Scorer`)
 
 `interview.NewScorer(client llm.Client, model string) *Scorer` — scores a spec against five
@@ -993,7 +1017,7 @@ implement it). The service name is `octog`.
 ## CLI Interface
 
 ```text
-octog interview  [--output spec.md] [--model ...] [--provider anthropic|openai] [--prompt "What would you like to build?"]
+octog interview  [--output spec.md] [--model ...] [--provider anthropic|openai] [--prompt "What would you like to build?"] [--seed <existing-spec.md>]
 octog run        --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--frugal-model ...] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--block-on-regression] [--context-budget 0] [--otel-endpoint ...] [--skip-preflight] [--preflight-threshold 0.8] [-v 0|1|2] [--provider anthropic|openai]
 octog validate   --scenarios <dir> --target <url> [--grpc-target host:port] [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [-v 0|1|2] [--provider anthropic|openai]
 octog preflight  [--judge-model claude-haiku-4-5] [--threshold 0.8] [--verbose] [--scenarios <dir>] <spec-path>

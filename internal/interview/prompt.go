@@ -21,3 +21,13 @@ Final spec format:
 - Use markdown with level-2 headings (##) for each NLSpec dimension.
 - Be precise and unambiguous. Avoid filler sentences.
 - Include only what is known; do not invent requirements.`
+
+// seedSystemPrompt is composed from systemPrompt with additional instructions for
+// reviewing an existing spec. Composed via concatenation so NLSpec dimension list
+// stays in sync with systemPrompt automatically.
+const seedSystemPrompt = "You are reviewing an existing software specification. " +
+	"Your role is to identify gaps, ambiguities, and missing NLSpec dimensions, " +
+	"then help the user improve it through targeted questions.\n\n" +
+	"Preserve what is already well-specified. " +
+	"Focus your questions on what is missing or unclear.\n\n" +
+	systemPrompt

@@ -258,3 +258,94 @@ func TestInterviewEOF(t *testing.T) {
 		t.Error("expected auto-generated spec on EOF")
 	}
 }
+
+func TestRunWithSeed(t *testing.T) {
+	t.Parallel()
+	const seedSpec = "## Purpose\nA todo app."
+	var capturedReqs []llm.GenerateRequest
+	calls := 0
+	responses := []llm.GenerateResponse{
+		{Content: "What persistence mechanism do you need?", CostUSD: 0.01},
+		{Content: "# Spec\n\n## Purpose\nAn improved todo app.", CostUSD: 0.02},
+	}
+
+	client := &mockClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedReqs = append(capturedReqs, req)
+			resp := responses[calls]
+			calls++
+			return resp, nil
+		},
+	}
+
+	in := strings.NewReader("done\n")
+	var out bytes.Buffer
+
+	iv := New(client, in, &out, "test-model")
+	spec, cost, err := iv.RunWithSeed(context.Background(), seedSpec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spec != "# Spec\n\n## Purpose\nAn improved todo app." {
+		t.Errorf("unexpected spec: %q", spec)
+	}
+
+	const wantCost = 0.01 + 0.02
+	if cost != wantCost {
+		t.Errorf("cost = %v, want %v", cost, wantCost)
+	}
+
+	// Verify system prompt is the seed variant.
+	if len(capturedReqs) == 0 {
+		t.Fatal("no generate calls captured")
+	}
+	if capturedReqs[0].SystemPrompt != seedSystemPrompt {
+		t.Errorf("expected seedSystemPrompt, got %q", capturedReqs[0].SystemPrompt)
+	}
+
+	// Verify first user message contains the seed spec content.
+	if len(capturedReqs[0].Messages) == 0 {
+		t.Fatal("no messages in first request")
+	}
+	if !strings.Contains(capturedReqs[0].Messages[0].Content, seedSpec) {
+		t.Errorf("first user message should contain seed spec, got %q", capturedReqs[0].Messages[0].Content)
+	}
+}
+
+func TestRunWithSeedPreservesConversationLoop(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	responses := []llm.GenerateResponse{
+		{Content: "What language?", CostUSD: 0.01},
+		{Content: "Any constraints?", CostUSD: 0.01},
+		{Content: "# Final Spec", CostUSD: 0.02},
+	}
+
+	client := &mockClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			resp := responses[calls]
+			calls++
+			return resp, nil
+		},
+	}
+
+	// Multi-round: answer one question then "done"
+	in := strings.NewReader("Go\ndone\n")
+	var out bytes.Buffer
+
+	iv := New(client, in, &out, "test-model")
+	spec, _, err := iv.RunWithSeed(context.Background(), "## Purpose\nA CLI tool.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spec != "# Final Spec" {
+		t.Errorf("unexpected spec: %q", spec)
+	}
+
+	// 3 calls: initial + answer to "Go" + final generation on "done"
+	if calls != 3 {
+		t.Errorf("expected 3 generate calls, got %d", calls)
+	}
+}

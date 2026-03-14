@@ -82,6 +82,9 @@ Draft a spec interactively:
 ```bash
 # Conversational spec-drafting (outputs spec.md by default)
 octog interview --output my-spec.md
+
+# Improve an existing spec through targeted questions
+octog interview --seed my-spec.md --output my-spec.md
 ```
 
 Run the factory on the included examples:
