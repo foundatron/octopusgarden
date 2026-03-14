@@ -1023,6 +1023,28 @@ def main() -> None:
                 subprocess.run(["git", "checkout", "--", "."], check=True)
                 subprocess.run(["git", "clean", "-fd"], check=True)
 
+        # Docs sync: ensure embedmd blocks are up-to-date
+        log("Syncing docs (make docs)...")
+        docs_result = subprocess.run(
+            ["make", "docs"],
+            capture_output=True,
+            text=True,
+        )
+        if docs_result.returncode != 0:
+            log(f"  WARNING: make docs failed: {(docs_result.stderr or '').strip()}")
+        else:
+            # Stage any docs changes and amend if needed
+            docs_diff = subprocess.run(
+                ["git", "diff", "--quiet", "--", "docs/"],
+            )
+            if docs_diff.returncode != 0:
+                log("  Docs changed, amending commit...")
+                subprocess.run(["git", "add", "docs/"], check=True)
+                subprocess.run(
+                    ["git", "commit", "--amend", "--no-edit"],
+                    check=True,
+                )
+
         # Push and create PR
         log("Pushing branch and creating PR...")
         push_with_retry(branch, prompt_file, impl_model, args.budget)

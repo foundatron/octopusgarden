@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -10,8 +11,14 @@ import (
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
 
-// Compile-time interface satisfaction check.
-var _ llm.Client = (*TracingLLMClient)(nil)
+// Compile-time interface satisfaction checks.
+// TracingLLMClient always satisfies AgentClient at the type level; callers doing
+// client.(AgentClient) will always get ok=true. AgentLoop returns
+// ErrAgentLoopNotSupported at runtime when the inner client does not implement AgentClient.
+var (
+	_ llm.Client      = (*TracingLLMClient)(nil)
+	_ llm.AgentClient = (*TracingLLMClient)(nil)
+)
 
 // TracingLLMClient wraps an llm.Client with OpenTelemetry spans.
 type TracingLLMClient struct {
@@ -47,6 +54,40 @@ func (t *TracingLLMClient) Generate(ctx context.Context, req llm.GenerateRequest
 		attribute.Bool("llm.cache_hit", resp.CacheHit),
 		attribute.Float64("llm.cost_usd", resp.CostUSD),
 		attribute.String("llm.finish_reason", resp.FinishReason),
+	)
+	return resp, nil
+}
+
+// AgentLoop delegates to the inner client if it implements AgentClient, recording an llm.agent_loop span.
+// Returns ErrAgentLoopNotSupported if the inner client does not implement AgentClient.
+func (t *TracingLLMClient) AgentLoop(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+	ac, ok := t.inner.(llm.AgentClient)
+	if !ok {
+		return llm.AgentResponse{}, llm.ErrAgentLoopNotSupported
+	}
+
+	ctx, span := t.tracer.Start(ctx, "llm.agent_loop", trace.WithAttributes(
+		attribute.String("llm.model", req.Model),
+	))
+	defer span.End()
+
+	resp, err := ac.AgentLoop(ctx, req, handler)
+	if err != nil {
+		if errors.Is(err, llm.ErrMaxTurnsExceeded) {
+			// Max turns is an expected control-flow outcome, not an API failure.
+			span.SetAttributes(attribute.Bool("llm.max_turns_exceeded", true))
+		} else {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		return resp, err
+	}
+
+	span.SetAttributes(
+		attribute.Int("llm.turns", resp.Turns),
+		attribute.Int("llm.input_tokens", resp.InputTokens),
+		attribute.Int("llm.output_tokens", resp.OutputTokens),
+		attribute.Float64("llm.cost_usd", resp.TotalCost),
 	)
 	return resp, nil
 }
