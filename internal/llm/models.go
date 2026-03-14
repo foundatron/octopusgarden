@@ -142,6 +142,43 @@ var fallbackPricing = ModelPricing{
 	CacheReadPerMillion:  1.50,
 }
 
+// modelMaxOutputTokens maps model IDs to their maximum output token limits.
+// Used by MaxOutputTokens to auto-scale max_tokens per model.
+var modelMaxOutputTokens = map[string]int{
+	// Anthropic models
+	"claude-haiku-3-5-20241022": 8192,
+	"claude-haiku-4-5-20251001": 8192,
+	"claude-haiku-4-5":          8192,
+	"claude-sonnet-4-20250514":  16384, // up to 64K with output-128k beta
+	"claude-sonnet-4-6":         16384, // up to 64K with output-128k beta
+	"claude-opus-4-5":           32768, // up to 128K with output-128k beta
+	// OpenAI GPT models
+	"gpt-4o":       16384,
+	"gpt-4o-mini":  16384,
+	"gpt-4.1":      32768,
+	"gpt-4.1-mini": 32768,
+	"gpt-4.1-nano": 32768,
+	"gpt-5":        32768,
+	"gpt-5-mini":   32768,
+	"gpt-5-nano":   32768,
+	"gpt-5.1":      32768,
+	"gpt-5.2":      32768,
+	// OpenAI reasoning models
+	"o1":      65536,
+	"o3":      65536,
+	"o3-mini": 65536,
+	"o4-mini": 65536,
+}
+
+// MaxOutputTokens returns the maximum output token limit for the given model.
+// Unknown models return defaultMaxOutputTokens (8192).
+func MaxOutputTokens(model string) int {
+	if v, ok := modelMaxOutputTokens[model]; ok {
+		return v
+	}
+	return defaultMaxOutputTokens
+}
+
 // CalculateCost returns the estimated USD cost for a request given token counts.
 // The bool return indicates whether fallback pricing was used (true = unknown model).
 func CalculateCost(model string, regularInputTokens, cacheCreationTokens, cacheReadTokens, outputTokens int) (float64, bool) {

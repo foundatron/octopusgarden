@@ -162,6 +162,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	skipPreflight := fs.Bool("skip-preflight", false, "skip the spec clarity preflight check")
 	preflightThreshold := fs.Float64("preflight-threshold", 0.8, "aggregate clarity score threshold for preflight (0.0–1.0)")
 	verbose := fs.Int("v", 0, "verbosity level: 0=quiet, 1=per-scenario summary after each iteration, 2=full step detail with reasoning")
+	maxTokensFlag := fs.Int("max-tokens", 0, "max output tokens for generation (0 = auto-scale per model)")
 	agenticFlag := fs.Bool("agentic", false, "enable agentic generation mode (multi-turn tool-use)")
 	agentMaxTurnsFlag := fs.Int("agent-max-turns", 0, "max tool-use turns per iteration (0 = use attractor default)")
 
@@ -242,6 +243,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		GenesGuide:        genesGuide,
 		GeneLanguage:      genesLanguage,
 		Verbosity:         *verbose,
+		MaxTokens:         *maxTokensFlag,
 		Agentic:           *agenticFlag,
 		AgentMaxTurns:     *agentMaxTurnsFlag,
 	})
@@ -297,6 +299,7 @@ type runLoopParams struct {
 	GenesGuide        string
 	GeneLanguage      string
 	Verbosity         int
+	MaxTokens         int
 	Agentic           bool
 	AgentMaxTurns     int
 }
@@ -381,6 +384,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		Genes:             p.GenesGuide,
 		GeneLanguage:      p.GeneLanguage,
 		TestCommand:       parsedSpec.TestCommand,
+		MaxTokens:         p.MaxTokens,
 		Agentic:           p.Agentic,
 		AgentMaxTurns:     p.AgentMaxTurns,
 	}

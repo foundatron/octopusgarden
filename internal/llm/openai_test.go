@@ -83,7 +83,7 @@ func TestOpenAIGenerate(t *testing.T) {
 			wantFinishReason: "stop",
 		},
 		{
-			name:             "finish reason length",
+			name:             "finish reason length normalized to max_tokens",
 			content:          "truncated output",
 			model:            "gpt-4o",
 			promptTokens:     100,
@@ -94,7 +94,7 @@ func TestOpenAIGenerate(t *testing.T) {
 			wantOutputTokens: 8192,
 			wantCacheHit:     false,
 			wantCost:         (100*2.50 + 8192*10.00) / 1_000_000,
-			wantFinishReason: "length",
+			wantFinishReason: "max_tokens",
 		},
 		{
 			name:             "cache hit",

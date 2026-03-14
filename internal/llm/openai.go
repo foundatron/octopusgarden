@@ -74,7 +74,7 @@ func (c *OpenAIClient) logUsage(prefix, model string, usage openai.CompletionUsa
 func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = defaultGenerateMaxTokens
+		maxTokens = MaxOutputTokens(req.Model)
 	}
 
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
@@ -111,6 +111,13 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 
 	content := resp.Choices[0].Message.Content
 	finishReason := resp.Choices[0].FinishReason
+	// Normalize OpenAI's "length" to the canonical "max_tokens" used by Anthropic,
+	// and warn on truncation.
+	if finishReason == "length" || finishReason == "max_tokens" {
+		finishReason = "max_tokens"
+		c.logger.Warn("generation truncated", "model", req.Model, "max_tokens", maxTokens)
+	}
+
 	m := c.logUsage("openai generate", req.Model, resp.Usage)
 
 	return GenerateResponse{
