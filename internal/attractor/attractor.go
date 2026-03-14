@@ -146,6 +146,7 @@ type RunOptions struct {
 	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
 	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
 	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
+	MaxTokens         int                  // max output tokens for generation; 0 = auto-scale per model
 	Agentic           bool                 // if true, use AgentLoop for code generation (tool-use mode)
 	AgentMaxTurns     int                  // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
 }
@@ -388,14 +389,23 @@ func (a *Attractor) setRunSpanAttrs(span trace.Span, result *RunResult) {
 // When scenarios are stalling (buildSteeringText returns non-empty), it first tries
 // the wonder/reflect two-phase process. If that yields output, it is used directly.
 // Otherwise it falls back to the standard single-call generation path.
-func (a *Attractor) generateContent(ctx context.Context, specContent string, messages []llm.Message, iter int, s *runState) (string, error) {
+// Returns the full GenerateResponse so callers can inspect FinishReason.
+func (a *Attractor) generateContent(ctx context.Context, specContent string, messages []llm.Message, iter int, s *runState) (llm.GenerateResponse, error) {
 	if buildSteeringText(s.history) != "" {
-		content, err := a.wonderReflect(ctx, specContent, iter, s)
+		content, finishReason, wrCost, err := a.wonderReflect(ctx, specContent, iter, s)
 		if err != nil {
-			return "", err
+			return llm.GenerateResponse{}, err
 		}
 		if content != "" {
-			return content, nil
+			// Wonder/reflect path: construct a synthetic response.
+			// Token counts and cost are already recorded as side effects in wonderReflect.
+			return llm.GenerateResponse{
+				Content:      content,
+				FinishReason: finishReason,
+				InputTokens:  s.lastInputTokens,
+				OutputTokens: s.lastOutputTokens,
+				CostUSD:      wrCost,
+			}, nil
 		}
 	}
 
@@ -403,24 +413,26 @@ func (a *Attractor) generateContent(ctx context.Context, specContent string, mes
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
 		Messages:     messages,
+		MaxTokens:    s.opts.MaxTokens,
 		Model:        s.currentModel(),
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
 	})
 	if err != nil {
-		return "", fmt.Errorf("attractor: generate iteration %d: %w", iter, err)
+		return llm.GenerateResponse{}, fmt.Errorf("attractor: generate iteration %d: %w", iter, err)
 	}
 	s.totalCost += genResp.CostUSD
 	s.lastInputTokens = genResp.InputTokens
 	s.lastOutputTokens = genResp.OutputTokens
-	return genResp.Content, nil
+	return genResp, nil
 }
 
 // wonderReflect runs a two-phase wonder/reflect process when scenarios are stalling.
 // Wonder phase: uses the judge model at high temperature to diagnose why attempts are failing.
 // Reflect phase: uses the generator model at low temperature to produce new code from the diagnosis.
-// Returns the reflect output (non-empty means use it instead of normal generation).
-// Returns ("", nil) to signal graceful fallback to normal generation.
-func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int, s *runState) (string, error) {
+// Returns the reflect output (non-empty means use it instead of normal generation),
+// the reflect phase's finish reason, and the combined cost of both phases.
+// Returns ("", "", 0, nil) to signal graceful fallback to normal generation.
+func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int, s *runState) (content, finishReason string, combinedCost float64, err error) {
 	opts := s.opts
 
 	// Resolve judge model — fall back to the primary generation model when unset.
@@ -445,11 +457,11 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 	if err != nil {
 		// Context cancellation is a hard error; other LLM errors fall back to normal generation.
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("attractor: wonder phase iteration %d: %w", iter, err)
+			return "", "", 0, fmt.Errorf("attractor: wonder phase iteration %d: %w", iter, err)
 		}
 		a.logger.Warn("wonder/reflect: wonder phase failed, falling back to normal generation",
 			"iteration", iter, "error", err)
-		return "", nil
+		return "", "", 0, nil
 	}
 	s.totalCost += wonderResp.CostUSD
 	a.logger.Debug("wonder phase complete", "iteration", iter, "cost_usd", wonderResp.CostUSD)
@@ -457,14 +469,14 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 	// Check budget before proceeding to reflect phase.
 	if s.budgetExceeded() {
 		a.logger.Debug("budget exceeded after wonder phase, skipping reflect", "iteration", iter)
-		return "", nil
+		return "", "", 0, nil
 	}
 
 	diagnosis, err := parseDiagnosis(wonderResp.Content)
 	if err != nil {
 		a.logger.Warn("wonder/reflect: failed to parse diagnosis, falling back to normal generation",
 			"iteration", iter, "error", err)
-		return "", nil
+		return "", "", 0, nil
 	}
 
 	// Determine whether minimalism prompting should be included.
@@ -475,24 +487,27 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 	reflectResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
 		Messages:     []llm.Message{{Role: "user", Content: reflectPrompt}},
+		MaxTokens:    s.opts.MaxTokens,
 		Model:        opts.Model, // always use primary model; reflect crafts the next steering prompt
 		Temperature:  &reflectTemp,
 	})
 	if err != nil {
 		// Context cancellation is a hard error; other LLM errors fall back to normal generation.
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("attractor: reflect phase iteration %d: %w", iter, err)
+			return "", "", 0, fmt.Errorf("attractor: reflect phase iteration %d: %w", iter, err)
 		}
 		a.logger.Warn("wonder/reflect: reflect phase failed, falling back to normal generation",
 			"iteration", iter, "error", err)
-		return "", nil
+		return "", "", 0, nil
 	}
 	s.totalCost += reflectResp.CostUSD
 	s.lastInputTokens = wonderResp.InputTokens + reflectResp.InputTokens
 	s.lastOutputTokens = wonderResp.OutputTokens + reflectResp.OutputTokens
 	a.logger.Debug("reflect phase complete", "iteration", iter, "cost_usd", reflectResp.CostUSD)
 
-	return reflectResp.Content, nil
+	// Return the reflect phase's FinishReason intentionally: wonder output is diagnostic
+	// (not code), so only the reflect phase's truncation status matters for downstream handling.
+	return reflectResp.Content, reflectResp.FinishReason, wonderResp.CostUSD + reflectResp.CostUSD, nil
 }
 
 // iterate runs a single iteration of the attractor loop.
@@ -662,14 +677,23 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 	}
 
 	// Generate code: wonder/reflect on stall, normal generation otherwise.
-	generatedContent, err := a.generateContent(ctx, specContent, messages, iter, s)
+	genResp, err := a.generateContent(ctx, specContent, messages, iter, s)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Parse files from LLM output.
-	files, parseErr := ParseFiles(generatedContent)
+	files, parseErr := ParseFiles(genResp.Content)
 	if parseErr != nil {
+		// When the output was truncated, surface truncation as the feedback kind
+		// instead of a generic parse error -- this gives the LLM actionable signal.
+		if genResp.FinishReason == "max_tokens" {
+			a.logger.Warn("parse files failed due to truncation", "iteration", iter, "error", parseErr)
+			s.lastOutcome = OutcomeParseFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackTruncation, "Output truncated at model limit -- response was cut off")
+			return a.checkStalled(iter, s), nil, nil
+		}
 		a.logger.Warn("parse files failed", "iteration", iter, "error", parseErr)
 		s.lastOutcome = OutcomeParseFail
 		s.lastSatisfaction = 0

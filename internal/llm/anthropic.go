@@ -73,7 +73,7 @@ func (c *AnthropicClient) logUsage(prefix, model string, usage anthropic.Usage) 
 func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
-		maxTokens = defaultGenerateMaxTokens
+		maxTokens = int64(MaxOutputTokens(req.Model))
 	}
 
 	// Build system prompt blocks.
@@ -125,6 +125,10 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		content = text.Text
 	}
 
+	if resp.StopReason == "max_tokens" {
+		c.logger.Warn("generation truncated", "model", req.Model, "max_tokens", maxTokens)
+	}
+
 	m := c.logUsage("anthropic generate", req.Model, resp.Usage)
 
 	return GenerateResponse{
@@ -172,7 +176,7 @@ func (c *AnthropicClient) AgentLoop(ctx context.Context, req AgentRequest, handl
 	}
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
-		maxTokens = defaultGenerateMaxTokens
+		maxTokens = int64(MaxOutputTokens(req.Model))
 	}
 
 	// Build system blocks using same pattern as Generate.

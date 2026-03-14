@@ -676,6 +676,7 @@ type RunOptions struct {
 	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
 	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
 	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
+	MaxTokens         int                  // max output tokens for generation; 0 = auto-scale per model
 	Agentic           bool                 // if true, use AgentLoop for code generation (tool-use mode)
 	AgentMaxTurns     int                  // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
 }

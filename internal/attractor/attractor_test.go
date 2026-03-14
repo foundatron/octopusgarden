@@ -2585,3 +2585,78 @@ func TestAgenticWonderReflectSkipped(t *testing.T) {
 		t.Error("AgentLoop should have been called at least once")
 	}
 }
+
+func TestTruncationFeedback(t *testing.T) {
+	// When the LLM returns FinishReason "max_tokens" and ParseFiles fails,
+	// the feedback kind should be feedbackTruncation, not feedbackParseError.
+	var lastUserMsg string
+	var mu sync.Mutex
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			mu.Lock()
+			if len(req.Messages) > 0 {
+				lastUserMsg = req.Messages[0].Content
+			}
+			mu.Unlock()
+			// Return truncated output that will fail ParseFiles (no === FILE: blocks).
+			return llm.GenerateResponse{
+				Content:      "This is truncated output without any file blocks...",
+				CostUSD:      0.01,
+				FinishReason: "max_tokens",
+			}, nil
+		},
+	}
+
+	opts := defaultOpts(t)
+	opts.StallLimit = 2
+	opts.MaxIterations = 3
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusStalled {
+		t.Errorf("expected status %q, got %q", StatusStalled, result.Status)
+	}
+
+	mu.Lock()
+	msg := lastUserMsg
+	mu.Unlock()
+
+	if !strings.Contains(msg, "TRUNCATION") {
+		t.Errorf("expected TRUNCATION header in feedback prompt, got: %s", msg)
+	}
+	if strings.Contains(msg, "PARSE ERROR") {
+		t.Errorf("expected truncation feedback instead of parse error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "truncated at model limit") {
+		t.Errorf("expected truncation message mentioning model limit, got: %s", msg)
+	}
+}
+
+func TestTruncationWithParsableOutput(t *testing.T) {
+	// When the LLM returns FinishReason "max_tokens" but ParseFiles succeeds,
+	// the output should proceed normally (build/validate).
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{
+				Content:      validLLMOutput(),
+				CostUSD:      0.01,
+				FinishReason: "max_tokens",
+			}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q (truncated but parsable output should proceed)", StatusConverged, result.Status)
+	}
+}

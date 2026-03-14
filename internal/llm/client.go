@@ -13,8 +13,8 @@ var (
 )
 
 const (
-	defaultGenerateMaxTokens = 8192
-	defaultJudgeMaxTokens    = 4096
+	defaultMaxOutputTokens = 8192
+	defaultJudgeMaxTokens  = 4096
 )
 
 // Client is the model-agnostic LLM interface used by the attractor loop and judge.

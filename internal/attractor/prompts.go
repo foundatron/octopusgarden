@@ -18,6 +18,7 @@ const (
 	feedbackRegression  = "regression"
 	feedbackRunError    = "run_error"
 	feedbackTestError   = "test_error"
+	feedbackTruncation  = "truncation"
 	feedbackValidation  = "validation"
 )
 
@@ -62,6 +63,8 @@ func feedbackHeader(kind string) string {
 		return "RUN FAILURE"
 	case feedbackTestError:
 		return "TEST FAILURE"
+	case feedbackTruncation:
+		return "TRUNCATION"
 	case feedbackValidation:
 		return "VALIDATION FAILURES"
 	default:
