@@ -50,7 +50,8 @@ octopusgarden/
 │   │   ├── languages.go          # Per-language templates (Go, Python, Node, Rust)
 │   │   ├── oscillation.go        # A→B→A→B oscillation detection (SHA-256 hashing)
 │   │   ├── prompts.go            # System prompt, feedback fidelity, steering text
-│   │   └── regression.go         # Per-scenario regression tracking
+│   │   ├── regression.go         # Per-scenario regression tracking
+│   │   └── triage.go             # LLM-based file triage: filter bestFiles to failure-relevant subset
 │   ├── container/docker.go       # Build and run Docker containers
 │   ├── llm/                      # LLM client abstraction
 │   │   ├── client.go             # Client + AgentClient interfaces, request/response types
@@ -112,7 +113,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 
 | Package | Purpose | Key Files | Dependencies |
 | ------- | ------- | --------- | ------------ |
-| `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go` | `llm`, `spec`, `container` |
+| `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go`, `triage.go` | `llm`, `spec`, `container` |
 | `container` | Docker image build, container run, health check, exec sessions | `docker.go` | docker SDK |
 | `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go` | `llm` |
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
@@ -717,7 +718,9 @@ type RunResult struct {
    c. Select spec content (full or summarized with failure-relevant sections expanded)
    d. Build messages:
       - Normal mode: spec only (iter 1) or spec + last 3 failure summaries (iter N>1)
-      - Patch mode (iter 2+ with bestFiles): previous best files + failures
+      - Patch mode (iter 2+ with bestFiles): triage bestFiles via LLM (keep only files relevant to
+        current failures + entry points; skip triage when ≤5 files or no failures), then send
+        filtered files + failures; omitted-file count appended as a note in the prompt
    e. Apply minimalism suffix when last score > 80% (discourage over-engineering)
    f. Inject oscillation steering when A→B→A→B hash pattern detected
    g. Generate code:
@@ -795,6 +798,25 @@ file contents here
 
 In patch mode, `MergeFiles(newFiles, prevFiles)` copies all previous best files and overlays new
 output on top.
+
+### File Triage (`internal/attractor/triage.go`)
+
+`triageFiles(ctx, allFiles, failures, model)` narrows the file set sent to the LLM in patch mode.
+It asks the judge-tier model to return a JSON array of paths most relevant to the current failures,
+then merges in any entry-point files present in `allFiles` (Dockerfile, main.go, go.mod, etc.),
+regardless of LLM output.
+
+Skip conditions (returns `allFiles` unchanged, zero cost):
+
+- `len(allFiles) <= 5`
+- `len(failures) == 0`
+
+On error or empty result, falls back to the full file set. Cost is accumulated into `totalCost`.
+The count of omitted files is passed to `buildPatchMessages` as `omittedCount`; when > 0, a
+`(N other files not relevant to current failures, not shown)` note is appended to the prompt.
+
+Entry points always included: `Dockerfile`, `main.go`, `main.py`, `main.rs`, `app.py`, `app.js`,
+`server.js`, `index.js`, `index.ts`, `go.mod`, `cargo.toml`, `package.json`, `requirements.txt`.
 
 ## Convergence (`internal/attractor/convergence.go`)
 

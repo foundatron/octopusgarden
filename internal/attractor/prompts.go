@@ -380,14 +380,20 @@ func buildMessages(iter int, history []iterationFeedback) []llm.Message {
 
 // buildPatchMessages constructs the user message for patch mode iterations.
 // It includes the previous best files as context and the most recent failures,
-// asking the LLM to output only changed files.
-func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64) []llm.Message {
+// asking the LLM to output only changed files. omittedCount is the number of
+// files excluded from bestFiles by triage; when > 0 a note is appended after
+// the file blocks.
+func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64, omittedCount int) []llm.Message {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The current best version scored %.1f/100. Here are all current files:\n\n", bestScore)
 
 	paths := slices.Sorted(maps.Keys(bestFiles))
 	for _, p := range paths {
 		fmt.Fprintf(&b, "=== FILE: %s ===\n%s=== END FILE ===\n\n", p, bestFiles[p])
+	}
+
+	if omittedCount > 0 {
+		fmt.Fprintf(&b, "(%d other files not relevant to current failures, not shown)\n\n", omittedCount)
 	}
 
 	// Inject steering for scenarios stalling across consecutive iterations (full history).
