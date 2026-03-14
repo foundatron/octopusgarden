@@ -63,6 +63,7 @@ var (
 	errSourceDirNotExist          = errors.New("--source-dir does not exist")
 	errSourceDirNotDir            = errors.New("--source-dir is not a directory")
 	errNoLanguageDetected         = errors.New("no recognized language in source directory (need go.mod, package.json, Cargo.toml, pyproject.toml, or requirements.txt)")
+	errAgenticRequiresAnthropic   = errors.New("--agentic requires AgentClient support; use --provider anthropic")
 )
 
 func main() {
@@ -161,6 +162,8 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	skipPreflight := fs.Bool("skip-preflight", false, "skip the spec clarity preflight check")
 	preflightThreshold := fs.Float64("preflight-threshold", 0.8, "aggregate clarity score threshold for preflight (0.0–1.0)")
 	verbose := fs.Int("v", 0, "verbosity level: 0=quiet, 1=per-scenario summary after each iteration, 2=full step detail with reasoning")
+	agenticFlag := fs.Bool("agentic", false, "enable agentic generation mode (multi-turn tool-use)")
+	agentMaxTurnsFlag := fs.Int("agent-max-turns", 0, "max tool-use turns per iteration (0 = use attractor default)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
@@ -199,6 +202,11 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *agenticFlag {
+		if _, ok := clients.client.(llm.AgentClient); !ok {
+			return errAgenticRequiresAnthropic
+		}
+	}
 	applyModelDefaults(model, judgeModel, clients.provider)
 
 	if err := validateJudgeFlags(*threshold, *judgeModel); err != nil {
@@ -234,6 +242,8 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		GenesGuide:        genesGuide,
 		GeneLanguage:      genesLanguage,
 		Verbosity:         *verbose,
+		Agentic:           *agenticFlag,
+		AgentMaxTurns:     *agentMaxTurnsFlag,
 	})
 }
 
@@ -287,6 +297,8 @@ type runLoopParams struct {
 	GenesGuide        string
 	GeneLanguage      string
 	Verbosity         int
+	Agentic           bool
+	AgentMaxTurns     int
 }
 
 func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, p runLoopParams) error {
@@ -369,6 +381,8 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		Genes:             p.GenesGuide,
 		GeneLanguage:      p.GeneLanguage,
 		TestCommand:       parsedSpec.TestCommand,
+		Agentic:           p.Agentic,
+		AgentMaxTurns:     p.AgentMaxTurns,
 	}
 
 	startedAt := time.Now()
@@ -416,14 +430,18 @@ func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
 
 func progressFn(ctx context.Context, logger *slog.Logger, st *store.Store, w io.Writer, verbosity int) func(attractor.IterationProgress) {
 	return func(p attractor.IterationProgress) {
+		turnsStr := ""
+		if p.Turns > 0 {
+			turnsStr = fmt.Sprintf("  turns=%d", p.Turns)
+		}
 		if p.Outcome != attractor.OutcomeValidated {
-			_, _ = fmt.Fprintf(w, "iter %d/%d  %s  cost: $%.2f  [%s]\n", //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
+			_, _ = fmt.Fprintf(w, "iter %d/%d  %s  cost: $%.2f%s  [%s]\n", //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
 				p.Iteration, p.MaxIterations, p.Outcome,
-				p.TotalCostUSD, p.Elapsed.Truncate(time.Second))
+				p.TotalCostUSD, turnsStr, p.Elapsed.Truncate(time.Second))
 		} else {
-			_, _ = fmt.Fprintf(w, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
+			_, _ = fmt.Fprintf(w, "iter %d/%d  satisfaction: %.1f/%.1f  cost: $%.2f%s  trend: %s  [%s]\n", //nolint:gosec // G705 false positive: writing to injected io.Writer, not an HTTP response
 				p.Iteration, p.MaxIterations, p.Satisfaction, p.Threshold,
-				p.TotalCostUSD, p.Trend, p.Elapsed.Truncate(time.Second))
+				p.TotalCostUSD, turnsStr, p.Trend, p.Elapsed.Truncate(time.Second))
 		}
 
 		// p.Failures holds per-scenario feedback strings (both passing and failing scenarios);
