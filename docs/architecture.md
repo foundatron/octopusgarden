@@ -60,7 +60,7 @@ octopusgarden/
 │   │   ├── models.go             # Model registry, cost tracking
 │   │   └── prompt.go             # Prompt templates
 │   ├── gene/                     # Gene transfusion (scan, analyze, gene types)
-│   ├── interview/                # Conversational spec-drafting assistant
+│   ├── interview/                # Conversational spec-drafting assistant + spec-completeness scorer
 │   ├── lint/                     # Spec and scenario structural linting
 │   ├── preflight/                # LLM-based spec/scenario quality assessment
 │   │   ├── preflight.go          # Check(): spec clarity (goal, constraint, success)
@@ -118,7 +118,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
 | `llm` | Model-agnostic LLM client, cost tracking, prompt templates | `client.go`, `anthropic.go`, `openai.go`, `models.go`, `json.go`, `prompt.go` | anthropic-sdk, openai-sdk |
 | `gene` | Scan exemplar codebases, LLM pattern extraction | `gene.go`, `scan.go`, `analyze.go` | `llm`, `spec` |
-| `interview` | Conversational spec-drafting via multi-turn LLM interview | `interview.go`, `prompt.go` | `llm` |
+| `interview` | Conversational spec-drafting and spec-completeness scoring | `interview.go`, `prompt.go`, `scoring.go`, `scoring_prompt.go` | `llm` |
 | `preflight` | Pre-run quality assessment of specs and scenarios | `preflight.go`, `scenario.go` | `llm` |
 | `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go` | (none) |
 | `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
@@ -913,6 +913,49 @@ Four dimensions, each scored 0.0–1.0 (unweighted average):
 - **Chains** — Are multi-step variable captures and substitutions correct?
 
 Returns per-scenario issues with dimension and actionable detail.
+
+## Spec-Completeness Scoring (`interview.Scorer`)
+
+`interview.NewScorer(client llm.Client, model string) *Scorer` — scores a spec against five
+weighted dimensions using an LLM judge. Distinct from `preflight.Check` (which gates the attractor
+loop); this scorer is used by the `octog interview` command to show the user how complete their
+drafted spec is.
+
+```go
+type Scorer struct { client llm.Client; model string }
+
+func (s *Scorer) Score(ctx context.Context, specContent string) (CompletenessResult, error)
+
+type CompletenessResult struct {
+    Dimensions []DimensionScore
+    Overall    int     // weighted average, rounded
+    CostUSD    float64
+}
+
+type DimensionScore struct {
+    Name   string
+    Score  int     // 0–100, clamped
+    Weight float64
+    Gaps   []string
+}
+```
+
+Five dimensions (weights sum to 1.0), iterated in canonical order (stable output):
+
+| Dimension                  | Weight | Description                                                         |
+| -------------------------- | ------ | ------------------------------------------------------------------- |
+| `behavioral_completeness`  | 0.25   | Happy paths, error paths, edge cases, state transitions             |
+| `interface_precision`      | 0.25   | API endpoints, CLI flags, config, data formats, field types         |
+| `defaults_and_boundaries`  | 0.20   | Default values, limits, ranges, boundary conditions                 |
+| `acceptance_criteria`      | 0.20   | Testable criteria a QA engineer can automate without assumptions    |
+| `economy`                  | 0.10   | Free of redundancy, contradictions, and misleading noise            |
+
+Scoring uses the two-implementer test (would two engineers produce interoperable implementations?)
+and the recreatability test (could a new engineer recreate equivalent behavior from the spec alone?).
+
+LLM is called with `Temperature=0`, `MaxTokens=4096`, and `CacheControl: ephemeral` on the system
+prompt. Response must be a JSON object with exactly five named dimensions; scores are clamped to
+[0, 100]. Sentinel errors: `errEmptySpec`, `errMalformedResponse`, `errIncompleteDimensions`.
 
 ## Observability
 
