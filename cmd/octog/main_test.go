@@ -1295,7 +1295,7 @@ func TestLoadGenesAutoLanguage(t *testing.T) {
 	genesPath := writeTestGenes(t, "python")
 	logger := testLogger()
 
-	guide, geneLang, resolvedLang, err := loadGenes(genesPath, "go", false, logger)
+	guide, geneLang, resolvedLang, _, err := loadGenes(genesPath, "go", false, logger)
 	if err != nil {
 		t.Fatalf("loadGenes: %v", err)
 	}
@@ -1314,7 +1314,7 @@ func TestLoadGenesExplicitLanguageWins(t *testing.T) {
 	genesPath := writeTestGenes(t, "python")
 	logger := testLogger()
 
-	guide, geneLang, resolvedLang, err := loadGenes(genesPath, "go", true, logger)
+	guide, geneLang, resolvedLang, _, err := loadGenes(genesPath, "go", true, logger)
 	if err != nil {
 		t.Fatalf("loadGenes: %v", err)
 	}
@@ -1332,7 +1332,7 @@ func TestLoadGenesExplicitLanguageWins(t *testing.T) {
 func TestLoadGenesEmptyPath(t *testing.T) {
 	logger := testLogger()
 
-	guide, geneLang, resolvedLang, err := loadGenes("", "go", false, logger)
+	guide, geneLang, resolvedLang, _, err := loadGenes("", "go", false, logger)
 	if err != nil {
 		t.Fatalf("loadGenes: %v", err)
 	}

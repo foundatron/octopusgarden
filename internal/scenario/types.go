@@ -57,8 +57,9 @@ type StepOutput struct {
 type Scenario struct {
 	ID                   string   `yaml:"id"`
 	Description          string   `yaml:"description"`
-	Type                 string   `yaml:"type"`   // "api" only for MVP
-	Weight               *float64 `yaml:"weight"` // nil means not set, defaults to 1.0
+	Type                 string   `yaml:"type"`      // "api" only for MVP
+	Weight               *float64 `yaml:"weight"`    // nil means not set, defaults to 1.0
+	Component            string   `yaml:"component"` // component name for composed convergence; empty = integration scenario
 	Setup                []Step   `yaml:"setup"`
 	Steps                []Step   `yaml:"steps"`
 	SatisfactionCriteria string   `yaml:"satisfaction_criteria"`

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/foundatron/octopusgarden/internal/gene"
 )
 
 func TestBuildSystemPromptContainsSpec(t *testing.T) {
@@ -1394,5 +1396,94 @@ func TestBuildPatchMessagesZeroOmitted(t *testing.T) {
 	content := msgs[0].Content
 	if strings.Contains(content, "other files not relevant") {
 		t.Errorf("should not contain omitted-files notice when omittedCount=0, got:\n%s", content)
+	}
+}
+
+func TestBuildComponentPrompt_IncludesContractAndPatterns(t *testing.T) {
+	comp := gene.Component{
+		Name:      "routes",
+		Interface: "HTTP handler interface for /api routes",
+		Patterns:  "Use chi router with middleware chain",
+	}
+	prompt := buildComponentPrompt("my spec", comp, nil, ScenarioCapabilities{}, "go")
+	if !strings.Contains(prompt, "COMPONENT CONTRACT:") {
+		t.Error("prompt should contain COMPONENT CONTRACT section")
+	}
+	if !strings.Contains(prompt, comp.Interface) {
+		t.Error("prompt should contain component interface text")
+	}
+	if !strings.Contains(prompt, "COMPONENT PATTERNS:") {
+		t.Error("prompt should contain COMPONENT PATTERNS section")
+	}
+	if !strings.Contains(prompt, comp.Patterns) {
+		t.Error("prompt should contain component patterns text")
+	}
+}
+
+func TestBuildComponentPrompt_IncludesDependencyInterfaces(t *testing.T) {
+	comp := gene.Component{
+		Name:      "routes",
+		Interface: "HTTP handler interface",
+		DependsOn: []string{"models"},
+	}
+	depInterfaces := map[string]string{
+		"models": "type User struct { ID int; Name string }",
+	}
+	prompt := buildComponentPrompt("my spec", comp, depInterfaces, ScenarioCapabilities{}, "")
+	if !strings.Contains(prompt, "DEPENDENCY INTERFACES:") {
+		t.Error("prompt should contain DEPENDENCY INTERFACES section")
+	}
+	if !strings.Contains(prompt, "--- models ---") {
+		t.Error("prompt should contain models dependency header")
+	}
+	if !strings.Contains(prompt, depInterfaces["models"]) {
+		t.Error("prompt should contain dependency interface text")
+	}
+}
+
+func TestBuildComponentPrompt_NoDependencies(t *testing.T) {
+	comp := gene.Component{
+		Name:      "models",
+		Interface: "Data models",
+	}
+	prompt := buildComponentPrompt("my spec", comp, nil, ScenarioCapabilities{}, "")
+	if strings.Contains(prompt, "DEPENDENCY INTERFACES:") {
+		t.Error("prompt should not contain DEPENDENCY INTERFACES when there are no deps")
+	}
+}
+
+func TestBuildComponentPrompt_FiltersToOnlyDeclaredDeps(t *testing.T) {
+	comp := gene.Component{
+		Name:      "routes",
+		Interface: "HTTP handler interface",
+		DependsOn: []string{"models"},
+	}
+	depInterfaces := map[string]string{
+		"models": "type User struct { ID int; Name string }",
+		"auth":   "type AuthService interface { Verify(token string) bool }",
+	}
+	prompt := buildComponentPrompt("my spec", comp, depInterfaces, ScenarioCapabilities{}, "")
+	if !strings.Contains(prompt, "--- models ---") {
+		t.Error("prompt should contain declared dependency models")
+	}
+	if strings.Contains(prompt, "--- auth ---") {
+		t.Error("prompt should not contain undeclared dependency auth")
+	}
+}
+
+func TestBuildComponentPrompt_SpecFirst(t *testing.T) {
+	spec := "Build a REST API"
+	comp := gene.Component{
+		Name:      "routes",
+		Interface: "HTTP handlers",
+	}
+	prompt := buildComponentPrompt(spec, comp, nil, ScenarioCapabilities{}, "")
+	specIdx := strings.Index(prompt, spec)
+	contractIdx := strings.Index(prompt, "COMPONENT CONTRACT:")
+	if specIdx < 0 || contractIdx < 0 {
+		t.Fatal("prompt missing spec or contract section")
+	}
+	if specIdx >= contractIdx {
+		t.Error("spec should appear before component contract (caching correctness)")
 	}
 }

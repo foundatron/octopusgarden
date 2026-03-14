@@ -26,6 +26,10 @@
       "exclusiveMinimum": 0,
       "description": "Relative weight for aggregate satisfaction scoring. Defaults to 1.0."
     },
+    "component": {
+      "type": "string",
+      "description": "Component name for composed convergence. Empty or omitted means integration scenario (validated against composed app)."
+    },
     "satisfaction_criteria": {
       "type": "string",
       "description": "Overall criteria the LLM judge uses to evaluate this scenario."
