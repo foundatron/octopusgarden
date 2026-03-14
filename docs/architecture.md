@@ -2,6 +2,12 @@
 
 # Architecture
 
+> **Audience: AI agents and LLMs.** This document is optimized for machine consumption. It is
+> comprehensive and information-dense by design -- type signatures, interface definitions, package
+> relationships, behavioral details, and prompt templates are included so an LLM can understand the
+> system quickly without reading every source file. For human-oriented documentation, see
+> [README.md](../README.md).
+
 ## System Overview
 
 ```text
