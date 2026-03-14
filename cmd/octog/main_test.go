@@ -1042,7 +1042,7 @@ func TestInterviewRun(t *testing.T) {
 			in := strings.NewReader(tt.userInput)
 			var out, errOut bytes.Buffer
 
-			err := interviewRun(context.Background(), client, "test-model", "What would you like to build?", outputPath, in, &out, &errOut)
+			err := interviewRun(context.Background(), client, "test-model", "What would you like to build?", outputPath, "", in, &out, &errOut)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -1082,11 +1082,31 @@ func TestInterviewRun(t *testing.T) {
 		in := strings.NewReader("done\n")
 		var out, errOut bytes.Buffer
 
-		err := interviewRun(context.Background(), client, "model", "start", badPath, in, &out, &errOut)
+		err := interviewRun(context.Background(), client, "model", "start", badPath, "", in, &out, &errOut)
 		if err == nil {
 			t.Fatal("expected write error, got nil")
 		}
 	})
+}
+
+func TestInterviewSeedAndPromptConflict(t *testing.T) {
+	t.Parallel()
+	logger := testLogger()
+	ctx := context.Background()
+	err := interviewCmd(ctx, logger, []string{"--seed", "somefile.md", "--prompt", "hello"})
+	if !errors.Is(err, errSeedAndPromptConflict) {
+		t.Errorf("expected errSeedAndPromptConflict, got %v", err)
+	}
+}
+
+func TestInterviewSeedFileNotFound(t *testing.T) {
+	t.Parallel()
+	logger := testLogger()
+	ctx := context.Background()
+	err := interviewCmd(ctx, logger, []string{"--seed", "/nonexistent-spec-abc123.md"})
+	if err == nil {
+		t.Fatal("expected error for missing seed file, got nil")
+	}
 }
 
 func TestExtractCmdSourceDirNotExist(t *testing.T) {

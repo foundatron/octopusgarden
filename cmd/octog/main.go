@@ -54,6 +54,7 @@ var (
 	errNoJudgeModelPricing        = errors.New("judge model has no pricing entry")
 	errInvalidFormat              = errors.New("--format must be \"text\" or \"json\"")
 	errInvalidProvider            = errors.New("--provider must be \"anthropic\" or \"openai\"")
+	errSeedAndPromptConflict      = errors.New("--seed and --prompt are mutually exclusive")
 	errInvalidParallelScenarios   = errors.New("--parallel-scenarios must be >= 1")
 	errInvalidLanguage            = errors.New("--language must be one of: go, python, node, rust, auto")
 	errListModelsUnsupported      = errors.New("provider does not support listing models")
@@ -1600,6 +1601,7 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	model := fs.String("model", "", "LLM model to use (default: provider-specific)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	prompt := fs.String("prompt", "What would you like to build?", "opening question to start the interview")
+	seed := fs.String("seed", "", "path to existing spec file to improve (mutually exclusive with --prompt)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog interview [flags]\n\nInteractively draft a spec through conversation.\n\nFlags:\n")
@@ -1608,6 +1610,25 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	promptExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "prompt" {
+			promptExplicit = true
+		}
+	})
+	if *seed != "" && promptExplicit {
+		return errSeedAndPromptConflict
+	}
+
+	var seedContent string
+	if *seed != "" {
+		data, err := os.ReadFile(*seed)
+		if err != nil {
+			return fmt.Errorf("read seed: %w", err)
+		}
+		seedContent = string(data)
 	}
 
 	clients, err := newLLMClient(*provider, logger)
@@ -1619,14 +1640,24 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	}
 	logger.Info("starting interview", "provider", clients.provider, "model", *model)
 
-	return interviewRun(ctx, clients.client, *model, *prompt, *output, os.Stdin, os.Stdout, os.Stderr)
+	return interviewRun(ctx, clients.client, *model, *prompt, *output, seedContent, os.Stdin, os.Stdout, os.Stderr)
 }
 
 // interviewRun runs the interview conversation and writes the resulting spec to
 // outputPath. Separated from interviewCmd for testability.
-func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath string, in io.Reader, out, errOut io.Writer) error {
+// When seedContent is non-empty, RunWithSeed is used instead of Run.
+func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath, seedContent string, in io.Reader, out, errOut io.Writer) error {
 	iv := interview.New(client, in, out, model)
-	spec, cost, err := iv.Run(ctx, initialPrompt)
+	var (
+		spec string
+		cost float64
+		err  error
+	)
+	if seedContent != "" {
+		spec, cost, err = iv.RunWithSeed(ctx, seedContent)
+	} else {
+		spec, cost, err = iv.Run(ctx, initialPrompt)
+	}
 	if err != nil {
 		return err
 	}
