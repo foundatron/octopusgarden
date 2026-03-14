@@ -1968,3 +1968,75 @@ func TestRunAndScoreParallelRestartSkipped(t *testing.T) {
 		t.Errorf("expected restart not called when parallelism>1, got %d calls", got)
 	}
 }
+
+// TestRunCmdAgenticRequiresAgentClient verifies that --agentic is rejected when the
+// resolved LLM client does not implement AgentClient (e.g. OpenAI provider).
+func TestRunCmdAgenticRequiresAgentClient(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "fake-key-for-testing")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	logger := testLogger()
+	ctx := context.Background()
+
+	err := runCmd(ctx, logger, []string{
+		"--spec", "s.md", "--scenarios", "s/",
+		"--provider", "openai",
+		"--agentic",
+	})
+	if !errors.Is(err, errAgenticRequiresAnthropic) {
+		t.Errorf("expected errAgenticRequiresAnthropic, got: %v", err)
+	}
+}
+
+// TestProgressFnTurns verifies that a non-zero Turns value is included in progress output.
+func TestProgressFnTurns(t *testing.T) {
+	ctx := context.Background()
+	logger := testLogger()
+	st, err := store.NewStore(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	tests := []struct {
+		name      string
+		turns     int
+		wantTurns bool
+	}{
+		{
+			name:      "turns=0 omitted",
+			turns:     0,
+			wantTurns: false,
+		},
+		{
+			name:      "turns>0 included in validated outcome",
+			turns:     7,
+			wantTurns: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			fn := progressFn(ctx, logger, st, &buf, 0)
+			fn(attractor.IterationProgress{
+				RunID:         "test-run",
+				Iteration:     1,
+				MaxIterations: 5,
+				Outcome:       attractor.OutcomeValidated,
+				Satisfaction:  80.0,
+				Threshold:     95.0,
+				TotalCostUSD:  0.01,
+				Elapsed:       time.Second,
+				Turns:         tt.turns,
+			})
+			out := buf.String()
+			containsTurns := strings.Contains(out, fmt.Sprintf("turns=%d", tt.turns))
+			if tt.wantTurns && !containsTurns {
+				t.Errorf("expected turns=%d in output, got: %s", tt.turns, out)
+			}
+			if !tt.wantTurns && strings.Contains(out, "turns=") {
+				t.Errorf("expected no turns= in output, got: %s", out)
+			}
+		})
+	}
+}
