@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -230,5 +231,152 @@ func TestSaveValidationFailure(t *testing.T) {
 
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 		t.Error("Save() should not create file on validation failure")
+	}
+}
+
+func TestValidateComponents(t *testing.T) {
+	tests := []struct {
+		name       string
+		components []Component
+		wantErr    error
+	}{
+		{
+			name: "valid",
+			components: []Component{
+				{Name: "A", Interface: "Foo", Patterns: "bar", DependsOn: []string{"B"}},
+				{Name: "B", Interface: "Baz", Patterns: "qux"},
+			},
+			wantErr: nil,
+		},
+		{
+			name:       "empty_name",
+			components: []Component{{Name: ""}},
+			wantErr:    errEmptyComponentName,
+		},
+		{
+			name:       "duplicate_name",
+			components: []Component{{Name: "A"}, {Name: "A"}},
+			wantErr:    errDuplicateComponent,
+		},
+		{
+			name:       "missing_dependency",
+			components: []Component{{Name: "A", DependsOn: []string{"X"}}},
+			wantErr:    errMissingDependency,
+		},
+		{
+			name: "cycle_simple",
+			components: []Component{
+				{Name: "A", DependsOn: []string{"B"}},
+				{Name: "B", DependsOn: []string{"A"}},
+			},
+			wantErr: errDependencyCycle,
+		},
+		{
+			name: "cycle_longer",
+			components: []Component{
+				{Name: "A", DependsOn: []string{"B"}},
+				{Name: "B", DependsOn: []string{"C"}},
+				{Name: "C", DependsOn: []string{"A"}},
+			},
+			wantErr: errDependencyCycle,
+		},
+		{
+			name:       "self_cycle",
+			components: []Component{{Name: "A", DependsOn: []string{"A"}}},
+			wantErr:    errDependencyCycle,
+		},
+		{
+			name:       "no_dependencies",
+			components: []Component{{Name: "A"}, {Name: "B"}},
+			wantErr:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := validGene()
+			g.Components = tt.components
+			err := Validate(g)
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Validate() = %v, want errors.Is(%v)", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGeneRoundTripWithComponents(t *testing.T) {
+	t.Run("with_components", func(t *testing.T) {
+		original := validGene()
+		original.Components = []Component{
+			{Name: "A", Interface: "foo", Patterns: "bar", DependsOn: []string{"B"}},
+			{Name: "B", Interface: "baz", Patterns: "qux"},
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		var decoded Gene
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if len(decoded.Components) != 2 {
+			t.Fatalf("Components len = %d, want 2", len(decoded.Components))
+		}
+		if decoded.Components[0].Name != "A" {
+			t.Errorf("Components[0].Name = %q, want %q", decoded.Components[0].Name, "A")
+		}
+		if decoded.Components[1].Name != "B" {
+			t.Errorf("Components[1].Name = %q, want %q", decoded.Components[1].Name, "B")
+		}
+	})
+
+	t.Run("omitempty_nil", func(t *testing.T) {
+		original := validGene() // Components is nil
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		if strings.Contains(string(data), `"components"`) {
+			t.Error(`JSON should not contain "components" key when Components is nil`)
+		}
+	})
+}
+
+func TestSaveLoadWithComponents(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gene-components.json")
+
+	original := validGene()
+	original.Components = []Component{
+		{Name: "Handler", Interface: "HTTP handler", Patterns: "net/http", DependsOn: []string{"Service"}},
+		{Name: "Service", Interface: "Business logic", Patterns: "pure functions"},
+	}
+
+	if err := Save(path, original); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if len(loaded.Components) != 2 {
+		t.Fatalf("Components len = %d, want 2", len(loaded.Components))
+	}
+	if loaded.Components[0].Name != "Handler" {
+		t.Errorf("Components[0].Name = %q, want %q", loaded.Components[0].Name, "Handler")
+	}
+	if loaded.Components[1].Name != "Service" {
+		t.Errorf("Components[1].Name = %q, want %q", loaded.Components[1].Name, "Service")
+	}
+	if len(loaded.Components[0].DependsOn) != 1 || loaded.Components[0].DependsOn[0] != "Service" {
+		t.Errorf("Components[0].DependsOn = %v, want [Service]", loaded.Components[0].DependsOn)
 	}
 }
