@@ -2239,3 +2239,349 @@ func TestNoEscalationWithoutFrugalModel(t *testing.T) {
 		}
 	}
 }
+
+// mockAgentClient embeds mockLLMClient and adds AgentLoop support.
+type mockAgentClient struct {
+	mockLLMClient
+	agentLoopFn func(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error)
+}
+
+func (m *mockAgentClient) AgentLoop(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+	if m.agentLoopFn != nil {
+		return m.agentLoopFn(ctx, req, handler)
+	}
+	return llm.AgentResponse{}, nil
+}
+
+// agentWritesFiles is a helper that calls handler with write_file for main.go and Dockerfile.
+func agentWritesFiles(ctx context.Context, handler llm.ToolHandler) error {
+	calls := []struct {
+		name  string
+		input string
+	}{
+		{"write_file", `{"path":"main.go","content":"package main\n\nfunc main() {}\n"}`},
+		{"write_file", `{"path":"Dockerfile","content":"FROM scratch\n"}`},
+	}
+	for i, c := range calls {
+		_, err := handler(ctx, llm.ToolCall{ID: fmt.Sprintf("call_%d", i), Name: c.name, Input: []byte(c.input)})
+		if err != nil {
+			return fmt.Errorf("tool call %s: %w", c.name, err)
+		}
+	}
+	return nil
+}
+
+func agenticOpts(t *testing.T) RunOptions {
+	t.Helper()
+	opts := defaultOpts(t)
+	opts.Agentic = true
+	return opts
+}
+
+func TestAgenticConverge(t *testing.T) {
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			if err := agentWritesFiles(ctx, handler); err != nil {
+				return llm.AgentResponse{}, err
+			}
+			return llm.AgentResponse{Turns: 2, TotalCost: 0.05}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build a hello world app", agenticOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+	if result.Iterations != 1 {
+		t.Errorf("expected 1 iteration, got %d", result.Iterations)
+	}
+
+	// Verify files were written to bestDir.
+	mainPath := filepath.Join(result.OutputDir, "main.go")
+	if _, statErr := os.Stat(mainPath); statErr != nil {
+		t.Errorf("expected main.go in bestDir: %v", statErr)
+	}
+}
+
+func TestAgenticCostTracking(t *testing.T) {
+	const agentCost = 0.50
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			if err := agentWritesFiles(ctx, handler); err != nil {
+				return llm.AgentResponse{}, err
+			}
+			return llm.AgentResponse{Turns: 1, TotalCost: agentCost}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", agenticOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.CostUSD < agentCost {
+		t.Errorf("expected CostUSD >= %.2f, got %.2f", agentCost, result.CostUSD)
+	}
+}
+
+func TestAgenticTurnsReported(t *testing.T) {
+	const wantTurns = 5
+	var capturedProgress []IterationProgress
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			if err := agentWritesFiles(ctx, handler); err != nil {
+				return llm.AgentResponse{}, err
+			}
+			return llm.AgentResponse{Turns: wantTurns, TotalCost: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := agenticOpts(t)
+	opts.Progress = func(p IterationProgress) {
+		capturedProgress = append(capturedProgress, p)
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	_, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(capturedProgress) == 0 {
+		t.Fatal("expected at least one progress callback")
+	}
+	if capturedProgress[0].Turns != wantTurns {
+		t.Errorf("expected Turns=%d, got %d", wantTurns, capturedProgress[0].Turns)
+	}
+}
+
+func TestAgenticPatchPreSeed(t *testing.T) {
+	// First iteration writes files; second iteration verifies pre-seeded files are readable.
+	var iterCount atomic.Int32
+	var readResult string
+
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, req llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			n := iterCount.Add(1)
+			if n == 1 {
+				// First iteration: write files normally.
+				if err := agentWritesFiles(ctx, handler); err != nil {
+					return llm.AgentResponse{}, err
+				}
+			} else {
+				// Second iteration: read the pre-seeded main.go, then write files.
+				result, err := handler(ctx, llm.ToolCall{
+					ID:    "read_1",
+					Name:  "read_file",
+					Input: []byte(`{"path":"main.go"}`),
+				})
+				if err != nil {
+					return llm.AgentResponse{}, fmt.Errorf("read_file: %w", err)
+				}
+				readResult = result
+				if err := agentWritesFiles(ctx, handler); err != nil {
+					return llm.AgentResponse{}, err
+				}
+			}
+			return llm.AgentResponse{Turns: 1, TotalCost: 0.01}, nil
+		},
+	}
+
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			return 60, []string{"needs work"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	opts := agenticOpts(t)
+	opts.PatchMode = true
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// The second iteration's read_file should have returned the pre-seeded content.
+	if !strings.Contains(readResult, "package main") {
+		t.Errorf("expected pre-seeded main.go content to be readable, got: %q", readResult)
+	}
+}
+
+func TestAgenticPatchMergesUnchangedFiles(t *testing.T) {
+	// In patch mode, the agent only writes files it modifies. The files map returned by
+	// generateAgentic must include unchanged files from bestFiles so that hashFiles() and
+	// bestFiles tracking operate on the complete file set.
+	var iterCount atomic.Int32
+
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			n := iterCount.Add(1)
+			if n == 1 {
+				// First iteration: write both main.go and Dockerfile.
+				if err := agentWritesFiles(ctx, handler); err != nil {
+					return llm.AgentResponse{}, err
+				}
+			} else {
+				// Second iteration (patch mode): agent only writes main.go, leaving Dockerfile unchanged.
+				_, err := handler(ctx, llm.ToolCall{
+					ID:    "write_1",
+					Name:  "write_file",
+					Input: []byte(`{"path":"main.go","content":"package main\n\nfunc main() { println(\"v2\") }\n"}`),
+				})
+				if err != nil {
+					return llm.AgentResponse{}, err
+				}
+			}
+			return llm.AgentResponse{Turns: 1, TotalCost: 0.01}, nil
+		},
+	}
+
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			return 60, []string{"needs work"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	opts := agenticOpts(t)
+	opts.PatchMode = true
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	// Both files should be in the output (bestFiles) even though the agent only wrote main.go
+	// in the second iteration. The patch merge must carry forward unchanged files.
+	for _, want := range []string{"main.go", "Dockerfile"} {
+		if _, err := os.Stat(filepath.Join(result.OutputDir, want)); err != nil {
+			t.Errorf("expected %s in output dir after patch convergence: %v", want, err)
+		}
+	}
+}
+
+func TestAgenticRequiresAgentClient(t *testing.T) {
+	// Plain mockLLMClient does not implement AgentClient.
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput()}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	_, err := a.Run(context.Background(), "Build an app", agenticOpts(t), validate, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when AgentClient not implemented")
+	}
+	if !errors.Is(err, errAgentClientRequired) {
+		t.Errorf("expected errAgentClientRequired, got %v", err)
+	}
+}
+
+func TestAgenticBuildFailure(t *testing.T) {
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			if err := agentWritesFiles(ctx, handler); err != nil {
+				return llm.AgentResponse{}, err
+			}
+			return llm.AgentResponse{Turns: 1, TotalCost: 0.01}, nil
+		},
+	}
+	buildErr := fmt.Errorf("docker build failed: exit 1")
+	mgr := &mockContainerMgr{
+		buildFn: func(_ context.Context, _, _ string) error {
+			return buildErr
+		},
+	}
+
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := agenticOpts(t)
+	opts.StallLimit = 1
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusStalled {
+		t.Errorf("expected stalled after build failure, got %q", result.Status)
+	}
+}
+
+func TestAgenticWonderReflectSkipped(t *testing.T) {
+	// Agentic mode should call AgentLoop and NOT call Generate even during stall history.
+	var generateCalled atomic.Bool
+	var agentLoopCalls atomic.Int32
+
+	client := &mockAgentClient{
+		mockLLMClient: mockLLMClient{
+			generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+				generateCalled.Store(true)
+				return llm.GenerateResponse{Content: validLLMOutput()}, nil
+			},
+		},
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			agentLoopCalls.Add(1)
+			if err := agentWritesFiles(ctx, handler); err != nil {
+				return llm.AgentResponse{}, err
+			}
+			return llm.AgentResponse{Turns: 1, TotalCost: 0.01}, nil
+		},
+	}
+
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n < 3 {
+			return 50, []string{"scenario-a (50/100)"}, 0.005, nil
+		}
+		return 100, nil, 0.005, nil
+	}
+
+	opts := agenticOpts(t)
+	opts.StallLimit = 5
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if generateCalled.Load() {
+		t.Error("Generate should not be called in agentic mode")
+	}
+	if agentLoopCalls.Load() == 0 {
+		t.Error("AgentLoop should have been called at least once")
+	}
+}

@@ -26,6 +26,7 @@ var (
 	errEmptySpec            = errors.New("attractor: spec content is empty")
 	errUnsupportedLanguage  = errors.New("attractor: unsupported language")
 	errMinimalismNoMessages = errors.New("attractor: minimalism suffix: no messages to append to")
+	errAgentClientRequired  = errors.New("attractor: agentic mode requires AgentClient implementation")
 
 	_ ContainerManager = (*container.Manager)(nil)
 )
@@ -33,6 +34,10 @@ var (
 // summarizeModel is the cheap model used for spec summarization.
 // Haiku is also the default --judge-model for cost efficiency.
 const summarizeModel = "claude-haiku-4-5"
+
+// defaultAgentMaxTurns is the default maximum number of agent turns per iteration
+// when no AgentMaxTurns is specified in RunOptions.
+const defaultAgentMaxTurns = 50
 
 // Status constants for RunResult.
 const (
@@ -74,6 +79,7 @@ type IterationProgress struct {
 	OutputTokens     int
 	Failures         []string
 	Model            string // model used for generation in this iteration
+	Turns            int    // number of agent turns used (0 for non-agentic iterations)
 }
 
 // ProgressFunc is called synchronously after each iteration completes.
@@ -140,6 +146,8 @@ type RunOptions struct {
 	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
 	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
 	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
+	Agentic           bool                 // if true, use AgentLoop for code generation (tool-use mode)
+	AgentMaxTurns     int                  // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -188,6 +196,7 @@ type runState struct {
 	scenarioScoreIteration int                     // iteration number corresponding to scenarioScores
 	codeHashes             []string                // SHA-256 hashes of generated file sets, in iteration order
 	escalation             *escalationState        // nil when FrugalModel is empty (escalation disabled)
+	lastTurns              int                     // number of agent turns used in the last iteration (0 for non-agentic)
 }
 
 // currentModel returns the model to use for generation, respecting escalation state.
@@ -233,6 +242,7 @@ func (s *runState) buildProgress(iter int, costBefore float64) IterationProgress
 		OutputTokens:     s.lastOutputTokens,
 		Failures:         s.lastFailures,
 		Model:            s.currentModel(),
+		Turns:            s.lastTurns,
 	}
 }
 
@@ -489,6 +499,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 // Returns (result, nil) for terminal conditions, (nil, nil) to continue, or (nil, err) for hard errors.
 func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *runState, validate ValidateFn) (*RunResult, error) {
 	s.lastImproved = false // reset at start of each iteration; set true only by processValidation on strict improvement
+	s.lastTurns = 0
 
 	// Select spec content: use summarized view when available to respect context budget.
 	// SelectContent returns full spec if it fits the budget, so iteration 1 (no failures)
@@ -502,22 +513,150 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 		specContent = specpkg.SelectContent(s.summarized, s.opts.ContextBudget, failures)
 	}
 
+	// Compute iterDir once before the generation branch.
+	iterDir := filepath.Join(s.baseDir, fmt.Sprintf("iter_%d", iter))
+
+	var files map[string]string
+
+	if s.opts.Agentic {
+		// Agentic path: use AgentLoop for tool-use code generation.
+		// The handler writes files directly to iterDir; no ParseFiles/writeFiles needed.
+		var agentErr error
+		files, agentErr = a.generateAgentic(ctx, specContent, iterDir, iter, s)
+		if errors.Is(agentErr, errNoFiles) {
+			a.logger.Warn("agentic generation produced no files", "iteration", iter)
+			s.lastOutcome = OutcomeParseFail
+			s.lastSatisfaction = 0
+			s.recordStall(iter, feedbackParseError, "Agent produced no files")
+			return a.checkStalled(iter, s), nil
+		}
+		if agentErr != nil {
+			return nil, agentErr
+		}
+	} else {
+		// Standard single-call generation path.
+		// stall is non-nil when stall limit reached; stdFiles is nil on any parse failure.
+		stall, stdFiles, stdErr := a.generateStandard(ctx, specContent, iterDir, iter, s)
+		if stdErr != nil || stall != nil || stdFiles == nil {
+			return stall, stdErr
+		}
+		files = stdFiles
+	}
+
+	s.lastFailures = nil
+
+	// Record the hash of the file set for oscillation detection.
+	s.codeHashes = append(s.codeHashes, hashFiles(files))
+
+	// Build, run, and validate.
+	return a.buildRunValidate(ctx, iter, iterDir, files, s, validate)
+}
+
+// generateAgentic runs the AgentLoop to generate files via tool use.
+// iterDir must be computed by the caller before this is called.
+// If patch mode is active (iter > 1 and bestFiles non-nil), pre-seeds iterDir with the current
+// best files so the agent can read_file them.
+// Returns the generated file map, or errNoFiles if the agent wrote no files.
+//
+// Wonder/reflect is intentionally skipped in agentic mode. The agent's multi-turn tool-use loop
+// already handles self-correction through iterative read_file/write_file cycles — it can observe
+// its own output and refine it within a single AgentLoop call. Injecting a separate wonder/reflect
+// diagnosis pass would duplicate this capability and send an extra Generate call that bypasses the
+// agent's stateful context.
+func (a *Attractor) generateAgentic(ctx context.Context, specContent, iterDir string, iter int, s *runState) (map[string]string, error) {
+	agentClient, ok := a.llm.(llm.AgentClient)
+	if !ok {
+		return nil, errAgentClientRequired
+	}
+
+	patching := s.patchActive && s.bestFiles != nil && iter > 1
+
+	// Pre-seed iterDir with best files in patch mode so the agent can read them.
+	if patching {
+		if err := writeFiles(iterDir, s.bestFiles); err != nil {
+			return nil, fmt.Errorf("attractor: pre-seed agentic iterDir iteration %d: %w", iter, err)
+		}
+	}
+
+	var messages []llm.Message
+	if patching {
+		messages = buildAgenticPatchMessages(s.history, s.bestFiles, s.bestSatisfaction)
+	} else {
+		messages = buildAgenticMessages(iter, s.history)
+	}
+
+	if err := applyMinimalismSuffix(messages, s.scoreHistory, s.history); err != nil {
+		return nil, err
+	}
+
+	if detectOscillation(s.codeHashes) {
+		messages[len(messages)-1].Content += "\n\n" + buildOscillationSteering()
+	}
+
+	handler, err := newAgentToolHandler(iterDir, a.logger)
+	if err != nil {
+		return nil, fmt.Errorf("attractor: create agentic tool handler iteration %d: %w", iter, err)
+	}
+
+	// In patch mode, pre-populate the handler's file map with the seeded files so that
+	// hashFiles() and bestFiles tracking operate on the complete file set. The agent's
+	// write_file calls overwrite entries for files it modifies; files it doesn't touch remain.
+	if patching {
+		maps.Copy(handler.files, s.bestFiles)
+	}
+
+	resp, err := agentClient.AgentLoop(ctx, llm.AgentRequest{
+		SystemPrompt: buildAgenticSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		Messages:     messages,
+		Tools:        agentTools(),
+		Model:        s.currentModel(),
+		MaxTurns:     s.opts.AgentMaxTurns,
+		CacheControl: &llm.CacheControl{Type: "ephemeral"},
+	}, handler.Handle)
+	if err != nil {
+		return nil, fmt.Errorf("attractor: agent loop iteration %d: %w", iter, err)
+	}
+
+	s.totalCost += resp.TotalCost
+	s.lastInputTokens = resp.InputTokens
+	s.lastOutputTokens = resp.OutputTokens
+	s.lastTurns = resp.Turns
+
+	files := handler.Files()
+
+	a.logger.Debug("agentic generation complete",
+		"iteration", iter,
+		"turns", resp.Turns,
+		"cost_usd", resp.TotalCost,
+		"files_written", len(files),
+	)
+
+	if len(files) == 0 {
+		return nil, errNoFiles
+	}
+	return files, nil
+}
+
+// generateStandard runs the standard single-call generation path for one iteration.
+// Returns (stall, files, nil) when generation succeeds, (stall, nil, nil) when a stall
+// is recorded (parse failure), or (nil, nil, err) on a hard error.
+func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir string, iter int, s *runState) (*RunResult, map[string]string, error) {
+	patching := s.patchActive && s.bestFiles != nil && iter > 1
+
 	// Build messages: patch mode sends previous best files + failures.
 	var messages []llm.Message
-	if s.patchActive && s.bestFiles != nil && iter > 1 {
+	if patching {
 		messages = buildPatchMessages(s.history, s.bestFiles, s.bestSatisfaction)
 	} else {
 		messages = buildMessages(iter, s.history)
 	}
 
 	// Inject minimalism suffix when the previous validated score is above the threshold.
-	// This discourages adding complexity when the solution is already close to passing.
 	if err := applyMinimalismSuffix(messages, s.scoreHistory, s.history); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Inject oscillation steering when the last 4 code hashes form an A→B→A→B pattern.
-	// Appended after applyMinimalismSuffix for highest salience at the end of the message.
 	if detectOscillation(s.codeHashes) {
 		messages[len(messages)-1].Content += "\n\n" + buildOscillationSteering()
 	}
@@ -525,36 +664,30 @@ func (a *Attractor) iterate(ctx context.Context, rawSpec string, iter int, s *ru
 	// Generate code: wonder/reflect on stall, normal generation otherwise.
 	generatedContent, err := a.generateContent(ctx, specContent, messages, iter, s)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	s.lastFailures = nil
 
 	// Parse files from LLM output.
-	files, err := ParseFiles(generatedContent)
-	if err != nil {
-		a.logger.Warn("parse files failed", "iteration", iter, "error", err)
+	files, parseErr := ParseFiles(generatedContent)
+	if parseErr != nil {
+		a.logger.Warn("parse files failed", "iteration", iter, "error", parseErr)
 		s.lastOutcome = OutcomeParseFail
 		s.lastSatisfaction = 0
-		s.recordStall(iter, feedbackParseError, fmt.Sprintf("Failed to parse generated files: %s", err))
-		return a.checkStalled(iter, s), nil
+		s.recordStall(iter, feedbackParseError, fmt.Sprintf("Failed to parse generated files: %s", parseErr))
+		return a.checkStalled(iter, s), nil, nil
 	}
 
 	// In patch mode, merge new output over previous best to carry forward unchanged files.
-	if s.patchActive && s.bestFiles != nil && iter > 1 {
+	if patching {
 		files = MergeFiles(files, s.bestFiles)
 	}
 
-	// Record the hash of the merged file set for oscillation detection.
-	s.codeHashes = append(s.codeHashes, hashFiles(files))
-
 	// Write files to iteration directory.
-	iterDir := filepath.Join(s.baseDir, fmt.Sprintf("iter_%d", iter))
 	if err := writeFiles(iterDir, files); err != nil {
-		return nil, fmt.Errorf("attractor: write files iteration %d: %w", iter, err)
+		return nil, nil, fmt.Errorf("attractor: write files iteration %d: %w", iter, err)
 	}
 
-	// Build, run, and validate.
-	return a.buildRunValidate(ctx, iter, iterDir, files, s, validate)
+	return nil, files, nil
 }
 
 // buildRunValidate handles the Docker build → container setup → validate pipeline.
@@ -955,6 +1088,9 @@ func withDefaults(opts RunOptions) RunOptions {
 	}
 	if opts.HealthTimeout == 0 {
 		opts.HealthTimeout = 30 * time.Second
+	}
+	if opts.Agentic && opts.AgentMaxTurns == 0 {
+		opts.AgentMaxTurns = defaultAgentMaxTurns
 	}
 	return opts
 }

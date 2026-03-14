@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
@@ -17,9 +19,14 @@ import (
 var errUnknownTool = errors.New("attractor: unknown tool")
 
 // agentToolHandler dispatches agent tool calls for file operations within an iteration directory.
+// mu guards files against concurrent access in case AgentLoop implementations issue parallel tool
+// calls. The current AnthropicClient.AgentLoop is sequential, but the ToolHandler contract does
+// not guarantee single-threaded access.
 type agentToolHandler struct {
 	iterDir string
 	logger  *slog.Logger
+	mu      sync.Mutex
+	files   map[string]string // tracks files written by write_file calls; guarded by mu
 }
 
 // newAgentToolHandler creates a handler rooted at iterDir.
@@ -32,7 +39,17 @@ func newAgentToolHandler(iterDir string, logger *slog.Logger) (*agentToolHandler
 	return &agentToolHandler{
 		iterDir: abs,
 		logger:  logger,
+		files:   make(map[string]string),
 	}, nil
+}
+
+// Files returns a copy of the map of files written by the handler.
+func (h *agentToolHandler) Files() map[string]string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]string, len(h.files))
+	maps.Copy(out, h.files)
+	return out
 }
 
 type writeFileInput struct {
@@ -73,6 +90,9 @@ func (h *agentToolHandler) handleWriteFile(raw json.RawMessage) (string, error) 
 	if err := writeOneFile(h.iterDir, input.Path, input.Content); err != nil {
 		return "", err
 	}
+	h.mu.Lock()
+	h.files[input.Path] = input.Content
+	h.mu.Unlock()
 	if h.logger != nil {
 		h.logger.Debug("agent wrote file", "path", input.Path)
 	}
