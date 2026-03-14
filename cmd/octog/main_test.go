@@ -1465,6 +1465,85 @@ func TestBuildDetailedFailures(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "failing step with diagnostics",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "diag", Score: 20, Steps: []scenario.ScoredStep{
+						{
+							StepScore: scenario.StepScore{
+								Score:     20,
+								Reasoning: "bad status",
+								Diagnostics: []llm.Diagnostic{
+									{Category: "missing_endpoint", Detail: "POST /users returned 404"},
+									{Category: "wrong_shape", Detail: "id field missing"},
+								},
+							},
+							StepResult: scenario.StepResult{Description: "create user", Observed: "got 404"},
+						},
+					}},
+				},
+			},
+			wantLen: 1,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if !strings.Contains(out[0], "[missing_endpoint] POST /users returned 404") {
+					t.Errorf("diagnostic line missing, got %q", out[0])
+				}
+				if !strings.Contains(out[0], "[wrong_shape] id field missing") {
+					t.Errorf("second diagnostic line missing, got %q", out[0])
+				}
+				// Diagnostics must appear after Observed.
+				obsIdx := strings.Index(out[0], "Observed:")
+				diagIdx := strings.Index(out[0], "[missing_endpoint]")
+				if obsIdx < 0 || diagIdx < 0 || diagIdx <= obsIdx {
+					t.Errorf("diagnostics should appear after Observed, got %q", out[0])
+				}
+			},
+		},
+		{
+			name: "passing step with diagnostics emits no diagnostic lines",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "passdiag", Score: 95, Steps: []scenario.ScoredStep{
+						{
+							StepScore: scenario.StepScore{
+								Score:       95,
+								Diagnostics: []llm.Diagnostic{{Category: "latency", Detail: "slow"}},
+							},
+							StepResult: scenario.StepResult{Description: "ping"},
+						},
+					}},
+				},
+			},
+			wantLen: 1,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if strings.Contains(out[0], "[latency]") {
+					t.Errorf("passing step diagnostics must not appear in output, got %q", out[0])
+				}
+			},
+		},
+		{
+			name: "empty diagnostics slice produces no extra output",
+			agg: scenario.AggregateResult{
+				Scenarios: []scenario.ScoredScenario{
+					{ScenarioID: "nodiag", Score: 10, Steps: []scenario.ScoredStep{
+						{
+							StepScore:  scenario.StepScore{Score: 10, Reasoning: "fail", Diagnostics: []llm.Diagnostic{}},
+							StepResult: scenario.StepResult{Description: "check"},
+						},
+					}},
+				},
+			},
+			wantLen: 1,
+			wantCheck: func(t *testing.T, out []string) {
+				t.Helper()
+				if strings.Contains(out[0], "[]") {
+					t.Errorf("empty diagnostics must not produce bracket output, got %q", out[0])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
