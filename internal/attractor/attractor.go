@@ -47,6 +47,10 @@ const summarizeModel = "claude-haiku-4-5"
 // when no AgentMaxTurns is specified in RunOptions.
 const defaultAgentMaxTurns = 50
 
+// maxStratifiedTier is the highest difficulty tier in stratified validation mode.
+// Tiers progress 1 -> 2 -> 3; convergence at tier 3 ends the run.
+const maxStratifiedTier = 3
+
 // Status constants for RunResult.
 const (
 	StatusConverged      = "converged"
@@ -124,7 +128,9 @@ type RestartFunc func(ctx context.Context) (newURL string, err error)
 // The attractor never imports internal/scenario — the CLI provides this closure.
 // restart may be called to stop the current container and start a fresh one between scenarios.
 // restart is nil for gRPC and exec-only paths that do not support container restart.
-type ValidateFn func(ctx context.Context, url string, restart RestartFunc) (satisfaction float64, failures []string, cost float64, err error)
+// maxTier, when > 0, restricts validation to scenarios with Tier <= maxTier (stratified mode).
+// maxTier == 0 means run all scenarios (non-stratified or component validators).
+type ValidateFn func(ctx context.Context, url string, restart RestartFunc, maxTier int) (satisfaction float64, failures []string, cost float64, err error)
 
 // Attractor orchestrates the convergence loop: generate code → build → validate → iterate.
 type Attractor struct {
@@ -157,6 +163,7 @@ type RunOptions struct {
 	MaxTokens           int                   // max output tokens for generation; 0 = auto-scale per model
 	Agentic             bool                  // if true, use AgentLoop for code generation (tool-use mode)
 	AgentMaxTurns       int                   // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
+	Stratified          bool                  // if true, validate by ascending difficulty tier (1→2→3), converging each before advancing
 	GeneComponents      []gene.Component      // structured component decomposition from gene extraction
 	ComponentValidators map[string]ValidateFn // per-component validators; "" key = integration validator
 }
@@ -208,6 +215,7 @@ type runState struct {
 	codeHashes             []string                // SHA-256 hashes of generated file sets, in iteration order
 	escalation             *escalationState        // nil when FrugalModel is empty (escalation disabled)
 	lastTurns              int                     // number of agent turns used in the last iteration (0 for non-agentic)
+	activeTier             int                     // 0 = non-stratified; 1-3 = current difficulty tier in stratified mode
 }
 
 // currentModel returns the model to use for generation, respecting escalation state.
@@ -324,6 +332,7 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 		grpcTargetProvider: grpcTargetProvider,
 		escalation:         newEscalationState(opts.FrugalModel, opts.Model, a.logger),
 		totalCost:          composedCost,
+		activeTier:         initialActiveTier(opts.Stratified),
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -382,7 +391,8 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 			s.escalation.recordOutcome(s.lastImproved, a.logger)
 		}
 
-		if result != nil {
+		// In stratified mode, converging a tier advances to the next; otherwise return result.
+		if result != nil && !a.advanceTierIfNeeded(result, s) {
 			a.setRunSpanAttrs(runSpan, result)
 			return result, nil
 		}
@@ -576,7 +586,7 @@ func (a *Attractor) validateComposed(ctx context.Context, composedFiles map[stri
 		defer stop()
 	}
 
-	satisfaction, failures, valCost, err := integrationValidate(ctx, url, nil)
+	satisfaction, failures, valCost, err := integrationValidate(ctx, url, nil, 0)
 	if err != nil {
 		return nil, fmt.Errorf("attractor: integration validate: %w", err)
 	}
@@ -775,7 +785,7 @@ func (a *Attractor) buildAndValidateComponent(ctx context.Context, iterDir, comp
 		defer stop()
 	}
 
-	satisfaction, failures, valCost, valErr := validate(ctx, url, nil)
+	satisfaction, failures, valCost, valErr := validate(ctx, url, nil, 0)
 	if valErr != nil {
 		return 0, nil, fmt.Errorf("attractor: validate component %q: %w", compName, valErr)
 	}
@@ -1186,7 +1196,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		return stall, err
 	}
 
-	satisfaction, failures, valCost, err := validate(ctx, url, restartFn)
+	satisfaction, failures, valCost, err := validate(ctx, url, restartFn, s.activeTier)
 	if err != nil {
 		return nil, fmt.Errorf("attractor: validate iteration %d: %w", iter, err)
 	}
@@ -1495,6 +1505,50 @@ func (a *Attractor) checkStalled(iter int, s *runState) *RunResult {
 		return s.result(iter, StatusStalled)
 	}
 	return nil
+}
+
+// advanceTierIfNeeded checks whether stratified mode should advance to the next tier
+// after a convergence result. Returns true when the tier was advanced (caller should continue
+// the loop); returns false when the result should be returned to the caller.
+func (a *Attractor) advanceTierIfNeeded(result *RunResult, s *runState) bool {
+	if result.Status != StatusConverged || s.activeTier == 0 || s.activeTier >= maxStratifiedTier {
+		return false
+	}
+	s.activeTier++
+	a.logger.Info("tier advanced", "tier", s.activeTier, "prev_satisfaction", result.Satisfaction)
+	s.resetForTierAdvancement()
+	if s.escalation != nil {
+		s.escalation = newEscalationState(s.opts.FrugalModel, s.opts.Model, a.logger)
+	}
+	return true
+}
+
+// resetForTierAdvancement resets per-tier mutable state when stratified mode advances to the
+// next difficulty tier. Fields that must persist across tiers (bestFiles, bestDir, totalCost,
+// codeHashes, runID, startTime) are intentionally NOT reset here.
+func (s *runState) resetForTierAdvancement() {
+	s.bestSatisfaction = 0
+	s.stallCount = 0
+	s.scoreHistory = nil
+	s.history = nil
+	s.patchActive = s.opts.PatchMode
+	s.patchRegressionCount = 0
+	s.scenarioScores = nil
+	s.scenarioScoreIteration = 0
+	s.lastFailures = nil
+	s.lastOutcome = ""
+	s.lastSatisfaction = 0
+	s.lastImproved = false
+	s.lastTurns = 0
+}
+
+// initialActiveTier returns the starting activeTier for a run. In stratified mode tiers
+// begin at 1; non-stratified mode uses 0 (no tier filtering).
+func initialActiveTier(stratified bool) int {
+	if stratified {
+		return 1
+	}
+	return 0
 }
 
 // withDefaults fills in zero-value fields with sensible defaults.

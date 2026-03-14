@@ -13,13 +13,14 @@ import (
 // WrapValidateFn wraps a ValidateFn with a scenario.validate span.
 func WrapValidateFn(fn attractor.ValidateFn, tp trace.TracerProvider) attractor.ValidateFn {
 	tracer := tp.Tracer("octog/scenario")
-	return func(ctx context.Context, url string, restart attractor.RestartFunc) (float64, []string, float64, error) {
+	return func(ctx context.Context, url string, restart attractor.RestartFunc, maxTier int) (float64, []string, float64, error) {
 		ctx, span := tracer.Start(ctx, "scenario.validate", trace.WithAttributes(
 			attribute.String("scenario.target_url", url),
+			attribute.Int("scenario.max_tier", maxTier),
 		))
 		defer span.End()
 
-		satisfaction, failures, cost, err := fn(ctx, url, restart)
+		satisfaction, failures, cost, err := fn(ctx, url, restart, maxTier)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
