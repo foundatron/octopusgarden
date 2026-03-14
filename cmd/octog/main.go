@@ -1602,6 +1602,7 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	prompt := fs.String("prompt", "What would you like to build?", "opening question to start the interview")
 	seed := fs.String("seed", "", "path to existing spec file to improve (mutually exclusive with --prompt)")
+	scenarios := fs.Bool("scenarios", false, "generate holdout scenario YAML files alongside the spec")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog interview [flags]\n\nInteractively draft a spec through conversation.\n\nFlags:\n")
@@ -1640,13 +1641,15 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	}
 	logger.Info("starting interview", "provider", clients.provider, "model", *model)
 
-	return interviewRun(ctx, clients.client, *model, *prompt, *output, seedContent, os.Stdin, os.Stdout, os.Stderr)
+	return interviewRun(ctx, clients.client, *model, *prompt, *output, seedContent, *scenarios, logger, os.Stdin, os.Stdout, os.Stderr)
 }
 
 // interviewRun runs the interview conversation and writes the resulting spec to
 // outputPath. Separated from interviewCmd for testability.
 // When seedContent is non-empty, RunWithSeed is used instead of Run.
-func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath, seedContent string, in io.Reader, out, errOut io.Writer) error {
+// When generateScenarios is true, scenario YAML files are generated and written
+// to a scenarios/ directory alongside the spec.
+func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath, seedContent string, generateScenarios bool, log *slog.Logger, in io.Reader, out, errOut io.Writer) error {
 	iv := interview.New(client, in, out, model)
 	var (
 		spec string
@@ -1666,12 +1669,51 @@ func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, 
 		return fmt.Errorf("write spec: %w", err)
 	}
 
-	costStr := fmt.Sprintf("$%.4f", cost)
+	specCostStr := fmt.Sprintf("$%.4f", cost)
 	if cost == 0 {
-		costStr = "free"
+		specCostStr = "free"
 	}
-	fmt.Fprintf(errOut, "Spec written to %s (cost: %s)\n", outputPath, costStr) //nolint:gosec,errcheck // G705 false positive: writing to stderr, not an HTTP response
+	fmt.Fprintf(errOut, "Spec written to %s (cost: %s)\n", outputPath, specCostStr) //nolint:gosec,errcheck // G705 false positive: writing to stderr, not an HTTP response
+
+	totalCost := cost
+	if generateScenarios {
+		scenarioCost, err := writeGeneratedScenarios(ctx, client, model, spec, outputPath, log, errOut)
+		if err != nil {
+			return err
+		}
+		totalCost += scenarioCost
+	}
+
+	if generateScenarios {
+		totalCostStr := fmt.Sprintf("$%.4f", totalCost)
+		fmt.Fprintf(errOut, "Total cost: %s\n", totalCostStr) //nolint:gosec,errcheck // G705 false positive: writing to errOut, not an HTTP response
+	}
 	return nil
+}
+
+// writeGeneratedScenarios generates scenario YAML files and writes them to a
+// scenarios/ directory alongside outputPath. Returns the LLM cost incurred.
+func writeGeneratedScenarios(ctx context.Context, client llm.Client, model, specContent, outputPath string, log *slog.Logger, errOut io.Writer) (float64, error) {
+	gen := interview.NewScenarioGenerator(client, model, log)
+	files, cost, err := gen.Generate(ctx, specContent)
+	if err != nil {
+		return cost, fmt.Errorf("generate scenarios: %w", err)
+	}
+
+	dir := filepath.Join(filepath.Dir(outputPath), "scenarios")
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: scenarios/ is user-facing output directory
+		return cost, fmt.Errorf("create scenarios dir: %w", err)
+	}
+
+	for name, content := range files {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil { //nolint:gosec // G306: scenario files are user-facing documents
+			return cost, fmt.Errorf("write scenario %s: %w", name, err)
+		}
+	}
+
+	fmt.Fprintf(errOut, "Scenarios written to %s (%d file(s))\n", dir, len(files)) //nolint:gosec,errcheck // G705 false positive: writing to errOut (io.Writer), not an HTTP response
+	return cost, nil
 }
 
 func configureCmd(_ context.Context, _ *slog.Logger, args []string) error {

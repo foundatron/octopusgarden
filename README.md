@@ -83,6 +83,9 @@ Draft a spec interactively:
 # Conversational spec-drafting (outputs spec.md by default)
 octog interview --output my-spec.md
 
+# Also generate holdout scenario YAML files alongside the spec
+octog interview --output my-spec.md --scenarios
+
 # Improve an existing spec through targeted questions
 octog interview --seed my-spec.md --output my-spec.md
 ```

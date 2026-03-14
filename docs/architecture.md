@@ -87,8 +87,10 @@ cmd/octog
     │       ├── internal/llm
     │       ├── internal/spec
     │       └── internal/container
-    ├── internal/interview      (conversational spec-drafting, multi-turn LLM)
-    │       └── internal/llm
+    ├── internal/interview      (conversational spec-drafting, multi-turn LLM, scenario generation)
+    │       ├── internal/llm
+    │       ├── internal/attractor  (ParseFiles for scenario block extraction)
+    │       └── internal/scenario   (Load for scenario YAML validation)
     ├── internal/preflight      (spec clarity, scenario quality assessment)
     │       └── internal/llm
     ├── internal/gene           (scan, analyze, gene types)
@@ -119,7 +121,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
 | `llm` | Model-agnostic LLM client, cost tracking, prompt templates | `client.go`, `anthropic.go`, `openai.go`, `models.go`, `json.go`, `prompt.go` | anthropic-sdk, openai-sdk |
 | `gene` | Scan exemplar codebases, LLM pattern extraction | `gene.go`, `scan.go`, `analyze.go` | `llm`, `spec` |
-| `interview` | Conversational spec-drafting and spec-completeness scoring | `interview.go`, `prompt.go`, `scoring.go`, `scoring_prompt.go` | `llm` |
+| `interview` | Conversational spec-drafting, spec-completeness scoring, holdout scenario generation | `interview.go`, `prompt.go`, `scoring.go`, `scoring_prompt.go`, `scenarios.go`, `scenarios_prompt.go` | `llm`, `attractor`, `scenario` |
 | `preflight` | Pre-run quality assessment of specs and scenarios | `preflight.go`, `scenario.go` | `llm` |
 | `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go` | (none) |
 | `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
@@ -1003,6 +1005,37 @@ LLM is called with `Temperature=0`, `MaxTokens=4096`, and `CacheControl: ephemer
 prompt. Response must be a JSON object with exactly five named dimensions; scores are clamped to
 [0, 100]. Sentinel errors: `errEmptySpec`, `errMalformedResponse`, `errIncompleteDimensions`.
 
+## Holdout Scenario Generation (`interview.ScenarioGenerator`)
+
+`interview.NewScenarioGenerator(client llm.Client, model string, log *slog.Logger) *ScenarioGenerator`
+— generates holdout validation scenario YAML files from a spec using an LLM. Invoked by
+`octog interview --scenarios`.
+
+```go
+func (g *ScenarioGenerator) Generate(ctx context.Context, specContent string) (map[string]string, float64, error)
+```
+
+Returns a map of filename → YAML content, LLM cost in USD, and any error.
+
+Pipeline:
+
+1. LLM is called with `scenarioSystemPrompt` (system) + spec content (user message), `Temperature=0.7`,
+   `MaxTokens=8192`, `CacheControl: ephemeral`.
+2. Response is parsed with `attractor.ParseFiles` to extract `=== FILE: name === … === END FILE ===`
+   blocks. If no blocks are found, returns `errParseScenarioOutput`.
+3. Each filename is sanitized with `filepath.Base` (strips any directory prefix LLM may emit).
+   Filenames containing `..` or equal to `.` are dropped with a warning log.
+4. Each YAML block is validated with `scenario.Load`; invalid blocks are dropped with a warning log.
+5. Filename collisions (after base-name normalization) keep the first occurrence.
+6. If no valid scenarios survive, returns `errNoValidScenarios`.
+
+Sentinel errors: `errEmptySpec` (shared with `Scorer`), `errParseScenarioOutput`,
+`errNoValidScenarios`.
+
+`cmd/octog.writeGeneratedScenarios` wraps `ScenarioGenerator.Generate`, writes files to a
+`scenarios/` directory adjacent to the spec output path, and returns the LLM cost for
+aggregated cost reporting.
+
 ## Observability
 
 OpenTelemetry tracing is enabled via `--otel-endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT` env var).
@@ -1017,7 +1050,7 @@ implement it). The service name is `octog`.
 ## CLI Interface
 
 ```text
-octog interview  [--output spec.md] [--model ...] [--provider anthropic|openai] [--prompt "What would you like to build?"] [--seed <existing-spec.md>]
+octog interview  [--output spec.md] [--model ...] [--provider anthropic|openai] [--prompt "What would you like to build?"] [--seed <existing-spec.md>] [--scenarios]
 octog run        --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--frugal-model ...] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--block-on-regression] [--context-budget 0] [--otel-endpoint ...] [--skip-preflight] [--preflight-threshold 0.8] [-v 0|1|2] [--provider anthropic|openai]
 octog validate   --scenarios <dir> --target <url> [--grpc-target host:port] [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [-v 0|1|2] [--provider anthropic|openai]
 octog preflight  [--judge-model claude-haiku-4-5] [--threshold 0.8] [--verbose] [--scenarios <dir>] <spec-path>
