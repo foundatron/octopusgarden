@@ -184,8 +184,8 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 
 - **Status**: Implemented
 - **Files**: `gene/scan.go`, `gene/analyze.go`, `gene/gene.go`, `attractor/prompts.go`
-- **Method**: Scan exemplar codebase for high-signal files within 20K token budget. LLM extracts structured pattern guide. Injected into system prompt.
-- **Limitations**: Single exemplar only. No multi-repo synthesis. No incremental update as generated code evolves. Patterns are extracted once, not refined based on generation outcomes.
+- **Method**: Scan exemplar codebase for high-signal files within 20K token budget. LLM extracts structured pattern guide including optional named `Component` entries (interface, patterns, dependency graph). `parseComponents` scans the guide for `**COMPONENT: <name>**` headers; `validateComponents` enforces non-empty unique names, declared dependencies exist, and no cycles (DFS). Guide and components stored in `Gene` JSON. Injected into system prompt.
+- **Limitations**: Single exemplar only. No multi-repo synthesis. No incremental update as generated code evolves. Patterns are extracted once, not refined based on generation outcomes. Component graph is validated but not yet used to order generation or scope prompts.
 
 ### Regression Tracking
 
@@ -1041,17 +1041,35 @@ pipeline: `gene.Scan` selects high-signal files (markers, README, Dockerfile, en
 models) within a ~20K token budget → `gene.Analyze` sends them to an LLM to produce a structured
 guide → the guide is stored as a `Gene` JSON file.
 
+When the LLM response includes `**COMPONENT: <name>**` headers, `parseComponents` extracts each
+component's `Interface`, `Patterns`, and `DependsOn` fields into `Component` structs stored on the
+`Gene`. `Validate` (via `validateComponents` + `detectComponentCycles`) enforces non-empty unique
+names, all declared dependencies exist, and the dependency graph is acyclic (DFS gray/black coloring).
+
+[embedmd]:# (../internal/gene/gene.go go /^\/\/ Component represents/ /^}/)
+```go
+// Component represents a named architectural component within a Gene,
+// with its interface description, patterns, and declared dependencies.
+type Component struct {
+	Name      string   `json:"name"`
+	Interface string   `json:"interface"`
+	Patterns  string   `json:"patterns"`
+	DependsOn []string `json:"depends_on,omitempty"`
+}
+```
+
 [embedmd]:# (../internal/gene/gene.go go /^\/\/ Gene represents/ /^}/)
 ```go
 // Gene represents an extracted coding guide for a specific language,
 // derived from a source repository's patterns and conventions.
 type Gene struct {
-	Version     int       `json:"version"`
-	Source      string    `json:"source"`
-	Language    string    `json:"language"`
-	ExtractedAt time.Time `json:"extracted_at"`
-	Guide       string    `json:"guide"`
-	TokenCount  int       `json:"token_count"`
+	Version     int         `json:"version"`
+	Source      string      `json:"source"`
+	Language    string      `json:"language"`
+	ExtractedAt time.Time   `json:"extracted_at"`
+	Guide       string      `json:"guide"`
+	TokenCount  int         `json:"token_count"`
+	Components  []Component `json:"components,omitempty"`
 }
 ```
 

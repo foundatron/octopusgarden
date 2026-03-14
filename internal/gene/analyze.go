@@ -27,6 +27,12 @@ Respond with a concise guide covering these sections:
 **STRUCTURE** — Directory layout and what goes where.
 **BOOT** — How the application starts: entry point, config loading, dependency wiring, server listen.
 **BUILD** — Build tool, Dockerfile strategy, CI commands, and how to run locally.
+**COMPONENTS** — When the codebase has clear module boundaries (distinct service layers, adapters, or domain objects), identify each as a named component using the format below. Omit this section entirely for simple single-package applications.
+
+**COMPONENT: <name>**
+Interface: <what this component exposes to callers>
+Patterns: <key implementation patterns>
+DependsOn: <comma-separated component names, or none>
 
 Keep the guide under 800 words. Be specific — cite actual file paths, function names, and patterns from the source files provided. Do not include generic advice.`
 
@@ -57,6 +63,7 @@ func Analyze(ctx context.Context, logger *slog.Logger, client llm.Client, model 
 		ExtractedAt: time.Now(),
 		Guide:       guide,
 		TokenCount:  spec.EstimateTokens(guide),
+		Components:  parseComponents(guide),
 	}
 
 	logger.Info("gene extraction",
@@ -68,6 +75,103 @@ func Analyze(ctx context.Context, logger *slog.Logger, client llm.Client, model 
 	)
 
 	return g, nil
+}
+
+// parseComponents scans a gene guide for **COMPONENT: <name>** headers and extracts
+// each component's Interface, Patterns, and DependsOn fields. Returns nil when no
+// component headers are found. Component text is left in the guide (intentional; no
+// downstream consumer of Components requires stripping it yet).
+func parseComponents(guide string) []Component {
+	var components []Component
+	var current *Component
+	inPatterns := false
+
+	for _, line := range strings.Split(guide, "\n") {
+		trimmed := strings.TrimRight(line, " \t")
+
+		if name, ok := parseComponentHeader(trimmed); ok {
+			if current != nil {
+				components = append(components, *current)
+			}
+			current = &Component{Name: name}
+			inPatterns = false
+			continue
+		}
+
+		if current == nil {
+			continue
+		}
+
+		if nowInPatterns, matched := applyComponentField(current, trimmed); matched {
+			inPatterns = nowInPatterns
+			continue
+		}
+
+		if inPatterns && trimmed != "" {
+			// A bold header (e.g. **BUILD**) signals end of the components section;
+			// stop accumulating to prevent non-component guide text leaking into Patterns.
+			if strings.HasPrefix(trimmed, "**") {
+				inPatterns = false
+			} else {
+				current.Patterns += "\n" + trimmed
+			}
+		}
+	}
+
+	if current != nil {
+		components = append(components, *current)
+	}
+
+	if len(components) == 0 {
+		return nil
+	}
+	return components
+}
+
+// parseComponentHeader returns the component name if line matches **COMPONENT: <name>**.
+func parseComponentHeader(line string) (name string, ok bool) {
+	after, found := strings.CutPrefix(line, "**COMPONENT:")
+	if !found {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimSuffix(after, "**")), true
+}
+
+// applyComponentField updates c when line matches a known field prefix.
+// Returns (true, true) when the Patterns field is matched (caller should accumulate
+// subsequent lines), (false, true) for any other matched field, (false, false) otherwise.
+func applyComponentField(c *Component, line string) (inPatterns bool, matched bool) {
+	if after, found := strings.CutPrefix(line, "Interface:"); found {
+		c.Interface = strings.TrimSpace(after)
+		return false, true
+	}
+	if after, found := strings.CutPrefix(line, "Patterns:"); found {
+		c.Patterns = strings.TrimSpace(after)
+		return true, true
+	}
+	if after, found := strings.CutPrefix(line, "DependsOn:"); found {
+		c.DependsOn = parseDependsOn(strings.TrimSpace(after))
+		return false, true
+	}
+	return false, false
+}
+
+// parseDependsOn splits a comma-separated dependency list; returns nil for empty or "none".
+func parseDependsOn(val string) []string {
+	if val == "" || strings.EqualFold(val, "none") {
+		return nil
+	}
+	parts := strings.Split(val, ",")
+	deps := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if dep := strings.TrimSpace(p); dep != "" {
+			deps = append(deps, dep)
+		}
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+	return deps
 }
 
 func buildAnalyzeUserMessage(sourceDir string, scan ScanResult) string {
