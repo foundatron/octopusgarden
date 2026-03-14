@@ -13,12 +13,14 @@ func TestWrapValidateFnSuccess(t *testing.T) {
 	exp, tp := newTestTP()
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
-	inner := func(_ context.Context, _ string, _ attractor.RestartFunc) (float64, []string, float64, error) {
+	var receivedMaxTier int
+	inner := func(_ context.Context, _ string, _ attractor.RestartFunc, maxTier int) (float64, []string, float64, error) {
+		receivedMaxTier = maxTier
 		return 85.0, []string{"minor issue"}, 0.005, nil
 	}
 
 	wrapped := WrapValidateFn(inner, tp)
-	sat, failures, cost, err := wrapped(context.Background(), "http://localhost:8080", nil)
+	sat, failures, cost, err := wrapped(context.Background(), "http://localhost:8080", nil, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -31,6 +33,9 @@ func TestWrapValidateFnSuccess(t *testing.T) {
 	if cost != 0.005 {
 		t.Errorf("expected cost 0.005, got %f", cost)
 	}
+	if receivedMaxTier != 2 {
+		t.Errorf("expected maxTier=2 forwarded to inner, got %d", receivedMaxTier)
+	}
 
 	_ = tp.ForceFlush(context.Background())
 	spans := exp.GetSpans()
@@ -42,6 +47,7 @@ func TestWrapValidateFnSuccess(t *testing.T) {
 	}
 
 	assertHasAttr(t, spans[0].Attributes, "scenario.target_url")
+	assertHasAttr(t, spans[0].Attributes, "scenario.max_tier")
 	assertHasAttr(t, spans[0].Attributes, "scenario.satisfaction")
 	assertHasAttr(t, spans[0].Attributes, "scenario.failure_count")
 	assertHasAttr(t, spans[0].Attributes, "scenario.cost_usd")
@@ -51,12 +57,12 @@ func TestWrapValidateFnError(t *testing.T) {
 	exp, tp := newTestTP()
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
-	inner := func(_ context.Context, _ string, _ attractor.RestartFunc) (float64, []string, float64, error) {
+	inner := func(_ context.Context, _ string, _ attractor.RestartFunc, _ int) (float64, []string, float64, error) {
 		return 0, nil, 0, errMock
 	}
 
 	wrapped := WrapValidateFn(inner, tp)
-	_, _, _, err := wrapped(context.Background(), "http://localhost:8080", nil)
+	_, _, _, err := wrapped(context.Background(), "http://localhost:8080", nil, 0)
 	if err == nil {
 		t.Fatal("expected error")
 	}

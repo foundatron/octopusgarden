@@ -131,6 +131,8 @@ Requires: Go 1.24+, Docker, an Anthropic or OpenAI API key.
   consecutive non-improving iterations, downgrade back after 5 consecutive improvements
 - **Gene Transfusion** -- Extract coding patterns from exemplar codebases to bootstrap generation
   (`octog extract` -> `octog run --genes`)
+- **Stratified Validation** -- `--stratified` flag validates scenarios by ascending difficulty tier
+  (1→2→3), converging each tier before advancing; prevents easy scenarios masking hard failures
 
 ## Documentation
 

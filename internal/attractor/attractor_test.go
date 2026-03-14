@@ -124,7 +124,7 @@ func TestConvergesImmediately(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -148,7 +148,7 @@ func TestConvergesOnIteration2(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			return 60, []string{"missing endpoint"}, 0.005, nil
@@ -175,7 +175,7 @@ func TestStalls(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 50, []string{"not good enough"}, 0.005, nil
 	}
 
@@ -204,7 +204,7 @@ func TestStallResetsOnImprovement(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		idx := int(n) - 1
 		if idx >= len(scores) {
@@ -237,7 +237,7 @@ func TestBudgetExceeded(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.04}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 50, []string{"not done"}, 0.02, nil
 	}
 
@@ -274,7 +274,7 @@ func TestBuildFailureFeedback(t *testing.T) {
 			return nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -307,7 +307,7 @@ func TestHealthCheckFailure(t *testing.T) {
 			return nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -327,7 +327,7 @@ func TestMaxIterations(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 80, []string{"close but no cigar"}, 0.005, nil
 	}
 
@@ -419,7 +419,7 @@ func TestCacheControlSet(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -444,7 +444,7 @@ func TestCheckpointWritten(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		return scores[int(n)-1], nil, 0.005, nil
 	}
@@ -482,7 +482,7 @@ func TestContainerRunFailure(t *testing.T) {
 			return container.RunResult{URL: "http://127.0.0.1:9999", ContainerID: "mock-container-id"}, func() {}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -513,7 +513,7 @@ func TestNeedsBrowserTriggersHTTPContainer(t *testing.T) {
 			return nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -544,7 +544,7 @@ func TestProgressCallback(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		return scores[int(n)-1], []string{"needs work"}, 0.005, nil
 	}
@@ -621,7 +621,7 @@ func TestProgressCallbackBuildFailure(t *testing.T) {
 			return nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -681,7 +681,7 @@ func TestPatchModeUsedOnIteration2(t *testing.T) {
 		},
 	}
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			return 60, []string{"missing endpoint"}, 0.005, nil
@@ -729,7 +729,7 @@ func TestPatchModeFallbackOnRegressions(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		idx := int(n) - 1
 		if idx >= len(scores) {
@@ -777,7 +777,7 @@ func TestPatchModeRegressionResets(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		idx := int(n) - 1
 		if idx >= len(scores) {
@@ -817,7 +817,7 @@ func TestPatchModeDisabledByDefault(t *testing.T) {
 		},
 	}
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			return 60, []string{"needs work"}, 0.005, nil
@@ -861,7 +861,7 @@ func TestPatchModeNotActiveWithoutBestFiles(t *testing.T) {
 			return nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -920,7 +920,7 @@ func main() { serveFixed() }
 	}
 
 	var valCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := valCount.Add(1)
 		if n == 1 {
 			return 60, []string{"needs fix"}, 0.005, nil
@@ -962,7 +962,7 @@ func TestValidateError(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 0, nil, 0, fmt.Errorf("judge unavailable")
 	}
 
@@ -988,7 +988,7 @@ func TestContextBudgetZeroPreservesBehavior(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1034,7 +1034,7 @@ Brief abstract of the spec.`,
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			return 60, []string{"missing endpoint"}, 0.005, nil
@@ -1085,7 +1085,7 @@ func TestContextBudgetSummarizeFailureNonFatal(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1117,7 +1117,7 @@ func TestAttractorRunWithGenes(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1151,7 +1151,7 @@ func TestAttractorRunGenesInSystemPrompt(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1186,7 +1186,7 @@ func TestAttractorRunGenesPersistAcrossIterations(t *testing.T) {
 		},
 	}
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n < 3 {
 			return 60, []string{"needs work"}, 0.005, nil
@@ -1225,7 +1225,7 @@ func TestAttractorCrossLanguagePrompt(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1292,7 +1292,7 @@ func TestStallNoticeAppearsInGenerateByIteration3(t *testing.T) {
 	}
 
 	// ValidateFn always returns the same failing scenario in the format parsed by parseFailedScenarios.
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 45, []string{"✗ stall-scenario (45/100)"}, 0.005, nil
 	}
 
@@ -1369,7 +1369,7 @@ func TestMinimalismPromptAppearsAbove80(t *testing.T) {
 			}
 			failures := []string{FormatScenarioFailureLine("test-scenario", 50)}
 			var validateCount atomic.Int32
-			validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+			validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 				n := validateCount.Add(1)
 				if n == 1 {
 					return tt.score, failures, 0, nil
@@ -1411,7 +1411,7 @@ func TestMinimalismPromptIncludesFailingScenarios(t *testing.T) {
 		FormatScenarioFailureLine("list-items", 55),
 	}
 	var validateCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := validateCount.Add(1)
 		if n == 1 {
 			return 85, failures, 0, nil
@@ -1456,7 +1456,7 @@ func TestMinimalismPromptProgression(t *testing.T) {
 		},
 	}
 	var validateCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := int(validateCount.Add(1)) - 1
 		if n < len(scores) {
 			return scores[n], scenarioFailures[n], 0, nil
@@ -1513,7 +1513,7 @@ func TestRegressionFeedbackInjected(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := validateCount.Add(1)
 		switch n {
 		case 1:
@@ -1597,7 +1597,7 @@ CMD ["./server"]
 	}
 
 	// Validation always fails — drives stall without converging.
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 30, []string{"not good enough"}, 0.005, nil
 	}
 
@@ -1657,7 +1657,7 @@ func TestBlockOnRegressionPreventsConvergence(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := validateCount.Add(1)
 		switch n {
 		case 1:
@@ -1702,7 +1702,7 @@ func TestTestCommandEmpty_SkipsMechanicalTest(t *testing.T) {
 			return container.ExecResult{ExitCode: 0}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1735,7 +1735,7 @@ func TestTestCommandExitZero_ProceedsToJudge(t *testing.T) {
 			return container.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		validateCalled = true
 		return 100, nil, 0.005, nil
 	}
@@ -1773,7 +1773,7 @@ func TestTestCommandExitNonZero_SkipsJudge(t *testing.T) {
 			return container.ExecResult{ExitCode: 1, Stderr: "FAIL: test_foo\n"}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		validateCalled = true
 		return 100, nil, 0.005, nil
 	}
@@ -1820,7 +1820,7 @@ func TestTestCommandOutput_IncludedInFeedback(t *testing.T) {
 			return container.ExecResult{ExitCode: 1, Stdout: testOutput, Stderr: ""}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -1847,7 +1847,7 @@ func validDiagnosisJSON() string {
 // Failure format matches FormatScenarioFailureLine so buildSteeringText can detect the stall.
 func stallingValidateFn(n int) (ValidateFn, *atomic.Int32) {
 	var count atomic.Int32
-	fn := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	fn := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		c := int(count.Add(1))
 		if c <= n {
 			return 50, []string{FormatScenarioFailureLine("auth", 50)}, 0.005, nil
@@ -2052,7 +2052,7 @@ func TestWonderReflect_OnlyOnStall(t *testing.T) {
 	}
 
 	// Always succeeds — no stall, no wonder/reflect.
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2162,7 +2162,7 @@ func TestModelEscalationPassedToGenerate(t *testing.T) {
 			return nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2211,7 +2211,7 @@ func TestNoEscalationWithoutFrugalModel(t *testing.T) {
 		},
 	}
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n < 3 {
 			return 50, []string{"not yet"}, 0.005, nil
@@ -2288,7 +2288,7 @@ func TestAgenticConverge(t *testing.T) {
 			return llm.AgentResponse{Turns: 2, TotalCost: 0.05}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2321,7 +2321,7 @@ func TestAgenticCostTracking(t *testing.T) {
 			return llm.AgentResponse{Turns: 1, TotalCost: agentCost}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2346,7 +2346,7 @@ func TestAgenticTurnsReported(t *testing.T) {
 			return llm.AgentResponse{Turns: wantTurns, TotalCost: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2401,7 +2401,7 @@ func TestAgenticPatchPreSeed(t *testing.T) {
 	}
 
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			return 60, []string{"needs work"}, 0.005, nil
@@ -2456,7 +2456,7 @@ func TestAgenticPatchMergesUnchangedFiles(t *testing.T) {
 	}
 
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n == 1 {
 			return 60, []string{"needs work"}, 0.005, nil
@@ -2491,7 +2491,7 @@ func TestAgenticRequiresAgentClient(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput()}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2521,7 +2521,7 @@ func TestAgenticBuildFailure(t *testing.T) {
 		},
 	}
 
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2560,7 +2560,7 @@ func TestAgenticWonderReflectSkipped(t *testing.T) {
 	}
 
 	var callCount atomic.Int32
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		n := callCount.Add(1)
 		if n < 3 {
 			return 50, []string{"scenario-a (50/100)"}, 0.005, nil
@@ -2648,7 +2648,7 @@ func TestTruncationWithParsableOutput(t *testing.T) {
 			}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2668,10 +2668,10 @@ func TestComposedConvergence_BothComponentsConverge(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	componentValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	componentValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
-	integrationValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	integrationValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2706,7 +2706,7 @@ func TestComposedConvergence_FallbackToMonolithic(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	monolithicValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	monolithicValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2734,7 +2734,7 @@ func TestComposedConvergence_NoComponents(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2777,7 +2777,7 @@ func TestComposedConvergence_BudgetExhausted(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.50}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 50, []string{"not done"}, 0.01, nil
 	}
 
@@ -2814,7 +2814,7 @@ func TestComposedConvergence_AgenticSkip(t *testing.T) {
 			return llm.AgentResponse{Turns: 1, TotalCost: 0.01}, nil
 		},
 	}
-	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2871,10 +2871,10 @@ func TestComposedConvergence_TransitiveDeps(t *testing.T) {
 		},
 	}
 
-	componentValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	componentValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
-	integrationValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	integrationValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2919,13 +2919,13 @@ func TestComposedConvergence_IntegrationFail(t *testing.T) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
-	componentValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	componentValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
-	integrationValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	integrationValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 40, []string{"integration broken"}, 0.005, nil
 	}
-	monolithicValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+	monolithicValidate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
 		return 100, nil, 0.005, nil
 	}
 
@@ -2946,5 +2946,232 @@ func TestComposedConvergence_IntegrationFail(t *testing.T) {
 	}
 	if result.Status != StatusConverged {
 		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+}
+
+// TestNonStratifiedUnchanged verifies that Stratified: false passes maxTier=0 to ValidateFn
+// and the loop behaves identically to pre-stratification behavior.
+func TestNonStratifiedUnchanged(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	var receivedMaxTier int
+	validate := func(_ context.Context, _ string, _ RestartFunc, maxTier int) (float64, []string, float64, error) {
+		receivedMaxTier = maxTier
+		return 96, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	// Stratified is false by default.
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build a hello world app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+	if receivedMaxTier != 0 {
+		t.Errorf("expected maxTier=0 for non-stratified mode, got %d", receivedMaxTier)
+	}
+}
+
+// TestStratifiedTierAdvancement verifies that Stratified: true advances through tiers 1→2→3,
+// passing the correct maxTier to ValidateFn for each tier, and returns StatusConverged after tier 3.
+func TestStratifiedTierAdvancement(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	var receivedTiers []int
+	validate := func(_ context.Context, _ string, _ RestartFunc, maxTier int) (float64, []string, float64, error) {
+		receivedTiers = append(receivedTiers, maxTier)
+		return 96, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Stratified = true
+	opts.MaxIterations = 10
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+
+	// Three tiers should have been validated: maxTier 1, 2, 3.
+	if len(receivedTiers) != 3 {
+		t.Fatalf("expected 3 validation calls (one per tier), got %d: %v", len(receivedTiers), receivedTiers)
+	}
+	if receivedTiers[0] != 1 {
+		t.Errorf("first call should have maxTier=1, got %d", receivedTiers[0])
+	}
+	if receivedTiers[1] != 2 {
+		t.Errorf("second call should have maxTier=2, got %d", receivedTiers[1])
+	}
+	if receivedTiers[2] != 3 {
+		t.Errorf("third call should have maxTier=3, got %d", receivedTiers[2])
+	}
+}
+
+// TestStratifiedStallAtTier1 verifies that when stratified mode is on but satisfaction never
+// improves past the stall limit, the run terminates with StatusStalled at tier 1.
+func TestStratifiedStallAtTier1(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	var tiersSeen []int
+	validate := func(_ context.Context, _ string, _ RestartFunc, maxTier int) (float64, []string, float64, error) {
+		tiersSeen = append(tiersSeen, maxTier)
+		return 50, []string{"not good enough"}, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Stratified = true
+	opts.StallLimit = 3
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusStalled {
+		t.Errorf("expected status %q, got %q", StatusStalled, result.Status)
+	}
+
+	// All calls should have maxTier=1 — never advanced to tier 2.
+	for i, tier := range tiersSeen {
+		if tier != 1 {
+			t.Errorf("call %d: expected maxTier=1 (never advanced), got %d", i, tier)
+		}
+	}
+}
+
+// TestStratifiedFullProgression verifies that stall count resets between tiers so that
+// a brief stall on tier 3 does not carry over the stall count from tier 2.
+func TestStratifiedFullProgression(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	// Tier 1: converges on call 1 (96%)
+	// Tier 2: converges on call 2 (96%)
+	// Tier 3: fails call 3 (40%), then converges call 4 (96%)
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		switch n {
+		case 3:
+			return 40, []string{"failing"}, 0.005, nil
+		default:
+			return 96, nil, 0.005, nil
+		}
+	}
+
+	opts := defaultOpts(t)
+	opts.Stratified = true
+	opts.StallLimit = 3
+	opts.MaxIterations = 10
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+	// 4 total validation calls (1 per tier for tiers 1-2, 2 for tier 3).
+	if result.Iterations != 4 {
+		t.Errorf("expected 4 total iterations, got %d", result.Iterations)
+	}
+}
+
+// TestStratifiedMaxIterationsExhausted verifies that when MaxIterations is exhausted
+// during stratified mode (mid-tier), the run returns StatusMaxIterations.
+func TestStratifiedMaxIterationsExhausted(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+
+	// Tier 1: converges at iteration 1.
+	// Tier 2: converges at iteration 2.
+	// Tier 3: iterations 3-4 return 50% — MaxIterations=4 exhausted.
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string, _ RestartFunc, maxTier int) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if n <= 2 {
+			return 96, nil, 0.005, nil
+		}
+		return 50, []string{"tier 3 not passing"}, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Stratified = true
+	opts.MaxIterations = 4
+	opts.StallLimit = 10 // won't stall
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusMaxIterations {
+		t.Errorf("expected status %q, got %q", StatusMaxIterations, result.Status)
+	}
+	if result.Iterations != 4 {
+		t.Errorf("expected 4 total iterations, got %d", result.Iterations)
+	}
+}
+
+// TestStratifiedBudgetExhaustedMidTier verifies that when the cost budget is exhausted
+// during tier 2 of stratified mode, the run returns StatusBudgetExceeded.
+func TestStratifiedBudgetExhaustedMidTier(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.04}, nil
+		},
+	}
+
+	// Tier 1: converges on call 1 (96%), cost so far: 0.04 (generate) + 0.02 (validate) = 0.06
+	// Tier 2: iteration 2 generate costs 0.04, total = 0.10 which hits the budget before validation.
+	var callCount atomic.Int32
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+		callCount.Add(1)
+		return 96, nil, 0.02, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Stratified = true
+	opts.BudgetUSD = 0.10
+	opts.MaxIterations = 10
+	opts.StallLimit = 5
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusBudgetExceeded {
+		t.Errorf("expected status %q, got %q", StatusBudgetExceeded, result.Status)
+	}
+	// Should have advanced to tier 2 but not completed it.
+	calls := callCount.Load()
+	if calls < 1 {
+		t.Errorf("expected at least 1 validation call, got %d", calls)
 	}
 }

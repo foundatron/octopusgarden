@@ -230,7 +230,7 @@ func checkDockerAvailable(ctx context.Context, t *testing.T) {
 // makeValidateFn builds an attractor.ValidateFn that runs all scenarios sequentially
 // and returns the aggregate satisfaction score.
 func makeValidateFn(t *testing.T, scenarios []scenario.Scenario, llmClient llm.Client, logger *slog.Logger) attractor.ValidateFn {
-	return func(ctx context.Context, baseURL string, _ attractor.RestartFunc) (float64, []string, float64, error) {
+	return func(ctx context.Context, baseURL string, _ attractor.RestartFunc, _ int) (float64, []string, float64, error) {
 		httpCli := &http.Client{Timeout: 30 * time.Second}
 		executors := map[string]scenario.StepExecutor{
 			"request": &scenario.HTTPExecutor{Client: httpCli, BaseURL: baseURL},

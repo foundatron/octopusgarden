@@ -171,6 +171,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	maxTokensFlag := fs.Int("max-tokens", 0, "max output tokens for generation (0 = auto-scale per model)")
 	agenticFlag := fs.Bool("agentic", false, "enable agentic generation mode (multi-turn tool-use)")
 	agentMaxTurnsFlag := fs.Int("agent-max-turns", 0, "max tool-use turns per iteration (0 = use attractor default)")
+	stratifiedFlag := fs.Bool("stratified", false, "validate scenarios by ascending difficulty tier (1→2→3), converging each tier before advancing")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
@@ -253,6 +254,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		Agentic:           *agenticFlag,
 		AgentMaxTurns:     *agentMaxTurnsFlag,
 		GeneComponents:    geneComponents,
+		Stratified:        *stratifiedFlag,
 	})
 }
 
@@ -313,6 +315,7 @@ type runLoopParams struct {
 	Agentic           bool
 	AgentMaxTurns     int
 	GeneComponents    []gene.Component
+	Stratified        bool
 }
 
 func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, p runLoopParams) error {
@@ -411,6 +414,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		AgentMaxTurns:       p.AgentMaxTurns,
 		GeneComponents:      p.GeneComponents,
 		ComponentValidators: componentValidators,
+		Stratified:          p.Stratified,
 	}
 
 	startedAt := time.Now()
@@ -1354,6 +1358,7 @@ func buildComponentValidators(scenarios []scenario.Scenario, llmClient llm.Clien
 		grouped[sc.Component] = append(grouped[sc.Component], sc)
 	}
 
+	// Component validators always use the full per-component scenario set (maxTier is ignored).
 	validators := make(map[string]attractor.ValidateFn, len(grouped))
 	for name, group := range grouped {
 		validators[name] = observability.WrapValidateFn(
@@ -1363,11 +1368,24 @@ func buildComponentValidators(scenarios []scenario.Scenario, llmClient llm.Clien
 }
 
 func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string) attractor.ValidateFn {
-	return func(ctx context.Context, url string, restart attractor.RestartFunc) (float64, []string, float64, error) {
+	return func(ctx context.Context, url string, restart attractor.RestartFunc, maxTier int) (float64, []string, float64, error) {
+		active := scenarios
+		if maxTier > 0 {
+			filtered := make([]scenario.Scenario, 0, len(scenarios))
+			for _, sc := range scenarios {
+				if sc.Tier <= maxTier {
+					filtered = append(filtered, sc)
+				}
+			}
+			if baseOpts.logger != nil {
+				baseOpts.logger.Debug("stratified validation: filtered scenarios", "max_tier", maxTier, "total", len(scenarios), "active", len(filtered))
+			}
+			active = filtered
+		}
 		opts := baseOpts
 		opts.targetURL = url
 		opts.grpcTarget = grpcTargetGetter()
-		agg, err := runAndScore(ctx, scenarios, opts, llmClient, judgeModel, restart, 1)
+		agg, err := runAndScore(ctx, active, opts, llmClient, judgeModel, restart, 1)
 		if err != nil {
 			return 0, nil, 0, err
 		}

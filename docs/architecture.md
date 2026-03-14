@@ -691,7 +691,9 @@ type ContainerManager interface {
 // The attractor never imports internal/scenario — the CLI provides this closure.
 // restart may be called to stop the current container and start a fresh one between scenarios.
 // restart is nil for gRPC and exec-only paths that do not support container restart.
-type ValidateFn func(ctx context.Context, url string, restart RestartFunc) (satisfaction float64, failures []string, cost float64, err error)
+// maxTier, when > 0, restricts validation to scenarios with Tier <= maxTier (stratified mode).
+// maxTier == 0 means run all scenarios (non-stratified or component validators).
+type ValidateFn func(ctx context.Context, url string, restart RestartFunc, maxTier int) (satisfaction float64, failures []string, cost float64, err error)
 ```
 
 [embedmd]:# (../internal/attractor/attractor.go go /^\/\/ RunOptions configures/ /^}/)
@@ -719,6 +721,7 @@ type RunOptions struct {
 	MaxTokens           int                   // max output tokens for generation; 0 = auto-scale per model
 	Agentic             bool                  // if true, use AgentLoop for code generation (tool-use mode)
 	AgentMaxTurns       int                   // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
+	Stratified          bool                  // if true, validate by ascending difficulty tier (1→2→3), converging each before advancing
 	GeneComponents      []gene.Component      // structured component decomposition from gene extraction
 	ComponentValidators map[string]ValidateFn // per-component validators; "" key = integration validator
 }
@@ -773,9 +776,12 @@ type RunResult struct {
    k. Write files to workspace/{run_id}/iter_{n}/
    l. docker build → docker run → wait for health check
    m. Run test command if configured (non-zero exit → test_fail)
-   n. call validate(ctx, url) → satisfaction, failures
+   n. call validate(ctx, url, maxTier) → satisfaction, failures
+      - maxTier = activeTier in stratified mode; 0 = all scenarios (non-stratified)
    o. Detect per-scenario regressions (score dropped below threshold since last validation)
-   p. If satisfaction >= threshold and no regressions blocking → return "converged"
+   p. If satisfaction >= threshold and no regressions blocking → converged for this tier
+      - Stratified: if activeTier < 3, advance activeTier++, reset per-tier state, continue loop
+      - Stratified: if activeTier == 3 (or non-stratified), return "converged"
    q. Determine feedback fidelity: compact (iter 1-2) → standard (3-4) → full (5+)
    r. Track improvement/stalls; patch mode: disable after 2 consecutive regressions
    s. If stall count >= stall limit → return "stalled"
@@ -1090,7 +1096,7 @@ implement it). The service name is `octog`.
 
 ```text
 octog interview  [--output spec.md] [--model ...] [--provider anthropic|openai] [--prompt "What would you like to build?"] [--seed <existing-spec.md>] [--scenarios]
-octog run        --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--frugal-model ...] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--block-on-regression] [--context-budget 0] [--otel-endpoint ...] [--skip-preflight] [--preflight-threshold 0.8] [-v 0|1|2] [--provider anthropic|openai]
+octog run        --spec <path> --scenarios <dir> [--model claude-sonnet-4-6] [--frugal-model ...] [--judge-model claude-haiku-4-5] [--budget 5.00] [--threshold 95] [--genes genes.json] [--language go] [--patch] [--block-on-regression] [--context-budget 0] [--stratified] [--agentic] [--agent-max-turns N] [--otel-endpoint ...] [--skip-preflight] [--preflight-threshold 0.8] [-v 0|1|2] [--provider anthropic|openai]
 octog validate   --scenarios <dir> --target <url> [--grpc-target host:port] [--judge-model claude-haiku-4-5] [--threshold 0] [--format text|json] [-v 0|1|2] [--provider anthropic|openai]
 octog preflight  [--judge-model claude-haiku-4-5] [--threshold 0.8] [--verbose] [--scenarios <dir>] <spec-path>
 octog status     [--format text|json]
