@@ -661,7 +661,10 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 	// Build messages: patch mode sends previous best files + failures.
 	var messages []llm.Message
 	if patching {
-		messages = buildPatchMessages(s.history, s.bestFiles, s.bestSatisfaction)
+		relevantFiles, triageCost := a.triageFiles(ctx, s.bestFiles, s.lastFailures, s.opts.JudgeModel)
+		s.totalCost += triageCost
+		omitted := len(s.bestFiles) - len(relevantFiles)
+		messages = buildPatchMessages(s.history, relevantFiles, s.bestSatisfaction, omitted)
 	} else {
 		messages = buildMessages(iter, s.history)
 	}

@@ -188,7 +188,7 @@ func TestBuildPatchMessagesCategorizedFeedback(t *testing.T) {
 		"main.go":    "package main\n",
 		"Dockerfile": "FROM scratch\n",
 	}
-	msgs := buildPatchMessages(history, bestFiles, 50.0)
+	msgs := buildPatchMessages(history, bestFiles, 50.0, 0)
 	content := msgs[0].Content
 
 	if !strings.Contains(content, "current best version scored 50.0/100") {
@@ -207,7 +207,7 @@ func TestBuildPatchMessagesCategorizedFeedback(t *testing.T) {
 
 func TestBuildPatchMessagesNoHistory(t *testing.T) {
 	bestFiles := map[string]string{"main.go": "package main\n"}
-	msgs := buildPatchMessages(nil, bestFiles, 70.0)
+	msgs := buildPatchMessages(nil, bestFiles, 70.0, 0)
 	content := msgs[0].Content
 
 	if strings.Contains(content, "Failures to fix") {
@@ -993,7 +993,7 @@ func TestBuildPatchMessagesWithSteering(t *testing.T) {
 	}
 	bestFiles := map[string]string{"main.go": "package main\n"}
 
-	msgs := buildPatchMessages(history, bestFiles, 50.0)
+	msgs := buildPatchMessages(history, bestFiles, 50.0, 0)
 	content := msgs[0].Content
 
 	if !strings.Contains(content, "STALL NOTICE") {
@@ -1376,5 +1376,23 @@ func TestBuildAgenticPatchMessages(t *testing.T) {
 	// Must NOT embed full file content.
 	if strings.Contains(content, "package main") {
 		t.Error("agentic patch message must not embed file content inline")
+	}
+}
+
+func TestBuildPatchMessagesOmittedCount(t *testing.T) {
+	bestFiles := map[string]string{"main.go": "package main\n"}
+	msgs := buildPatchMessages(nil, bestFiles, 80.0, 15)
+	content := msgs[0].Content
+	if !strings.Contains(content, "(15 other files not relevant to current failures, not shown)") {
+		t.Errorf("should contain omitted-files notice, got:\n%s", content)
+	}
+}
+
+func TestBuildPatchMessagesZeroOmitted(t *testing.T) {
+	bestFiles := map[string]string{"main.go": "package main\n"}
+	msgs := buildPatchMessages(nil, bestFiles, 80.0, 0)
+	content := msgs[0].Content
+	if strings.Contains(content, "other files not relevant") {
+		t.Errorf("should not contain omitted-files notice when omittedCount=0, got:\n%s", content)
 	}
 }
