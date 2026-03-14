@@ -377,6 +377,7 @@ type Scenario struct {
 	Type                 string   `yaml:"type"`      // "api" only for MVP
 	Weight               *float64 `yaml:"weight"`    // nil means not set, defaults to 1.0
 	Component            string   `yaml:"component"` // component name for composed convergence; empty = integration scenario
+	Tier                 int      `yaml:"tier"`      // difficulty tier (1=simple, 2=moderate, 3=complex); auto-inferred when 0
 	Setup                []Step   `yaml:"setup"`
 	Steps                []Step   `yaml:"steps"`
 	SatisfactionCriteria string   `yaml:"satisfaction_criteria"`
@@ -530,6 +531,11 @@ steps:
 satisfaction_criteria: |
   All CRUD operations work correctly with appropriate status codes.
 ```
+
+`weight` defaults to 1.0 in aggregate scoring when not set. `tier` is auto-inferred by `inferTier`
+in `loader.go` when not set (zero): >6 judged steps or ≥3 steps with captures → 3 (complex); >3
+judged steps or ≥1 step with captures → 2 (moderate); else → 1 (simple). The `octog lint` checker
+warns if `tier` is explicitly set outside the 1–3 range.
 
 #### gRPC Step
 

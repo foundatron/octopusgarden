@@ -139,6 +139,9 @@ func lintScenarioContent(path string, data []byte) []Diagnostic {
 	// Check weight.
 	diags = append(diags, checkWeight(path, fields)...)
 
+	// Check tier.
+	diags = append(diags, checkTier(path, fields)...)
+
 	// Check steps.
 	stepsNode, stepsLine := getFieldNode(fields, "steps")
 	if stepsNode == nil {
@@ -255,6 +258,31 @@ func checkWeight(path string, fields map[string]*fieldEntry) []Diagnostic {
 			Line:    fe.value.Line,
 			Level:   Warning,
 			Message: "weight must be positive",
+		}}
+	}
+	return nil
+}
+
+func checkTier(path string, fields map[string]*fieldEntry) []Diagnostic {
+	fe, ok := fields["tier"]
+	if !ok {
+		return nil
+	}
+	var t int
+	if err := fe.value.Decode(&t); err != nil {
+		return []Diagnostic{{
+			File:    path,
+			Line:    fe.value.Line,
+			Level:   Warning,
+			Message: fmt.Sprintf("tier must be a number: %s", err),
+		}}
+	}
+	if t < 1 || t > 3 {
+		return []Diagnostic{{
+			File:    path,
+			Line:    fe.value.Line,
+			Level:   Warning,
+			Message: "tier must be between 1 and 3",
 		}}
 	}
 	return nil

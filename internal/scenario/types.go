@@ -60,6 +60,7 @@ type Scenario struct {
 	Type                 string   `yaml:"type"`      // "api" only for MVP
 	Weight               *float64 `yaml:"weight"`    // nil means not set, defaults to 1.0
 	Component            string   `yaml:"component"` // component name for composed convergence; empty = integration scenario
+	Tier                 int      `yaml:"tier"`      // difficulty tier (1=simple, 2=moderate, 3=complex); auto-inferred when 0
 	Setup                []Step   `yaml:"setup"`
 	Steps                []Step   `yaml:"steps"`
 	SatisfactionCriteria string   `yaml:"satisfaction_criteria"`
