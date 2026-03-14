@@ -247,6 +247,41 @@ INFO loaded genes source=. language=go tokens=2320
 INFO auto-detected language from genes (override with --language) language=go
 ```
 
+## Benchmarking
+
+`scripts/gene-benchmark.sh` measures the impact of gene transfusion by running the full attractor
+loop with and without genes, then printing a comparison table:
+
+```bash
+# Single run per configuration (quick sanity check)
+scripts/gene-benchmark.sh examples/hello-api examples/exemplars/go-rest
+
+# Three runs each for statistical reliability
+scripts/gene-benchmark.sh examples/hello-api examples/exemplars/go-rest --runs 3
+
+# Skip confirmation prompt (CI/non-interactive)
+scripts/gene-benchmark.sh examples/hello-api examples/exemplars/go-rest --yes
+```
+
+Output:
+
+```text
+================================================================
+Results
+================================================================
+Metric                Baseline      With Gene     Delta %
+--------------------  ------------  ------------  ----------
+Iterations            4             2             -50.0
+Cost (USD)            0.82          0.41          -50.0
+Satisfaction          97            99            +2.1
+Wall time             3m12s         1m44s         -45.8
+================================================================
+```
+
+Dependencies: `jq`, `octog` in `$PATH` (`make build && export PATH=$PWD/bin:$PATH`).
+
+**Warning:** each run invokes real LLM APIs. With `--runs 3`, expect 6 full convergence loops.
+
 ## CLI Reference
 
 ### `extract`
