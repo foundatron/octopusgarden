@@ -80,6 +80,7 @@ Cross-package and multi-implementation interfaces:
 | Interface        | Package   | Implementations                                                       |
 | ---------------- | --------- | --------------------------------------------------------------------- |
 | Client           | llm       | AnthropicClient, OpenAIClient, observability.TracingLLMClient         |
+| AgentClient      | llm       | AnthropicClient, observability.TracingLLMClient (conditional)         |
 | StepExecutor     | scenario  | HTTPExecutor, ExecExecutor, BrowserExecutor, GRPCExecutor, WSExecutor |
 | ContainerManager | attractor | container.Manager, observability.TracingContainerManager              |
 | containerSession | scenario  | `*container.Session`                                                  |

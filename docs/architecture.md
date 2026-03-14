@@ -47,8 +47,8 @@ octopusgarden/
 │   │   └── regression.go         # Per-scenario regression tracking
 │   ├── container/docker.go       # Build and run Docker containers
 │   ├── llm/                      # LLM client abstraction
-│   │   ├── client.go             # Client interface, request/response types
-│   │   ├── anthropic.go          # Anthropic backend (anthropic-sdk-go)
+│   │   ├── client.go             # Client + AgentClient interfaces, request/response types
+│   │   ├── anthropic.go          # Anthropic backend (anthropic-sdk-go, includes AgentLoop)
 │   │   ├── openai.go             # OpenAI/Ollama backend (openai-go/v3)
 │   │   ├── json.go               # Shared JSON extraction for judge responses
 │   │   ├── models.go             # Model registry, cost tracking
@@ -225,12 +225,31 @@ type Client interface {
 Request/response types (`GenerateRequest`, `GenerateResponse`, `JudgeRequest`, `JudgeResponse`,
 `Message`, `CacheControl`) are defined in `internal/llm/client.go`.
 
+### Agent Loop Interface
+
+[embedmd]:# (../internal/llm/client.go go /^\/\/ AgentClient extends/ /^}/)
+```go
+// AgentClient extends Client with an agentic tool-use loop.
+type AgentClient interface {
+	AgentLoop(ctx context.Context, req AgentRequest, handler ToolHandler) (AgentResponse, error)
+}
+```
+
+`AgentClient` adds a multi-turn tool-use loop on top of `Client`. Supporting types: `ToolDef`
+(tool schema), `ToolCall` (model invocation), `ToolHandler` (caller-provided callback), `AgentRequest`,
+`AgentResponse`. Sentinel errors: `ErrAgentLoopNotSupported` (client lacks implementation),
+`ErrMaxTurnsExceeded` (safety bound hit).
+
 ### Anthropic Backend (`internal/llm/anthropic.go`)
 
-Uses `github.com/anthropics/anthropic-sdk-go`. Spec content in the system prompt gets
-`CacheControl{Type: "ephemeral"}` — cached across attractor iterations for ~90% input cost reduction
-(cache TTL: 5 minutes, resets on hit). Failure feedback in user messages changes each iteration and
-is not cached.
+Uses `github.com/anthropics/anthropic-sdk-go`. Implements both `Client` and `AgentClient`.
+
+Spec content in the system prompt gets `CacheControl{Type: "ephemeral"}` — cached across attractor
+iterations for ~90% input cost reduction (cache TTL: 5 minutes, resets on hit). Failure feedback in
+user messages changes each iteration and is not cached.
+
+`AgentLoop` converts `ToolDef` schemas to Anthropic tool parameters, runs a message loop (default 10
+turns max), dispatches tool calls to the provided handler, and accumulates usage across turns.
 
 ### OpenAI Backend (`internal/llm/openai.go`)
 
@@ -888,7 +907,9 @@ OpenTelemetry tracing is enabled via `--otel-endpoint` (or `OTEL_EXPORTER_OTLP_E
 endpoint returns a noop provider (zero overhead).
 
 Instrumented wrappers (`TracingLLMClient`, `TracingContainerManager`) create spans around LLM calls,
-container operations, and the attractor loop. The service name is `octog`.
+container operations, and the attractor loop. `TracingLLMClient` conditionally delegates `AgentLoop`
+via type assertion to `AgentClient` (returns `ErrAgentLoopNotSupported` if the inner client does not
+implement it). The service name is `octog`.
 
 ## CLI Interface
 
