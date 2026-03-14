@@ -233,7 +233,7 @@ type Client interface {
 ```
 
 Request/response types (`GenerateRequest`, `GenerateResponse`, `JudgeRequest`, `JudgeResponse`,
-`Message`, `CacheControl`) are defined in `internal/llm/client.go`.
+`Message`, `CacheControl`, `Diagnostic`) are defined in `internal/llm/client.go`.
 
 ### Agent Loop Interface
 
@@ -869,11 +869,11 @@ called after each iteration with whether satisfaction strictly improved. When es
 
 Validation feedback sent to the LLM is scaled by iteration to balance cost and signal:
 
-| Level      | Iterations | Max bytes | Detail                                     |
-| ---------- | ---------- | --------- | ------------------------------------------ |
-| `compact`  | 1–2        | 4 KB      | Scenario summary lines only                |
-| `standard` | 3–4        | 12 KB     | Failing step detail, observed truncated    |
-| `full`     | 5+         | 24 KB     | All step detail, full observed output      |
+| Level      | Iterations | Max bytes | Detail                                                          |
+| ---------- | ---------- | --------- | --------------------------------------------------------------- |
+| `compact`  | 1–2        | 4 KB      | Scenario summary lines only                                     |
+| `standard` | 3–4        | 12 KB     | Failing step detail, observed truncated, structured diagnostics |
+| `full`     | 5+         | 24 KB     | All step detail, full observed output, structured diagnostics   |
 
 Stalls escalate fidelity by one level (e.g. compact → standard after 2 consecutive stalls).
 

@@ -1380,6 +1380,9 @@ func formatFailedScenario(s scenario.ScoredScenario) string {
 			}
 			fmt.Fprintf(&b, "\n    %s: %s", label, obs) //nolint:gosec // G705 false positive: writing to strings.Builder, not an HTTP response
 		}
+		for _, d := range step.StepScore.Diagnostics {
+			fmt.Fprintf(&b, "\n    [%s] %s", d.Category, d.Detail) //nolint:gosec // G705 false positive: writing to strings.Builder, not an HTTP response
+		}
 	}
 	return b.String()
 }

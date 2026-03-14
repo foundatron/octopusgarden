@@ -1155,7 +1155,7 @@ func TestObservedTruncationUTF8Safe(t *testing.T) {
 func TestFidelityRoundTrip(t *testing.T) {
 	// Build a canonical failure entry: one failing step and one passing step.
 	scenarioLine := FormatScenarioFailureLine("round-trip", 50)
-	failStep := "  ✗ failing step (30/100)\n    Reasoning: broke\n    Observed: " + strings.Repeat("a", 100)
+	failStep := "  ✗ failing step (30/100)\n    Reasoning: broke\n    Observed: " + strings.Repeat("a", 100) + "\n    [missing_endpoint] POST /users returned 404"
 	passStep := "  ✓ passing step (100/100)\n    Reasoning: fine"
 	entry := scenarioLine + "\n" + failStep + "\n" + passStep
 
@@ -1169,6 +1169,9 @@ func TestFidelityRoundTrip(t *testing.T) {
 		}
 		if strings.Contains(result, "passing step") {
 			t.Error("compact: must not contain passing step")
+		}
+		if strings.Contains(result, "[missing_endpoint]") {
+			t.Error("compact: must not contain diagnostic lines")
 		}
 	})
 
@@ -1189,6 +1192,9 @@ func TestFidelityRoundTrip(t *testing.T) {
 		if strings.Contains(result, "Reasoning: fine") {
 			t.Error("standard: must not contain passing step reasoning")
 		}
+		if !strings.Contains(result, "[missing_endpoint] POST /users returned 404") {
+			t.Error("standard: must contain diagnostic lines under failing step")
+		}
 	})
 
 	t.Run("full", func(t *testing.T) {
@@ -1201,6 +1207,9 @@ func TestFidelityRoundTrip(t *testing.T) {
 		}
 		if !strings.Contains(result, "Reasoning: fine") {
 			t.Error("full: must contain passing step reasoning")
+		}
+		if !strings.Contains(result, "[missing_endpoint] POST /users returned 404") {
+			t.Error("full: must contain diagnostic lines")
 		}
 	})
 }
