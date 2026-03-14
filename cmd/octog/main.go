@@ -198,7 +198,7 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	}
 
 	// Load genes if provided and optionally override language.
-	genesGuide, genesLanguage, langForOpts, err := loadGenes(*genesFlag, langForOpts, isFlagSet(fs, "language"), logger)
+	genesGuide, genesLanguage, langForOpts, geneComponents, err := loadGenes(*genesFlag, langForOpts, isFlagSet(fs, "language"), logger)
 	if err != nil {
 		return err
 	}
@@ -251,20 +251,21 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		MaxTokens:         *maxTokensFlag,
 		Agentic:           *agenticFlag,
 		AgentMaxTurns:     *agentMaxTurnsFlag,
+		GeneComponents:    geneComponents,
 	})
 }
 
 // loadGenes loads a genes file if path is non-empty, returning the guide text,
-// gene language, and the resolved target language. If the language flag was not
-// explicitly set, the gene's language overrides langForOpts.
-func loadGenes(path, langForOpts string, languageExplicit bool, logger *slog.Logger) (guide, geneLang, resolvedLang string, err error) {
+// gene language, the resolved target language, and any structured components.
+// If the language flag was not explicitly set, the gene's language overrides langForOpts.
+func loadGenes(path, langForOpts string, languageExplicit bool, logger *slog.Logger) (guide, geneLang, resolvedLang string, components []gene.Component, err error) {
 	resolvedLang = langForOpts
 	if path == "" {
-		return "", "", resolvedLang, nil
+		return "", "", resolvedLang, nil, nil
 	}
 	g, err := gene.Load(path)
 	if err != nil {
-		return "", "", "", fmt.Errorf("load genes: %w", err)
+		return "", "", "", nil, fmt.Errorf("load genes: %w", err)
 	}
 	logger.Info("loaded genes", "source", g.Source, "language", g.Language, "tokens", g.TokenCount)
 
@@ -272,7 +273,10 @@ func loadGenes(path, langForOpts string, languageExplicit bool, logger *slog.Log
 		resolvedLang = g.Language
 		logger.Info("auto-detected language from genes (override with --language)", "language", resolvedLang)
 	}
-	return g.Guide, g.Language, resolvedLang, nil
+	if len(g.Components) > 0 {
+		logger.Info("loaded gene components for composed convergence", "count", len(g.Components))
+	}
+	return g.Guide, g.Language, resolvedLang, g.Components, nil
 }
 
 // isFlagSet reports whether the named flag was explicitly provided on the command line.
@@ -307,6 +311,7 @@ type runLoopParams struct {
 	MaxTokens         int
 	Agentic           bool
 	AgentMaxTurns     int
+	GeneComponents    []gene.Component
 }
 
 func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Client, p runLoopParams) error {
@@ -373,25 +378,38 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 	}, grpcTargetGetter)
 	instrumentedValidate := observability.WrapValidateFn(validateFn, tp)
 
+	// Build component validators when gene components are available.
+	var componentValidators map[string]attractor.ValidateFn
+	if len(p.GeneComponents) > 0 {
+		componentValidators = buildComponentValidators(scenarios, instrumentedLLM, p.JudgeModel, executorOpts{
+			logger:        logger,
+			sessionGetter: sessionGetter,
+			needsBrowser:  caps.NeedsBrowser,
+			needsWS:       caps.NeedsWS,
+		}, grpcTargetGetter)
+	}
+
 	att := attractor.New(instrumentedLLM, instrumentedContainer, logger, tp)
 	opts := attractor.RunOptions{
-		Model:             p.Model,
-		FrugalModel:       p.FrugalModel,
-		JudgeModel:        p.JudgeModel,
-		BudgetUSD:         p.Budget,
-		Threshold:         p.Threshold,
-		PatchMode:         p.PatchMode,
-		BlockOnRegression: p.BlockOnRegression,
-		ContextBudget:     p.ContextBudget,
-		Language:          p.Language,
-		Progress:          progressFn(ctx, logger, st, os.Stderr, p.Verbosity),
-		Capabilities:      caps,
-		Genes:             p.GenesGuide,
-		GeneLanguage:      p.GeneLanguage,
-		TestCommand:       parsedSpec.TestCommand,
-		MaxTokens:         p.MaxTokens,
-		Agentic:           p.Agentic,
-		AgentMaxTurns:     p.AgentMaxTurns,
+		Model:               p.Model,
+		FrugalModel:         p.FrugalModel,
+		JudgeModel:          p.JudgeModel,
+		BudgetUSD:           p.Budget,
+		Threshold:           p.Threshold,
+		PatchMode:           p.PatchMode,
+		BlockOnRegression:   p.BlockOnRegression,
+		ContextBudget:       p.ContextBudget,
+		Language:            p.Language,
+		Progress:            progressFn(ctx, logger, st, os.Stderr, p.Verbosity),
+		Capabilities:        caps,
+		Genes:               p.GenesGuide,
+		GeneLanguage:        p.GeneLanguage,
+		TestCommand:         parsedSpec.TestCommand,
+		MaxTokens:           p.MaxTokens,
+		Agentic:             p.Agentic,
+		AgentMaxTurns:       p.AgentMaxTurns,
+		GeneComponents:      p.GeneComponents,
+		ComponentValidators: componentValidators,
 	}
 
 	startedAt := time.Now()
@@ -1323,6 +1341,23 @@ func runAndScoreParallel(ctx context.Context, scenarios []scenario.Scenario, opt
 	}
 
 	return scenario.Aggregate(results), nil
+}
+
+// buildComponentValidators creates a map of per-component ValidateFn closures.
+// Scenarios are grouped by their Component field in a single pass.
+// The "" key maps to scenarios with empty Component (integration scenarios).
+func buildComponentValidators(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string) map[string]attractor.ValidateFn {
+	// Group scenarios by component in a single pass.
+	grouped := make(map[string][]scenario.Scenario)
+	for _, sc := range scenarios {
+		grouped[sc.Component] = append(grouped[sc.Component], sc)
+	}
+
+	validators := make(map[string]attractor.ValidateFn, len(grouped))
+	for name, group := range grouped {
+		validators[name] = buildValidateFn(group, llmClient, judgeModel, baseOpts, grpcTargetGetter)
+	}
+	return validators
 }
 
 func buildValidateFn(scenarios []scenario.Scenario, llmClient llm.Client, judgeModel string, baseOpts executorOpts, grpcTargetGetter func() string) attractor.ValidateFn {

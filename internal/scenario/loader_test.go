@@ -212,3 +212,43 @@ func TestLoad_requestFields(t *testing.T) {
 		t.Error("Body is nil, expected parsed YAML value")
 	}
 }
+
+func TestComponentFieldRoundTrip(t *testing.T) {
+	const yaml = `
+id: models-crud
+description: "test component field"
+component: models
+steps:
+  - description: "check something"
+    request:
+      method: GET
+      path: /items
+    expect: "works"
+`
+	sc, err := Load(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if sc.Component != "models" {
+		t.Errorf("Component = %q, want %q", sc.Component, "models")
+	}
+
+	// Empty component should also work.
+	const yamlNoComponent = `
+id: integration-test
+description: "no component"
+steps:
+  - description: "check"
+    request:
+      method: GET
+      path: /
+    expect: "ok"
+`
+	sc2, err := Load(strings.NewReader(yamlNoComponent))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if sc2.Component != "" {
+		t.Errorf("Component = %q, want empty", sc2.Component)
+	}
+}

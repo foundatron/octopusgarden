@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/foundatron/octopusgarden/internal/container"
+	"github.com/foundatron/octopusgarden/internal/gene"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	specpkg "github.com/foundatron/octopusgarden/internal/spec"
 )
@@ -27,6 +28,13 @@ var (
 	errUnsupportedLanguage  = errors.New("attractor: unsupported language")
 	errMinimalismNoMessages = errors.New("attractor: minimalism suffix: no messages to append to")
 	errAgentClientRequired  = errors.New("attractor: agentic mode requires AgentClient implementation")
+	errComponentFallback    = errors.New("attractor: component convergence failed, falling back to monolithic")
+	errComponentStalled     = errors.New("attractor: component stalled")
+	errComponentBudget      = errors.New("attractor: budget exceeded during component convergence")
+	errComponentBuildFail   = errors.New("attractor: component build failed")
+	errComponentSessionFail = errors.New("attractor: component session start failed")
+	errComponentStartFail   = errors.New("attractor: component container start failed")
+	errUnknownDependency    = errors.New("attractor: component depends on unknown component")
 
 	_ ContainerManager = (*container.Manager)(nil)
 )
@@ -128,27 +136,29 @@ type Attractor struct {
 
 // RunOptions configures the attractor loop.
 type RunOptions struct {
-	Model             string
-	FrugalModel       string               // optional cheaper model to start with; escalates to Model after consecutive failures
-	JudgeModel        string               // model used for the wonder phase diagnosis; falls back to Model when empty
-	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
-	BudgetUSD         float64              // 0 = unlimited
-	Threshold         float64              // default 95
-	MaxIterations     int                  // default 10
-	StallLimit        int                  // default 3
-	WorkspaceDir      string               // default "./workspace"
-	HealthTimeout     time.Duration        // default 30s
-	Progress          ProgressFunc         // optional per-iteration callback
-	PatchMode         bool                 // if true, iteration 2+ sends prev best files + failures
-	BlockOnRegression bool                 // if true, convergence is blocked when per-scenario regressions are detected
-	ContextBudget     int                  // max estimated tokens for spec in system prompt; 0 = unlimited
-	Capabilities      ScenarioCapabilities // detected from loaded scenarios
-	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
-	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
-	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
-	MaxTokens         int                  // max output tokens for generation; 0 = auto-scale per model
-	Agentic           bool                 // if true, use AgentLoop for code generation (tool-use mode)
-	AgentMaxTurns     int                  // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
+	Model               string
+	FrugalModel         string                // optional cheaper model to start with; escalates to Model after consecutive failures
+	JudgeModel          string                // model used for the wonder phase diagnosis; falls back to Model when empty
+	Language            string                // language hint: "go", "python", "node", "rust", or "" (auto)
+	BudgetUSD           float64               // 0 = unlimited
+	Threshold           float64               // default 95
+	MaxIterations       int                   // default 10
+	StallLimit          int                   // default 3
+	WorkspaceDir        string                // default "./workspace"
+	HealthTimeout       time.Duration         // default 30s
+	Progress            ProgressFunc          // optional per-iteration callback
+	PatchMode           bool                  // if true, iteration 2+ sends prev best files + failures
+	BlockOnRegression   bool                  // if true, convergence is blocked when per-scenario regressions are detected
+	ContextBudget       int                   // max estimated tokens for spec in system prompt; 0 = unlimited
+	Capabilities        ScenarioCapabilities  // detected from loaded scenarios
+	Genes               string                // extracted pattern guide to inject into system prompt (empty = no genes)
+	GeneLanguage        string                // source language of the gene exemplar (for cross-language note)
+	TestCommand         string                // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
+	MaxTokens           int                   // max output tokens for generation; 0 = auto-scale per model
+	Agentic             bool                  // if true, use AgentLoop for code generation (tool-use mode)
+	AgentMaxTurns       int                   // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
+	GeneComponents      []gene.Component      // structured component decomposition from gene extraction
+	ComponentValidators map[string]ValidateFn // per-component validators; "" key = integration validator
 }
 
 // RunResult holds the outcome of an attractor run.
@@ -281,13 +291,8 @@ func New(client llm.Client, containerMgr ContainerManager, logger *slog.Logger, 
 // grpcTargetProvider is an optional callback called before validation to set the gRPC target.
 // Returns a RunResult for normal termination, or an error for unrecoverable failures.
 func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, validate ValidateFn, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn) (*RunResult, error) {
-	if strings.TrimSpace(rawSpec) == "" {
-		return nil, errEmptySpec
-	}
-	if opts.Language != "" {
-		if _, ok := LookupLanguage(opts.Language); !ok {
-			return nil, fmt.Errorf("%w: %q (supported: %v)", errUnsupportedLanguage, opts.Language, SupportedLanguages())
-		}
+	if err := validateRunInputs(rawSpec, opts); err != nil {
+		return nil, err
 	}
 
 	if sessionProvider == nil {
@@ -298,6 +303,18 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 	}
 
 	opts = withDefaults(opts)
+
+	// Try composed convergence when gene components and component validators are available.
+	// composedCost carries costs from the composed attempt even on fallback, so the
+	// monolithic loop starts with an accurate budget accounting.
+	composedResult, composedCost, err := a.tryComposed(ctx, rawSpec, opts, sessionProvider, grpcTargetProvider)
+	if err != nil {
+		return nil, err
+	}
+	if composedResult != nil {
+		return composedResult, nil
+	}
+
 	s := &runState{
 		runID:              generateRunID(),
 		opts:               opts,
@@ -306,6 +323,7 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 		sessionProvider:    sessionProvider,
 		grpcTargetProvider: grpcTargetProvider,
 		escalation:         newEscalationState(opts.FrugalModel, opts.Model, a.logger),
+		totalCost:          composedCost,
 	}
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
@@ -383,6 +401,396 @@ func (a *Attractor) setRunSpanAttrs(span trace.Span, result *RunResult) {
 		attribute.Float64("satisfaction", result.Satisfaction),
 		attribute.Float64("cost_usd", result.CostUSD),
 	)
+}
+
+// validateRunInputs validates inputs to Run before the loop starts.
+func validateRunInputs(rawSpec string, opts RunOptions) error {
+	if strings.TrimSpace(rawSpec) == "" {
+		return errEmptySpec
+	}
+	if opts.Language != "" {
+		if _, ok := LookupLanguage(opts.Language); !ok {
+			return fmt.Errorf("%w: %q (supported: %v)", errUnsupportedLanguage, opts.Language, SupportedLanguages())
+		}
+	}
+	return nil
+}
+
+// tryComposed attempts composed convergence if gene components and validators are available.
+// Returns (nil, 0, nil) to fall through to the monolithic loop.
+// The returned cost reflects LLM and validation spend during the composed attempt,
+// even when falling back, so callers can seed the monolithic budget correctly.
+func (a *Attractor) tryComposed(ctx context.Context, rawSpec string, opts RunOptions, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn) (*RunResult, float64, error) {
+	if len(opts.GeneComponents) == 0 || len(opts.ComponentValidators) == 0 {
+		return nil, 0, nil
+	}
+	if opts.Agentic {
+		a.logger.Warn("composed convergence skipped: not supported in agentic mode, falling back to monolithic")
+		return nil, 0, nil
+	}
+	result, cost, err := a.runComposed(ctx, rawSpec, opts, sessionProvider, grpcTargetProvider)
+	if err != nil && !errors.Is(err, errComponentFallback) {
+		return nil, cost, err
+	}
+	if result != nil {
+		return result, cost, nil
+	}
+	a.logger.Info("composed convergence failed, falling back to monolithic loop")
+	return nil, cost, nil
+}
+
+// Component mini-loop tuning constants.
+const (
+	// componentMiniLoopMaxIter is the maximum iterations for a per-component convergence mini-loop.
+	componentMiniLoopMaxIter = 5
+	// componentMiniLoopStallLimit is the stall limit for per-component mini-loops.
+	componentMiniLoopStallLimit = 2
+)
+
+// runComposed attempts composed convergence: converge each component independently
+// in topological order, then validate the composed result with integration scenarios.
+// Returns the accumulated cost even on fallback so callers can track total spend.
+func (a *Attractor) runComposed(ctx context.Context, rawSpec string, opts RunOptions, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn) (*RunResult, float64, error) {
+	sorted, err := topoSort(opts.GeneComponents)
+	if err != nil {
+		return nil, 0, fmt.Errorf("attractor: composed convergence: %w", err)
+	}
+
+	s := &runState{
+		runID:              generateRunID(),
+		opts:               opts,
+		startTime:          time.Now(),
+		sessionProvider:    sessionProvider,
+		grpcTargetProvider: grpcTargetProvider,
+	}
+	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
+	s.bestDir = filepath.Join(s.baseDir, "best")
+
+	ctx, composedSpan := a.tracer.Start(ctx, "attractor.composed.run", trace.WithAttributes(
+		attribute.String("run_id", s.runID),
+		attribute.Int("components", len(sorted)),
+	))
+	defer composedSpan.End()
+
+	componentFiles := make(map[string]map[string]string, len(sorted))
+	depInterfaces := make(map[string]string, len(sorted))
+
+	for _, comp := range sorted {
+		if s.budgetExceeded() {
+			composedSpan.SetStatus(codes.Error, "budget exceeded")
+			return nil, s.totalCost, errComponentFallback
+		}
+
+		compFiles, compErr := a.convergeComponent(ctx, rawSpec, comp, depInterfaces, componentFiles, s)
+		if compErr != nil {
+			a.logger.Warn("component convergence failed, falling back to monolithic",
+				"component", comp.Name, "error", compErr)
+			composedSpan.RecordError(compErr)
+			composedSpan.SetStatus(codes.Error, compErr.Error())
+			return nil, s.totalCost, errComponentFallback
+		}
+		componentFiles[comp.Name] = compFiles
+		depInterfaces[comp.Name] = comp.Interface
+	}
+
+	// Merge all component files into composed output (later topo order wins on overlap).
+	composedFiles := mergeComponentFiles(sorted, componentFiles, a.logger)
+
+	result, err := a.validateComposed(ctx, composedFiles, s)
+	if err != nil {
+		composedSpan.RecordError(err)
+		if !errors.Is(err, errComponentFallback) {
+			composedSpan.SetStatus(codes.Error, err.Error())
+		}
+		return nil, s.totalCost, err
+	}
+	composedSpan.SetAttributes(attribute.Float64("cost_usd", s.totalCost))
+	return result, s.totalCost, nil
+}
+
+// mergeComponentFiles merges files from all components in topo order. Later components
+// win on file path conflicts. Overlaps are logged.
+func mergeComponentFiles(sorted []gene.Component, componentFiles map[string]map[string]string, logger *slog.Logger) map[string]string {
+	composed := make(map[string]string)
+	for _, comp := range sorted {
+		for path, content := range componentFiles[comp.Name] {
+			if _, exists := composed[path]; exists {
+				logger.Debug("file overlap in composed merge, later component wins",
+					"path", path, "component", comp.Name)
+			}
+			composed[path] = content
+		}
+	}
+	return composed
+}
+
+// validateComposed writes composed files, builds, runs, and validates with integration scenarios.
+func (a *Attractor) validateComposed(ctx context.Context, composedFiles map[string]string, s *runState) (*RunResult, error) {
+	ctx, span := a.tracer.Start(ctx, "attractor.composed.validate", trace.WithAttributes(
+		attribute.String("run_id", s.runID),
+	))
+	defer span.End()
+
+	integrationDir := filepath.Join(s.baseDir, "composed")
+	if err := writeFiles(integrationDir, composedFiles); err != nil {
+		return nil, fmt.Errorf("attractor: write composed files: %w", err)
+	}
+
+	integrationValidate := s.opts.ComponentValidators[""]
+	if integrationValidate == nil {
+		// No integration scenarios: composed result is accepted.
+		s.bestSatisfaction = 100
+		s.bestFiles = maps.Clone(composedFiles)
+		if err := writeFiles(s.bestDir, composedFiles); err != nil {
+			return nil, fmt.Errorf("attractor: write best composed: %w", err)
+		}
+		span.SetAttributes(attribute.String("outcome", "accepted_no_integration"))
+		return s.result(0, StatusConverged), nil
+	}
+
+	tag := fmt.Sprintf("og-%s-composed", s.runID)
+	if err := a.containerMgr.Build(ctx, integrationDir, tag); err != nil {
+		a.logger.Warn("composed build failed", "error", err)
+		return nil, errComponentFallback
+	}
+
+	caps := s.opts.Capabilities
+
+	if caps.NeedsExec {
+		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
+		if err != nil {
+			return nil, errComponentFallback
+		}
+		defer stopSession()
+		s.sessionProvider(session)
+		defer s.sessionProvider(nil)
+	}
+
+	url, stop, err := a.startComposedContainer(ctx, tag, caps, s)
+	if err != nil {
+		return nil, err
+	}
+	if stop != nil {
+		defer stop()
+	}
+
+	satisfaction, failures, valCost, err := integrationValidate(ctx, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("attractor: integration validate: %w", err)
+	}
+	s.totalCost += valCost
+
+	span.SetAttributes(
+		attribute.Float64("satisfaction", satisfaction),
+		attribute.Float64("cost_usd", valCost),
+	)
+
+	if satisfaction >= s.opts.Threshold {
+		s.bestSatisfaction = satisfaction
+		s.bestFiles = maps.Clone(composedFiles)
+		if wErr := writeFiles(s.bestDir, composedFiles); wErr != nil {
+			return nil, fmt.Errorf("attractor: write best composed: %w", wErr)
+		}
+		return s.result(0, StatusConverged), nil
+	}
+
+	a.logger.Info("integration validation failed", "satisfaction", satisfaction, "failures_count", len(failures))
+	span.SetStatus(codes.Error, "integration validation failed")
+	return nil, errComponentFallback
+}
+
+// startComposedContainer starts the appropriate container type for integration validation.
+func (a *Attractor) startComposedContainer(ctx context.Context, tag string, caps ScenarioCapabilities, s *runState) (url string, stop func(), err error) {
+	switch {
+	case caps.NeedsGRPC:
+		res, gErr := a.startGRPCContainer(ctx, 0, tag, caps, s)
+		if gErr != nil {
+			return "", nil, errComponentFallback
+		}
+		if res.stop == nil {
+			return "", nil, errComponentFallback
+		}
+		s.grpcTargetProvider(res.grpcTarget)
+		return res.url, func() { res.stop(); s.grpcTargetProvider("") }, nil
+	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
+		res, hErr := a.startHTTPContainer(ctx, 0, tag, s.opts.HealthTimeout, s)
+		if hErr != nil {
+			return "", nil, errComponentFallback
+		}
+		if res.stop == nil {
+			return "", nil, errComponentFallback
+		}
+		return res.url, res.stop, nil
+	default:
+		return "", nil, nil
+	}
+}
+
+// componentLoopState holds local mutable state for a component mini-loop.
+// Isolated from the shared runState to prevent corruption (only totalCost is shared).
+type componentLoopState struct {
+	history    []iterationFeedback
+	stallCount int
+	bestScore  float64
+	bestFiles  map[string]string
+}
+
+// convergeComponent runs a mini convergence loop for a single component.
+// Uses local state for history/stallCount/etc. Only totalCost accumulates into s.
+func (a *Attractor) convergeComponent(ctx context.Context, rawSpec string, comp gene.Component, depInterfaces map[string]string, componentFiles map[string]map[string]string, s *runState) (map[string]string, error) {
+	ctx, span := a.tracer.Start(ctx, "attractor.composed.component", trace.WithAttributes(
+		attribute.String("component", comp.Name),
+		attribute.String("run_id", s.runID),
+	))
+	defer span.End()
+
+	validate := s.opts.ComponentValidators[comp.Name]
+	baseFiles := buildDepFileSet(comp, componentFiles)
+	cs := &componentLoopState{}
+
+	a.logger.Info("converging component", "component", comp.Name, "max_iterations", componentMiniLoopMaxIter)
+
+	for iter := 1; iter <= componentMiniLoopMaxIter; iter++ {
+		if s.budgetExceeded() {
+			return nil, fmt.Errorf("%w: component %q", errComponentBudget, comp.Name)
+		}
+		files, err := a.componentIteration(ctx, rawSpec, comp, depInterfaces, baseFiles, validate, iter, cs, s)
+		if err != nil {
+			return nil, err
+		}
+		if files != nil {
+			return files, nil
+		}
+		if cs.stallCount >= componentMiniLoopStallLimit {
+			return nil, fmt.Errorf("%w: component %q", errComponentStalled, comp.Name)
+		}
+	}
+
+	if cs.bestFiles != nil {
+		a.logger.Info("component exhausted iterations, using best", "component", comp.Name, "best_score", cs.bestScore)
+		return cs.bestFiles, nil
+	}
+	return nil, fmt.Errorf("%w: component %q", errComponentStalled, comp.Name)
+}
+
+// componentIteration runs one iteration of the component mini-loop.
+// Returns (files, nil) on convergence, (nil, nil) to continue, or (nil, err) on hard error.
+func (a *Attractor) componentIteration(ctx context.Context, rawSpec string, comp gene.Component, depInterfaces map[string]string, baseFiles map[string]string, validate ValidateFn, iter int, cs *componentLoopState, s *runState) (map[string]string, error) {
+	systemPrompt := buildComponentPrompt(rawSpec, comp, depInterfaces, s.opts.Capabilities, s.opts.Language)
+	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
+		SystemPrompt: systemPrompt,
+		Messages:     buildMessages(iter, cs.history),
+		MaxTokens:    s.opts.MaxTokens,
+		Model:        s.opts.Model,
+		CacheControl: &llm.CacheControl{Type: "ephemeral"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("attractor: generate component %q iteration %d: %w", comp.Name, iter, err)
+	}
+	s.totalCost += genResp.CostUSD
+
+	files, parseErr := ParseFiles(genResp.Content)
+	if parseErr != nil {
+		cs.stallCount++
+		cs.history = append(cs.history, iterationFeedback{
+			iteration: iter, kind: feedbackParseError,
+			message: fmt.Sprintf("Failed to parse generated files: %s", parseErr),
+		})
+		return nil, nil
+	}
+
+	buildContext := MergeFiles(files, baseFiles)
+	iterDir := filepath.Join(s.baseDir, fmt.Sprintf("comp_%s_iter_%d", comp.Name, iter))
+	if err := writeFiles(iterDir, buildContext); err != nil {
+		return nil, fmt.Errorf("attractor: write component %q files: %w", comp.Name, err)
+	}
+
+	if validate == nil {
+		a.logger.Info("component converged (no validator)", "component", comp.Name, "iteration", iter)
+		return files, nil
+	}
+
+	return a.evaluateComponent(ctx, iterDir, comp.Name, iter, files, validate, cs, s)
+}
+
+// evaluateComponent builds, validates, and records results for one component iteration.
+func (a *Attractor) evaluateComponent(ctx context.Context, iterDir, compName string, iter int, files map[string]string, validate ValidateFn, cs *componentLoopState, s *runState) (map[string]string, error) {
+	satisfaction, failures, err := a.buildAndValidateComponent(ctx, iterDir, compName, iter, validate, s)
+	if err != nil {
+		cs.stallCount++
+		cs.history = append(cs.history, iterationFeedback{
+			iteration: iter, kind: feedbackBuildError, message: err.Error(),
+		})
+		return nil, nil
+	}
+
+	if satisfaction >= s.opts.Threshold {
+		a.logger.Info("component converged", "component", compName, "iteration", iter, "satisfaction", satisfaction)
+		return files, nil
+	}
+
+	if satisfaction > cs.bestScore {
+		cs.bestScore = satisfaction
+		cs.bestFiles = maps.Clone(files)
+		cs.stallCount = 0
+	} else {
+		cs.stallCount++
+	}
+
+	fidelity := determineFidelity(iter, cs.stallCount)
+	cs.history = append(cs.history, iterationFeedback{
+		iteration:       iter,
+		kind:            feedbackValidation,
+		message:         formatValidationFeedback(satisfaction, failures, fidelity),
+		fidelity:        fidelity,
+		failedScenarios: parseFailedScenarios(failures),
+	})
+	return nil, nil
+}
+
+// buildDepFileSet merges files from all converged dependencies into a base file set.
+func buildDepFileSet(comp gene.Component, componentFiles map[string]map[string]string) map[string]string {
+	base := make(map[string]string)
+	for _, dep := range comp.DependsOn {
+		if depFiles, ok := componentFiles[dep]; ok {
+			maps.Copy(base, depFiles)
+		}
+	}
+	return base
+}
+
+// buildAndValidateComponent builds a container and runs validation for a component.
+// Returns satisfaction, failures, and error (error for build/run/health failures).
+func (a *Attractor) buildAndValidateComponent(ctx context.Context, iterDir, compName string, iter int, validate ValidateFn, s *runState) (float64, []string, error) {
+	tag := fmt.Sprintf("og-%s-comp-%s-%d", s.runID, compName, iter)
+	if err := a.containerMgr.Build(ctx, iterDir, tag); err != nil {
+		return 0, nil, fmt.Errorf("%w: %w", errComponentBuildFail, err)
+	}
+
+	if s.opts.Capabilities.NeedsExec {
+		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%w: %w", errComponentSessionFail, err)
+		}
+		defer stopSession()
+		s.sessionProvider(session)
+		defer s.sessionProvider(nil)
+	}
+
+	url, stop, err := a.startComposedContainer(ctx, tag, s.opts.Capabilities, s)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: %w", errComponentStartFail, err)
+	}
+	if stop != nil {
+		defer stop()
+	}
+
+	satisfaction, failures, valCost, valErr := validate(ctx, url, nil)
+	if valErr != nil {
+		return 0, nil, fmt.Errorf("attractor: validate component %q: %w", compName, valErr)
+	}
+	s.totalCost += valCost
+	return satisfaction, failures, nil
 }
 
 // generateContent produces the LLM output for one iteration.

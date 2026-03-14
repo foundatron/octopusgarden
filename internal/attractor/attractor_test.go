@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/foundatron/octopusgarden/internal/container"
+	"github.com/foundatron/octopusgarden/internal/gene"
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
 
@@ -2658,5 +2659,217 @@ func TestTruncationWithParsableOutput(t *testing.T) {
 	}
 	if result.Status != StatusConverged {
 		t.Errorf("expected status %q, got %q (truncated but parsable output should proceed)", StatusConverged, result.Status)
+	}
+}
+
+func TestComposedConvergence_BothComponentsConverge(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	componentValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+	integrationValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.GeneComponents = []gene.Component{
+		{Name: "models", Interface: "Data model types"},
+		{Name: "routes", Interface: "HTTP handlers", DependsOn: []string{"models"}},
+	}
+	opts.ComponentValidators = map[string]ValidateFn{
+		"models": componentValidate,
+		"routes": componentValidate,
+		"":       integrationValidate,
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, componentValidate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+}
+
+func TestComposedConvergence_FallbackToMonolithic(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			// Component prompts contain "COMPONENT CONTRACT"; monolithic prompts do not.
+			if strings.Contains(req.SystemPrompt, "COMPONENT CONTRACT") {
+				return llm.GenerateResponse{Content: "no files here", CostUSD: 0.01}, nil
+			}
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	monolithicValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.GeneComponents = []gene.Component{
+		{Name: "models", Interface: "Data model types"},
+	}
+	opts.ComponentValidators = map[string]ValidateFn{
+		"models": monolithicValidate,
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, monolithicValidate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q (should fall back to monolithic)", StatusConverged, result.Status)
+	}
+}
+
+func TestComposedConvergence_NoComponents(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	// No GeneComponents set — should behave exactly like the monolithic path.
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", defaultOpts(t), validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+}
+
+func TestComposedConvergence_FileMergeOverlap(t *testing.T) {
+	sorted := []gene.Component{
+		{Name: "A"},
+		{Name: "B"},
+	}
+	componentFiles := map[string]map[string]string{
+		"A": {"shared.go": "package a", "a.go": "package a"},
+		"B": {"shared.go": "package b", "b.go": "package b"},
+	}
+	merged := mergeComponentFiles(sorted, componentFiles, testLogger())
+	// Later topo order (B) wins on overlap.
+	if merged["shared.go"] != "package b" {
+		t.Errorf("expected later component to win overlap, got %q", merged["shared.go"])
+	}
+	if merged["a.go"] != "package a" {
+		t.Error("non-overlapping file from A should be preserved")
+	}
+	if merged["b.go"] != "package b" {
+		t.Error("non-overlapping file from B should be preserved")
+	}
+}
+
+func TestComposedConvergence_BudgetExhausted(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.50}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 50, []string{"not done"}, 0.01, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.BudgetUSD = 0.10
+	opts.GeneComponents = []gene.Component{
+		{Name: "models", Interface: "types"},
+	}
+	opts.ComponentValidators = map[string]ValidateFn{
+		"models": validate,
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	// Budget exceeded during component iteration should fall back to monolithic,
+	// then monolithic should also detect budget exceeded.
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusBudgetExceeded {
+		t.Errorf("expected status %q, got %q", StatusBudgetExceeded, result.Status)
+	}
+}
+
+func TestComposedConvergence_AgenticSkip(t *testing.T) {
+	// Use mockAgentClient so that Agentic = true works in the monolithic fallback.
+	// This exercises the real skip path: tryComposed returns (nil, 0, nil) when
+	// opts.Agentic is true, then the monolithic agentic loop converges.
+	client := &mockAgentClient{
+		agentLoopFn: func(ctx context.Context, _ llm.AgentRequest, handler llm.ToolHandler) (llm.AgentResponse, error) {
+			if err := agentWritesFiles(ctx, handler); err != nil {
+				return llm.AgentResponse{}, err
+			}
+			return llm.AgentResponse{Turns: 1, TotalCost: 0.01}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := agenticOpts(t)
+	opts.GeneComponents = []gene.Component{
+		{Name: "models", Interface: "types"},
+	}
+	opts.ComponentValidators = map[string]ValidateFn{
+		"models": validate,
+	}
+
+	// Agentic + components: composed is skipped (tryComposed returns nil,0,nil),
+	// monolithic agentic loop runs and converges.
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+	}
+}
+
+func TestComposedConvergence_IntegrationFail(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	componentValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+	integrationValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 40, []string{"integration broken"}, 0.005, nil
+	}
+	monolithicValidate := func(_ context.Context, _ string, _ RestartFunc) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.GeneComponents = []gene.Component{
+		{Name: "models", Interface: "types"},
+	}
+	opts.ComponentValidators = map[string]ValidateFn{
+		"models": componentValidate,
+		"":       integrationValidate,
+	}
+
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	// Integration fails -> fallback to monolithic -> converges.
+	result, err := a.Run(context.Background(), "Build an app", opts, monolithicValidate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
 	}
 }

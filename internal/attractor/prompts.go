@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/foundatron/octopusgarden/internal/gene"
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
 
@@ -337,6 +338,42 @@ message Item { string id = 1; string name = 2; }
 === END FILE ===
 `)
 	fmt.Fprintf(&b, "=== FILE: Dockerfile ===\nFROM %s\n%s\nWORKDIR /app\nCOPY . .\nRUN <compile .proto files to generate stubs>\nRUN <install dependencies and build the application>\nCMD [\"./server\"]\n=== END FILE ===\n", tmpl.BaseImage, tmpl.GRPCSetup)
+	return b.String()
+}
+
+// buildComponentPrompt creates the system prompt for component-scoped generation.
+// The spec is placed first (with cache_control: ephemeral on the system message) so that
+// the shared prefix is cacheable across components. Component-specific content follows.
+func buildComponentPrompt(spec string, component gene.Component, depInterfaces map[string]string, caps ScenarioCapabilities, language string) string {
+	var b strings.Builder
+	b.WriteString(systemPromptPrefix)
+	b.WriteString(spec)
+
+	b.WriteString("\n\nCOMPONENT CONTRACT:\n")
+	b.WriteString(component.Interface)
+
+	if component.Patterns != "" {
+		b.WriteString("\n\nCOMPONENT PATTERNS:\n")
+		b.WriteString(component.Patterns)
+	}
+
+	// Only include interfaces for declared dependencies, not all accumulated interfaces.
+	if len(component.DependsOn) > 0 && len(depInterfaces) > 0 {
+		var depSection strings.Builder
+		depNames := slices.Sorted(slices.Values(component.DependsOn))
+		for _, name := range depNames {
+			if iface, ok := depInterfaces[name]; ok {
+				fmt.Fprintf(&depSection, "\n--- %s ---\n%s\n", name, iface)
+			}
+		}
+		if depSection.Len() > 0 {
+			b.WriteString("\n\nDEPENDENCY INTERFACES:\n")
+			b.WriteString(depSection.String())
+		}
+	}
+
+	b.WriteString(buildCapabilitySuffix(caps, language))
+	b.WriteString(buildDepRules(language))
 	return b.String()
 }
 

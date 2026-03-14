@@ -42,15 +42,16 @@ octopusgarden/
 │   │   ├── jsonpath.go           # Dot-notation JSONPath evaluator ($.field.sub)
 │   │   └── grpc.go              # gRPC step executor (reflection-based, streaming)
 │   ├── attractor/                # Convergence loop
-│   │   ├── attractor.go          # Core loop, types, options
+│   │   ├── attractor.go          # Core loop, types, options, composed convergence
 │   │   ├── convergence.go        # Trend detection
 │   │   ├── diagnosis.go          # Wonder/reflect two-phase stall recovery
 │   │   ├── escalation.go         # Model tier escalation (frugal ↔ primary)
 │   │   ├── fileparse.go          # Parse LLM output into files, merge for patch mode
 │   │   ├── languages.go          # Per-language templates (Go, Python, Node, Rust)
 │   │   ├── oscillation.go        # A→B→A→B oscillation detection (SHA-256 hashing)
-│   │   ├── prompts.go            # System prompt, feedback fidelity, steering text
+│   │   ├── prompts.go            # System prompt, feedback fidelity, steering text, component prompts
 │   │   ├── regression.go         # Per-scenario regression tracking
+│   │   ├── toposort.go           # Kahn's algorithm topological sort for component dependency graph
 │   │   └── triage.go             # LLM-based file triage: filter bestFiles to failure-relevant subset
 │   ├── container/docker.go       # Build and run Docker containers
 │   ├── llm/                      # LLM client abstraction
@@ -115,7 +116,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 
 | Package | Purpose | Key Files | Dependencies |
 | ------- | ------- | --------- | ------------ |
-| `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go`, `triage.go` | `llm`, `spec`, `container` |
+| `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go`, `triage.go`, `toposort.go` | `llm`, `spec`, `container`, `gene` |
 | `container` | Docker image build, container run, health check, exec sessions | `docker.go` | docker SDK |
 | `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go` | `llm` |
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
@@ -186,8 +187,22 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 
 - **Status**: Implemented
 - **Files**: `gene/scan.go`, `gene/analyze.go`, `gene/gene.go`, `attractor/prompts.go`
-- **Method**: Scan exemplar codebase for high-signal files within 20K token budget. LLM extracts structured pattern guide including optional named `Component` entries (interface, patterns, dependency graph). `parseComponents` scans the guide for `**COMPONENT: <name>**` headers; `validateComponents` enforces non-empty unique names, declared dependencies exist, and no cycles (DFS). Guide and components stored in `Gene` JSON. Injected into system prompt.
-- **Limitations**: Single exemplar only. No multi-repo synthesis. No incremental update as generated code evolves. Patterns are extracted once, not refined based on generation outcomes. Component graph is validated but not yet used to order generation or scope prompts.
+- **Method**: Scan exemplar codebase for high-signal files within 20K token budget. LLM extracts structured pattern guide including optional named `Component` entries (interface, patterns, dependency graph). `parseComponents` scans the guide for `**COMPONENT: <name>**` headers; `validateComponents` enforces non-empty unique names, declared dependencies exist, and no cycles (DFS). Guide and components stored in `Gene` JSON. Injected into system prompt. When components are present, `cmd/octog` also constructs per-component `ValidateFn` closures (grouped by `Scenario.Component`) and passes them to the attractor via `RunOptions.ComponentValidators` — enabling composed convergence (see below).
+- **Limitations**: Single exemplar only. No multi-repo synthesis. No incremental update as generated code evolves. Patterns are extracted once, not refined based on generation outcomes.
+
+### Composed Convergence
+
+- **Status**: Implemented
+- **Files**: `attractor/attractor.go`, `attractor/toposort.go`, `attractor/prompts.go`
+- **Method**: When `RunOptions.GeneComponents` and `RunOptions.ComponentValidators` are both set (and `Agentic` is false), the attractor attempts composed convergence before falling back to the monolithic loop. Steps:
+  1. **Topological sort** (`topoSort`): order components dependency-first using Kahn's BFS algorithm. Returns error on cycles or unknown dependencies.
+  2. **Per-component mini-loops**: for each component in topo order, run up to `componentMiniLoopMaxIter` (5) iterations. Each iteration generates files scoped to the component using `buildComponentPrompt` (spec + `COMPONENT CONTRACT` + `COMPONENT PATTERNS` + `DEPENDENCY INTERFACES` for declared deps only). Only the component's own `ValidateFn` scores it. Files from converged dependencies are included as a base file set.
+  3. **File merge**: after all components converge, `mergeComponentFiles` merges all component file sets in topo order (later components win on path conflicts).
+  4. **Integration validation**: the merged files are built and validated with the `""` key validator (scenarios with empty `Component` field). If integration satisfaction >= threshold, the run converges. Otherwise, falls back to the monolithic loop.
+  5. **Fallback**: any component stall, build failure, or integration failure triggers a fallback to the standard monolithic loop. Costs accumulated during the composed attempt are carried forward so budget accounting remains accurate.
+- **Prompt structure**: `buildComponentPrompt` places the spec first (cacheable prefix) followed by component-specific content — `COMPONENT CONTRACT`, optional `COMPONENT PATTERNS`, and `DEPENDENCY INTERFACES` filtered to declared dependencies only (alphabetical order).
+- **Scenario grouping**: `buildComponentValidators` groups scenarios by `Scenario.Component` in a single pass. The `""` key collects integration scenarios (empty `Component`).
+- **Limitations**: Not supported in agentic mode. No partial-merge retry (integration failure falls back entirely to monolithic). Component mini-loop stall limit (2) and max iterations (5) are compile-time constants. No cost-aware per-component budget allocation. File-level conflicts resolved by topo order, not semantic merging.
 
 ### Regression Tracking
 
@@ -359,8 +374,9 @@ type StepOutput struct {
 type Scenario struct {
 	ID                   string   `yaml:"id"`
 	Description          string   `yaml:"description"`
-	Type                 string   `yaml:"type"`   // "api" only for MVP
-	Weight               *float64 `yaml:"weight"` // nil means not set, defaults to 1.0
+	Type                 string   `yaml:"type"`      // "api" only for MVP
+	Weight               *float64 `yaml:"weight"`    // nil means not set, defaults to 1.0
+	Component            string   `yaml:"component"` // component name for composed convergence; empty = integration scenario
 	Setup                []Step   `yaml:"setup"`
 	Steps                []Step   `yaml:"steps"`
 	SatisfactionCriteria string   `yaml:"satisfaction_criteria"`
@@ -671,27 +687,29 @@ type ValidateFn func(ctx context.Context, url string, restart RestartFunc) (sati
 ```go
 // RunOptions configures the attractor loop.
 type RunOptions struct {
-	Model             string
-	FrugalModel       string               // optional cheaper model to start with; escalates to Model after consecutive failures
-	JudgeModel        string               // model used for the wonder phase diagnosis; falls back to Model when empty
-	Language          string               // language hint: "go", "python", "node", "rust", or "" (auto)
-	BudgetUSD         float64              // 0 = unlimited
-	Threshold         float64              // default 95
-	MaxIterations     int                  // default 10
-	StallLimit        int                  // default 3
-	WorkspaceDir      string               // default "./workspace"
-	HealthTimeout     time.Duration        // default 30s
-	Progress          ProgressFunc         // optional per-iteration callback
-	PatchMode         bool                 // if true, iteration 2+ sends prev best files + failures
-	BlockOnRegression bool                 // if true, convergence is blocked when per-scenario regressions are detected
-	ContextBudget     int                  // max estimated tokens for spec in system prompt; 0 = unlimited
-	Capabilities      ScenarioCapabilities // detected from loaded scenarios
-	Genes             string               // extracted pattern guide to inject into system prompt (empty = no genes)
-	GeneLanguage      string               // source language of the gene exemplar (for cross-language note)
-	TestCommand       string               // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
-	MaxTokens         int                  // max output tokens for generation; 0 = auto-scale per model
-	Agentic           bool                 // if true, use AgentLoop for code generation (tool-use mode)
-	AgentMaxTurns     int                  // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
+	Model               string
+	FrugalModel         string                // optional cheaper model to start with; escalates to Model after consecutive failures
+	JudgeModel          string                // model used for the wonder phase diagnosis; falls back to Model when empty
+	Language            string                // language hint: "go", "python", "node", "rust", or "" (auto)
+	BudgetUSD           float64               // 0 = unlimited
+	Threshold           float64               // default 95
+	MaxIterations       int                   // default 10
+	StallLimit          int                   // default 3
+	WorkspaceDir        string                // default "./workspace"
+	HealthTimeout       time.Duration         // default 30s
+	Progress            ProgressFunc          // optional per-iteration callback
+	PatchMode           bool                  // if true, iteration 2+ sends prev best files + failures
+	BlockOnRegression   bool                  // if true, convergence is blocked when per-scenario regressions are detected
+	ContextBudget       int                   // max estimated tokens for spec in system prompt; 0 = unlimited
+	Capabilities        ScenarioCapabilities  // detected from loaded scenarios
+	Genes               string                // extracted pattern guide to inject into system prompt (empty = no genes)
+	GeneLanguage        string                // source language of the gene exemplar (for cross-language note)
+	TestCommand         string                // optional shell command run inside HTTP container after health check; non-zero exit = test_fail
+	MaxTokens           int                   // max output tokens for generation; 0 = auto-scale per model
+	Agentic             bool                  // if true, use AgentLoop for code generation (tool-use mode)
+	AgentMaxTurns       int                   // max turns per AgentLoop call; 0 = default (50 when Agentic is true)
+	GeneComponents      []gene.Component      // structured component decomposition from gene extraction
+	ComponentValidators map[string]ValidateFn // per-component validators; "" key = integration validator
 }
 ```
 
@@ -712,9 +730,19 @@ type RunResult struct {
 
 ```text
 0. Preflight: run spec clarity check (unless --skip-preflight); abort if below threshold
-1. If FrugalModel is set, init escalation state (start at frugal tier)
-2. If ContextBudget > 0 and spec exceeds budget, summarize spec (pyramid summaries)
-3. For iter = 1 to MaxIterations:
+1. If GeneComponents + ComponentValidators are set (and not Agentic): attempt composed convergence
+   a. topoSort components (Kahn's BFS); error on cycles/unknown deps
+   b. For each component in topo order: run mini-loop (max 5 iters, stall limit 2)
+      - buildComponentPrompt: spec + COMPONENT CONTRACT + DEPENDENCY INTERFACES (declared only)
+      - validate with per-component ValidateFn; carry dep files as base file set
+      - stall/build fail → fall back to monolithic; budget exceeded → fall back
+   c. mergeComponentFiles: merge all component file sets (later topo order wins conflicts)
+   d. Build composed dir; validate with integration ValidateFn ("" key)
+   e. satisfaction >= threshold → return "converged"; else fall back to monolithic
+   f. Costs from composed attempt carried forward into monolithic budget accounting
+2. If FrugalModel is set, init escalation state (start at frugal tier)
+3. If ContextBudget > 0 and spec exceeds budget, summarize spec (pyramid summaries)
+4. For iter = 1 to MaxIterations:
    a. Check budget
    b. Check escalation: upgrade frugal→primary after 2 non-improving, downgrade after 5 improving
    c. Select spec content (full or summarized with failure-relevant sections expanded)
@@ -740,7 +768,7 @@ type RunResult struct {
    q. Determine feedback fidelity: compact (iter 1-2) → standard (3-4) → full (5+)
    r. Track improvement/stalls; patch mode: disable after 2 consecutive regressions
    s. If stall count >= stall limit → return "stalled"
-4. Return "max_iterations"
+5. Return "max_iterations"
 ```
 
 ### Progress Reporting
