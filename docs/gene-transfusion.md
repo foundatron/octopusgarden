@@ -15,6 +15,9 @@ octog extract --source-dir examples/exemplars/go-rest --output genes.json
 # Bundled Python REST exemplar — good starting point for Python HTTP services
 octog extract --source-dir examples/exemplars/python-rest --output genes.json
 
+# Bundled Rust REST exemplar — good starting point for Rust/Axum HTTP services
+octog extract --source-dir examples/exemplars/rust-rest --output genes.json
+
 # 2. Run the factory with extracted genes
 octog run \
   --spec spec.md \
@@ -291,7 +294,8 @@ assets (`.exe`, `.png`, `.woff`).
 - **Extract from your best project.** The gene captures patterns from the source directory -- pick a
   well-structured exemplar that represents the conventions you want. The bundled
   `examples/exemplars/go-rest` exemplar is a ready-made starting point for Go HTTP services;
-  `examples/exemplars/python-rest` covers Python stdlib HTTP services.
+  `examples/exemplars/python-rest` covers Python stdlib HTTP services;
+  `examples/exemplars/rust-rest` covers Rust/Axum HTTP services.
 - **Re-extract after major refactors.** Gene files are snapshots. If the exemplar's architecture
   evolves, re-run `octog extract` to update the gene.
 - **Commit gene files.** They're small JSON files (~2-5 KB) that encode team conventions. Version

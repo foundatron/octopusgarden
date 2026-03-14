@@ -80,7 +80,8 @@ octopusgarden/
 │   └── exemplars/                # Reference implementations for gene extraction
 │       ├── go-rest/              # Go stdlib REST API (CRUD, pagination, in-memory store)
 │       ├── python-rest/          # Python stdlib REST API (CRUD, pagination, in-memory store)
-│       └── node-rest/            # Node.js stdlib REST API (CRUD, pagination, in-memory store)
+│       ├── node-rest/            # Node.js stdlib REST API (CRUD, pagination, in-memory store)
+│       └── rust-rest/            # Rust/Axum REST API (CRUD, pagination, in-memory store)
 └── docs/architecture.md          # This file
 ```
 
