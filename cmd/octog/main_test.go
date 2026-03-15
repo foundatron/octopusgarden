@@ -204,7 +204,7 @@ func TestFprintValidationResult(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	fprintValidationResult(&buf, agg)
+	fprintValidationResult(&buf, agg, 0)
 	out := buf.String()
 
 	checks := []struct {
@@ -248,7 +248,7 @@ func TestFprintValidationResultSetupFailure(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	fprintValidationResult(&buf, agg)
+	fprintValidationResult(&buf, agg, 0)
 	out := buf.String()
 
 	if !strings.Contains(out, "0.0/100") {
@@ -1751,6 +1751,17 @@ func TestOutputValidationVerbosity(t *testing.T) {
 					},
 				},
 			},
+			{
+				ScenarioID: "passing-scenario",
+				Score:      100,
+				Weight:     1.0,
+				Steps: []scenario.ScoredStep{
+					{
+						StepResult: scenario.StepResult{Description: "list items", Observed: "HTTP 200"},
+						StepScore:  scenario.StepScore{Score: 100, Reasoning: "item returned correctly"},
+					},
+				},
+			},
 		},
 	}
 
@@ -1764,17 +1775,18 @@ func TestOutputValidationVerbosity(t *testing.T) {
 			name:      "v0 shows summary with reasoning",
 			verbosity: 0,
 			wantLines: []string{"failing-scenario", "Aggregate satisfaction: 55.0/100", "Reasoning: expected 200 got 404"},
-			noLines:   []string{"Step detail:"},
+			noLines:   []string{"Step detail:", "item returned correctly"},
 		},
 		{
 			name:      "v1 shows per-scenario summary line",
 			verbosity: 1,
 			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "failing-scenario", "Reasoning: expected 200 got 404"},
+			noLines:   []string{"item returned correctly"},
 		},
 		{
 			name:      "v2 shows full step detail with reasoning",
 			verbosity: 2,
-			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "expected 200 got 404"},
+			wantLines: []string{"Aggregate satisfaction: 55.0/100", "Step detail:", "expected 200 got 404", "item returned correctly"},
 		},
 	}
 
