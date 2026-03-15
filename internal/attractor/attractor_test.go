@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,6 +116,14 @@ func defaultOpts(t *testing.T) RunOptions {
 		StallLimit:    3,
 		Threshold:     95,
 		HealthTimeout: time.Second,
+	}
+}
+
+func noopLLMClient() *mockLLMClient {
+	return &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{}, nil
+		},
 	}
 }
 
@@ -3220,4 +3229,475 @@ func TestStratifiedBudgetExhaustedMidTier(t *testing.T) {
 	if calls < 1 {
 		t.Errorf("expected at least 1 validation call, got %d", calls)
 	}
+}
+
+// newTestRunState builds a minimal runState suitable for directly calling internal
+// *Attractor methods. Only fields accessed by validateComposed, buildAndValidateComponent,
+// startGRPCContainer, waitGRPCHealth, and startComposedContainer are initialized.
+func newTestRunState(t *testing.T, opts RunOptions) *runState {
+	t.Helper()
+	return &runState{
+		runID:              "test-run",
+		opts:               opts,
+		baseDir:            t.TempDir(),
+		bestDir:            t.TempDir(),
+		startTime:          time.Now(),
+		sessionProvider:    func(_ *container.Session) {},
+		grpcTargetProvider: func(_ string) {},
+	}
+}
+
+func TestValidateComposed(t *testing.T) {
+	composedFiles := map[string]string{
+		"main.go":    "package main\nfunc main() {}",
+		"Dockerfile": "FROM scratch",
+	}
+
+	t.Run("no_integration_scenarios", func(t *testing.T) {
+		// No "" key in ComponentValidators → accept composed result immediately.
+		opts := defaultOpts(t)
+		opts.Threshold = 95
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		result, err := a.validateComposed(context.Background(), composedFiles, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if result.Status != StatusConverged {
+			t.Errorf("expected status %q, got %q", StatusConverged, result.Status)
+		}
+		if s.bestSatisfaction != 100 {
+			t.Errorf("expected bestSatisfaction=100, got %f", s.bestSatisfaction)
+		}
+	})
+
+	t.Run("build_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.ComponentValidators = map[string]ValidateFn{
+			"": func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+				return 100, nil, 0, nil
+			},
+		}
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			buildFn: func(_ context.Context, _, _ string) error {
+				return errors.New("build exploded")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		result, err := a.validateComposed(context.Background(), composedFiles, s)
+		if result != nil {
+			t.Errorf("expected nil result on build failure, got %v", result)
+		}
+		if !errors.Is(err, errComponentFallback) {
+			t.Errorf("expected errComponentFallback, got %v", err)
+		}
+	})
+
+	t.Run("below_threshold", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.Threshold = 95
+		opts.ComponentValidators = map[string]ValidateFn{
+			"": func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+				return 40, []string{"integration broken"}, 0, nil
+			},
+		}
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		result, err := a.validateComposed(context.Background(), composedFiles, s)
+		if result != nil {
+			t.Errorf("expected nil result when below threshold, got %v", result)
+		}
+		if !errors.Is(err, errComponentFallback) {
+			t.Errorf("expected errComponentFallback, got %v", err)
+		}
+	})
+}
+
+func TestBuildAndValidateComponent(t *testing.T) {
+	iterDir := t.TempDir()
+
+	t.Run("http_success", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.Capabilities = ScenarioCapabilities{NeedsHTTP: true}
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+			return 100, nil, 0.01, nil
+		}
+		satisfaction, failures, err := a.buildAndValidateComponent(context.Background(), iterDir, "web", 1, validate, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if satisfaction != 100 {
+			t.Errorf("expected satisfaction=100, got %f", satisfaction)
+		}
+		if len(failures) != 0 {
+			t.Errorf("expected no failures, got %v", failures)
+		}
+	})
+
+	t.Run("grpc_routing", func(t *testing.T) {
+		// Track all calls to grpcTargetProvider: startComposedContainer sets it to the target,
+		// then the deferred stop resets it to "". We verify the non-empty call happened.
+		var grpcTargetCalls []string
+		opts := defaultOpts(t)
+		opts.Capabilities = ScenarioCapabilities{NeedsGRPC: true}
+		s := newTestRunState(t, opts)
+		s.grpcTargetProvider = func(target string) { grpcTargetCalls = append(grpcTargetCalls, target) }
+
+		var runMultiPortCalled atomic.Bool
+		mgr := &mockContainerMgr{
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				runMultiPortCalled.Store(true)
+				return container.RunResult{
+					URL:        "http://127.0.0.1:9999",
+					ExtraPorts: map[string]string{container.DefaultGRPCPort: "127.0.0.1:54321"},
+				}, func() {}, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+			return 100, nil, 0, nil
+		}
+		satisfaction, _, err := a.buildAndValidateComponent(context.Background(), iterDir, "grpc-svc", 1, validate, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if satisfaction != 100 {
+			t.Errorf("expected satisfaction=100, got %f", satisfaction)
+		}
+		if !runMultiPortCalled.Load() {
+			t.Error("expected RunMultiPort to be called for gRPC routing")
+		}
+		if !slices.Contains(grpcTargetCalls, "127.0.0.1:54321") {
+			t.Errorf("expected grpcTargetProvider called with 127.0.0.1:54321, got calls: %v", grpcTargetCalls)
+		}
+	})
+
+	t.Run("build_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			buildFn: func(_ context.Context, _, _ string) error {
+				return errors.New("compile error")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		_, _, err := a.buildAndValidateComponent(context.Background(), iterDir, "svc", 1, nil, s)
+		if !errors.Is(err, errComponentBuildFail) {
+			t.Errorf("expected errComponentBuildFail, got %v", err)
+		}
+	})
+
+	t.Run("session_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.Capabilities = ScenarioCapabilities{NeedsExec: true}
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			startSessionFn: func(_ context.Context, _ string) (*container.Session, container.StopFunc, error) {
+				return nil, nil, errors.New("session failed")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		_, _, err := a.buildAndValidateComponent(context.Background(), iterDir, "svc", 1, nil, s)
+		if !errors.Is(err, errComponentSessionFail) {
+			t.Errorf("expected errComponentSessionFail, got %v", err)
+		}
+	})
+}
+
+func TestStartGRPCContainer(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				return container.RunResult{
+					URL:        "http://127.0.0.1:9999",
+					ExtraPorts: map[string]string{container.DefaultGRPCPort: "127.0.0.1:54321"},
+				}, func() {}, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsGRPC: true}
+		res, err := a.startGRPCContainer(context.Background(), 1, "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.stop == nil {
+			t.Error("expected non-nil stop on success")
+		}
+		if res.grpcTarget != "127.0.0.1:54321" {
+			t.Errorf("expected grpcTarget=127.0.0.1:54321, got %q", res.grpcTarget)
+		}
+		if res.stalled != nil {
+			t.Errorf("expected no stall result, got %v", res.stalled)
+		}
+	})
+
+	t.Run("run_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.StallLimit = 1 // one stall reaches the limit so checkStalled returns non-nil
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				return container.RunResult{}, nil, errors.New("port conflict")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsGRPC: true}
+		res, err := a.startGRPCContainer(context.Background(), 1, "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.stop != nil {
+			t.Error("expected nil stop on run failure")
+		}
+	})
+
+	t.Run("health_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.StallLimit = 1 // one stall reaches the limit so checkStalled returns non-nil
+		s := newTestRunState(t, opts)
+
+		var stopCalled atomic.Bool
+		mgr := &mockContainerMgr{
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				return container.RunResult{
+					URL:        "http://127.0.0.1:9999",
+					ExtraPorts: map[string]string{container.DefaultGRPCPort: "127.0.0.1:54321"},
+				}, func() { stopCalled.Store(true) }, nil
+			},
+			waitPortFn: func(_ context.Context, _ string, _ time.Duration) error {
+				return errors.New("port not ready")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsGRPC: true}
+		res, err := a.startGRPCContainer(context.Background(), 1, "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.stop != nil {
+			t.Error("expected nil stop on health failure")
+		}
+		if !stopCalled.Load() {
+			t.Error("expected stop to be called on health failure")
+		}
+	})
+}
+
+func TestWaitGRPCHealth(t *testing.T) {
+	t.Run("http_success", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsHTTP: true}
+		stallResult := a.waitGRPCHealth(context.Background(), 1, caps, "http://127.0.0.1:9999", "", s)
+		if stallResult != nil {
+			t.Errorf("expected nil stall result on success, got %v", stallResult)
+		}
+	})
+
+	t.Run("http_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.StallLimit = 1 // one stall reaches the limit so checkStalled returns non-nil
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			waitHealthyFn: func(_ context.Context, _ string, _ time.Duration) error {
+				return errors.New("health check timeout")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsHTTP: true}
+		stallResult := a.waitGRPCHealth(context.Background(), 1, caps, "http://127.0.0.1:9999", "", s)
+		if stallResult == nil {
+			t.Error("expected non-nil stall result on health failure")
+		}
+	})
+
+	t.Run("grpc_port_success", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsGRPC: true}
+		stallResult := a.waitGRPCHealth(context.Background(), 1, caps, "", "127.0.0.1:54321", s)
+		if stallResult != nil {
+			t.Errorf("expected nil stall result on success, got %v", stallResult)
+		}
+	})
+
+	t.Run("grpc_port_failure", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.StallLimit = 1 // one stall reaches the limit so checkStalled returns non-nil
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			waitPortFn: func(_ context.Context, _ string, _ time.Duration) error {
+				return errors.New("connection refused")
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsGRPC: true}
+		stallResult := a.waitGRPCHealth(context.Background(), 1, caps, "", "127.0.0.1:54321", s)
+		if stallResult == nil {
+			t.Error("expected non-nil stall result on port failure")
+		}
+	})
+
+	t.Run("needs_browser_routes_to_http", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		// NeedsBrowser=true should trigger the HTTP health path (needsHTTP = caps.NeedsHTTP || caps.NeedsBrowser).
+		caps := ScenarioCapabilities{NeedsBrowser: true}
+		stallResult := a.waitGRPCHealth(context.Background(), 1, caps, "http://127.0.0.1:9999", "", s)
+		if stallResult != nil {
+			t.Errorf("expected nil stall result for browser caps, got %v", stallResult)
+		}
+	})
+}
+
+func TestStartComposedContainer(t *testing.T) {
+	t.Run("grpc_path", func(t *testing.T) {
+		var grpcTargetReceived string
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+		s.grpcTargetProvider = func(target string) { grpcTargetReceived = target }
+
+		mgr := &mockContainerMgr{
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				return container.RunResult{
+					URL:        "http://127.0.0.1:9999",
+					ExtraPorts: map[string]string{container.DefaultGRPCPort: "127.0.0.1:54321"},
+				}, func() {}, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsGRPC: true}
+		url, stop, err := a.startComposedContainer(context.Background(), "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if url == "" {
+			t.Error("expected non-empty url for gRPC path")
+		}
+		if stop == nil {
+			t.Error("expected non-nil stop for gRPC path")
+		}
+		if grpcTargetReceived != "127.0.0.1:54321" {
+			t.Errorf("expected grpcTargetProvider called with 127.0.0.1:54321, got %q", grpcTargetReceived)
+		}
+	})
+
+	t.Run("http_path", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		var runCalled atomic.Bool
+		mgr := &mockContainerMgr{
+			runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+				runCalled.Store(true)
+				return container.RunResult{URL: "http://127.0.0.1:9999", ContainerID: "mock-id"}, func() {}, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsHTTP: true}
+		url, stop, err := a.startComposedContainer(context.Background(), "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if url == "" {
+			t.Error("expected non-empty url for HTTP path")
+		}
+		if stop == nil {
+			t.Error("expected non-nil stop for HTTP path")
+		}
+		if !runCalled.Load() {
+			t.Error("expected Run (not RunMultiPort) to be called for HTTP path")
+		}
+	})
+
+	t.Run("exec_only", func(t *testing.T) {
+		// NeedsExec=true with all other caps false → default branch → empty url, nil stop.
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		a := New(noopLLMClient(), &mockContainerMgr{}, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsExec: true}
+		url, stop, err := a.startComposedContainer(context.Background(), "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if url != "" {
+			t.Errorf("expected empty url for exec-only, got %q", url)
+		}
+		if stop != nil {
+			t.Error("expected nil stop for exec-only")
+		}
+	})
+
+	t.Run("no_caps_routes_to_http", func(t *testing.T) {
+		// All caps false → !caps.NeedsExec is true → routes to HTTP path.
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		var runCalled atomic.Bool
+		mgr := &mockContainerMgr{
+			runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+				runCalled.Store(true)
+				return container.RunResult{URL: "http://127.0.0.1:9999", ContainerID: "mock-id"}, func() {}, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{}
+		url, stop, err := a.startComposedContainer(context.Background(), "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if url == "" {
+			t.Error("expected non-empty url when all caps false (routes to HTTP)")
+		}
+		if stop == nil {
+			t.Error("expected non-nil stop when all caps false (routes to HTTP)")
+		}
+		if !runCalled.Load() {
+			t.Error("expected Run to be called when no caps set")
+		}
+	})
 }
