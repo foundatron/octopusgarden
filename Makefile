@@ -51,10 +51,10 @@ check: ## Run all pre-push checks (build, test, lint, docs)
 	$(MAKE) docs-check
 
 smoke: build ## Run smoke tests (rounds 1-3, ~$0.15)
-	./scripts/smoke-test.sh
+	python3 ./scripts/smoke-test.py
 
 e2e: build ## Run full E2E convergence tests (~$1-3)
-	./scripts/e2e-test.sh
+	python3 ./scripts/e2e-test.py
 
 clean: ## Remove built binary and test artifacts
 	rm -f $(BINARY)
