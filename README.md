@@ -61,7 +61,10 @@ Spec + Scenarios --> Preflight --> Attractor Loop --> Generated Code --> Docker 
 ## Quick Start
 
 ```bash
-# Clone and build
+# Homebrew (macOS/Linux)
+brew install foundatron/tap/octopusgarden
+
+# Or build from source
 git clone https://github.com/foundatron/octopusgarden.git
 cd octopusgarden
 make build

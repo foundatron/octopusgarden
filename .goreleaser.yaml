@@ -55,3 +55,16 @@ release:
     name: octopusgarden
   draft: false
   prerelease: auto
+
+brews:
+  - repository:
+      owner: foundatron
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/foundatron/octopusgarden"
+    description: "Autonomous software dark factory: specs to working code via attractor loop"
+    license: MIT
+    skip_upload: auto
+    test: |
+      system "#{bin}/octog", "--help"
