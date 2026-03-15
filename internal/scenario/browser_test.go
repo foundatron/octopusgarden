@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -225,6 +226,203 @@ func TestNewBrowserExecutor(t *testing.T) {
 	}
 	if exec.parentCtx != ctx {
 		t.Error("parentCtx not set correctly")
+	}
+}
+
+func TestRetryOnTransient(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const maxRetries = 3
+	const retryDelay = 1 * time.Millisecond
+
+	transientErr := errors.New("Cannot find context with specified id")
+	nonTransientErr := errors.New("connection refused")
+
+	tests := []struct {
+		name      string
+		mkFn      func(calls *int) func() error
+		ctxFn     func() context.Context
+		wantErr   error
+		wantCalls int
+	}{
+		{
+			name: "success on first attempt",
+			mkFn: func(calls *int) func() error {
+				return func() error {
+					*calls++
+					return nil
+				}
+			},
+			ctxFn:     context.Background,
+			wantErr:   nil,
+			wantCalls: 1,
+		},
+		{
+			name: "transient then success",
+			mkFn: func(calls *int) func() error {
+				return func() error {
+					*calls++
+					if *calls < 3 {
+						return transientErr
+					}
+					return nil
+				}
+			},
+			ctxFn:     context.Background,
+			wantErr:   nil,
+			wantCalls: 3,
+		},
+		{
+			name: "all transient exhausted",
+			mkFn: func(calls *int) func() error {
+				return func() error {
+					*calls++
+					return transientErr
+				}
+			},
+			ctxFn:     context.Background,
+			wantErr:   errPageContextLost,
+			wantCalls: maxRetries,
+		},
+		{
+			name: "non-transient fails immediately",
+			mkFn: func(calls *int) func() error {
+				return func() error {
+					*calls++
+					return nonTransientErr
+				}
+			},
+			ctxFn:     context.Background,
+			wantErr:   nonTransientErr,
+			wantCalls: 1,
+		},
+		{
+			name: "context canceled during delay",
+			mkFn: func(calls *int) func() error {
+				return func() error {
+					*calls++
+					return transientErr
+				}
+			},
+			ctxFn: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			wantErr:   context.Canceled,
+			wantCalls: 1, // attempt 0 runs, sleep on attempt 1 returns immediately
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls int
+			fn := tt.mkFn(&calls)
+			ctx := tt.ctxFn()
+			err := retryOnTransient(ctx, maxRetries, retryDelay, logger, "test", fn)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("got error %v, want %v", err, tt.wantErr)
+			}
+			if calls != tt.wantCalls {
+				t.Errorf("fn called %d times, want %d", calls, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestEvaluateAssertions(t *testing.T) {
+	intPtr := func(n int) *int { return &n }
+
+	tests := []struct {
+		name       string
+		elemText   string
+		matchCount int
+		req        BrowserRequest
+		wantLines  []string
+	}{
+		{
+			name:     "text contains PASS",
+			elemText: "say hello world",
+			req:      BrowserRequest{Text: "hello"},
+			wantLines: []string{
+				`PASS: element text contains "hello"`,
+			},
+		},
+		{
+			name:     "text contains FAIL",
+			elemText: "hello",
+			req:      BrowserRequest{Text: "goodbye"},
+			wantLines: []string{
+				`FAIL: element text does not contain "goodbye" (got "hello")`,
+			},
+		},
+		{
+			name:     "text absent PASS",
+			elemText: "success",
+			req:      BrowserRequest{TextAbsent: "error"},
+			wantLines: []string{
+				`PASS: element text does not contain "error"`,
+			},
+		},
+		{
+			name:     "text absent FAIL",
+			elemText: "error occurred",
+			req:      BrowserRequest{TextAbsent: "error"},
+			wantLines: []string{
+				`FAIL: element text contains "error" (should be absent)`,
+			},
+		},
+		{
+			name:       "count match PASS",
+			matchCount: 3,
+			req:        BrowserRequest{Count: intPtr(3)},
+			wantLines: []string{
+				"PASS: found 3 matching elements",
+			},
+		},
+		{
+			name:       "count mismatch FAIL",
+			matchCount: 5,
+			req:        BrowserRequest{Count: intPtr(2)},
+			wantLines: []string{
+				"FAIL: expected 2 matching elements, found 5",
+			},
+		},
+		{
+			name:       "multiple assertions",
+			elemText:   "hello world",
+			matchCount: 2,
+			req:        BrowserRequest{Text: "hello", TextAbsent: "error", Count: intPtr(2)},
+			wantLines: []string{
+				`PASS: element text contains "hello"`,
+				`PASS: element text does not contain "error"`,
+				"PASS: found 2 matching elements",
+			},
+		},
+		{
+			name:      "no assertions configured",
+			req:       BrowserRequest{},
+			wantLines: nil,
+		},
+		{
+			name:      "nil count skipped",
+			elemText:  "",
+			req:       BrowserRequest{Count: nil},
+			wantLines: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evaluateAssertions(tt.elemText, tt.matchCount, tt.req)
+			if len(got) != len(tt.wantLines) {
+				t.Fatalf("got %d assertions, want %d: %v", len(got), len(tt.wantLines), got)
+			}
+			for i, line := range tt.wantLines {
+				if got[i] != line {
+					t.Errorf("assertion[%d] = %q, want %q", i, got[i], line)
+				}
+			}
+		})
 	}
 }
 
