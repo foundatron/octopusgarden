@@ -325,6 +325,18 @@ func lintStep(path string, node *yaml.Node, cs *captureSet, isSetup bool) []Diag
 		}
 	}
 
+	// Check delay.
+	if delayFE, hasDelay := fields["delay"]; hasDelay && delayFE.value.Value != "" {
+		if _, err := time.ParseDuration(delayFE.value.Value); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    delayFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("delay %q is not a valid duration", delayFE.value.Value),
+			})
+		}
+	}
+
 	// Check retry.
 	retryFE, hasRetry := fields["retry"]
 	if hasRetry {

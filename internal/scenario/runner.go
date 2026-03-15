@@ -19,6 +19,7 @@ var (
 	errNoExecutorRegistered = errors.New("no executor registered for step type")
 	errRetryInvalidInterval = errors.New("retry: invalid interval")
 	errRetryInvalidTimeout  = errors.New("retry: invalid timeout")
+	errInvalidDelay         = errors.New("step: invalid delay duration")
 )
 
 // Runner executes scenario steps by dispatching to registered StepExecutors.
@@ -44,6 +45,10 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 
 	// Execute setup steps — fatal on failure.
 	for i, step := range scenario.Setup {
+		if err := r.applyDelay(ctx, step.Delay); err != nil {
+			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
+		}
+
 		executor, err := r.resolveExecutor(step)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: step %d (%s): %w", errSetupFailed, i, step.Description, err)
@@ -63,6 +68,18 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 	results := make([]StepResult, 0, len(scenario.Steps))
 	for i, step := range scenario.Steps {
 		start := time.Now()
+
+		if err := r.applyDelay(ctx, step.Delay); err != nil {
+			results = append(results, StepResult{
+				Description: step.Description,
+				StepType:    step.StepType(),
+				Duration:    time.Since(start),
+				Err:         err,
+			})
+			r.Logger.Warn("judged step delay error", "step", i, "description", step.Description, "error", err)
+			continue
+		}
+
 		executor, err := r.resolveExecutor(step)
 		if err != nil {
 			results = append(results, StepResult{
@@ -161,6 +178,25 @@ func (r *Runner) executeWithRetry(ctx context.Context, executor StepExecutor, st
 		}
 	}
 	return lastOutput, lastErr
+}
+
+func (r *Runner) applyDelay(ctx context.Context, delay string) error {
+	if delay == "" {
+		return nil
+	}
+	d, err := parseStepTimeout(delay, 0)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errInvalidDelay, err)
+	}
+	r.Logger.Debug("step delay", "delay", delay)
+	timer := time.NewTimer(d)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return ctx.Err()
+	case <-timer.C:
+	}
+	return nil
 }
 
 func (r *Runner) resolveExecutor(step Step) (StepExecutor, error) {

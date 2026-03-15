@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestLogger() *slog.Logger {
@@ -891,6 +892,171 @@ func (e *countingExecutor) Execute(_ context.Context, _ Step, _ map[string]strin
 }
 
 func (e *countingExecutor) ValidCaptureSources() []string { return nil }
+
+func TestRunnerStepDelay(t *testing.T) {
+	mock := &mockExecutor{output: StepOutput{Observed: "ok"}}
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "delay-judged",
+		Steps: []Step{
+			{
+				Description: "delayed step",
+				Delay:       "100ms",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+				Expect:      "ok",
+			},
+		},
+	}
+
+	start := time.Now()
+	result, err := runner.Run(context.Background(), sc)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+	if result.Steps[0].Err != nil {
+		t.Fatalf("unexpected step error: %v", result.Steps[0].Err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("expected elapsed >= 100ms, got %s", elapsed)
+	}
+}
+
+func TestRunnerSetupStepDelay(t *testing.T) {
+	mock := &mockExecutor{output: StepOutput{Observed: "ok"}}
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "delay-setup",
+		Setup: []Step{
+			{
+				Description: "delayed setup",
+				Delay:       "100ms",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+			},
+		},
+		Steps: []Step{
+			{
+				Description: "judged step",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+				Expect:      "ok",
+			},
+		},
+	}
+
+	start := time.Now()
+	_, err := runner.Run(context.Background(), sc)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("expected elapsed >= 100ms, got %s", elapsed)
+	}
+}
+
+func TestRunnerStepDelayInvalidDuration(t *testing.T) {
+	mock := &mockExecutor{output: StepOutput{Observed: "ok"}}
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "delay-invalid",
+		Steps: []Step{
+			{
+				Description: "bad delay",
+				Delay:       "notaduration",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+				Expect:      "ok",
+			},
+		},
+	}
+
+	result, err := runner.Run(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("unexpected error from Run: %v", err)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+	if result.Steps[0].Err == nil {
+		t.Fatal("expected step error for invalid delay, got nil")
+	}
+	if !errors.Is(result.Steps[0].Err, errInvalidDelay) {
+		t.Errorf("expected errInvalidDelay, got: %v", result.Steps[0].Err)
+	}
+}
+
+func TestRunnerSetupStepDelayInvalidDuration(t *testing.T) {
+	mock := &mockExecutor{output: StepOutput{Observed: "ok"}}
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "delay-setup-invalid",
+		Setup: []Step{
+			{
+				Description: "bad delay setup",
+				Delay:       "notaduration",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+			},
+		},
+		Steps: []Step{
+			{
+				Description: "should not run",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+				Expect:      "never",
+			},
+		},
+	}
+
+	_, err := runner.Run(context.Background(), sc)
+	if err == nil {
+		t.Fatal("expected error for invalid setup delay")
+	}
+	if !errors.Is(err, errSetupFailed) {
+		t.Errorf("expected errSetupFailed, got: %v", err)
+	}
+	if !errors.Is(err, errInvalidDelay) {
+		t.Errorf("expected errInvalidDelay in chain, got: %v", err)
+	}
+}
+
+func TestRunnerStepDelayContextCancellation(t *testing.T) {
+	mock := &mockExecutor{output: StepOutput{Observed: "ok"}}
+	runner := NewRunner(map[string]StepExecutor{"request": mock}, newTestLogger())
+	sc := Scenario{
+		ID: "delay-cancel",
+		Steps: []Step{
+			{
+				Description: "long delay",
+				Delay:       "10s",
+				Request:     &Request{Method: "GET", Path: "/ok"},
+				Expect:      "never",
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	result, err := runner.Run(ctx, sc)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error from Run: %v", err)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+	if result.Steps[0].Err == nil {
+		t.Fatal("expected step error from context cancellation")
+	}
+	if elapsed >= time.Second {
+		t.Errorf("expected fast cancellation, got %s", elapsed)
+	}
+}
 
 func TestRunnerUnknownStepType(t *testing.T) {
 	sc := Scenario{
