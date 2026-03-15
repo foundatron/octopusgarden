@@ -86,6 +86,9 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "--help", "-h", "-help":
+		printUsage()
+		return
 	case "run":
 		err = runCmd(ctx, logger, os.Args[2:])
 	case "validate":
@@ -110,13 +113,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if errors.Is(err, flag.ErrHelp) {
+	exitOnCmdError(err, os.Args[1], logger)
+}
+
+// exitOnCmdError exits with status 1 if err is non-nil and not flag.ErrHelp.
+// flag.ErrHelp means the subcommand printed its usage and we should return cleanly.
+func exitOnCmdError(err error, cmd string, logger *slog.Logger) {
+	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return
 	}
-	if err != nil {
-		logger.Error(os.Args[1]+" failed", "error", err)
-		os.Exit(1)
-	}
+	logger.Error(cmd+" failed", "error", err)
+	os.Exit(1)
 }
 
 // parseLogLevel reads LOG_LEVEL from the environment and returns the
