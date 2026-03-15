@@ -1,6 +1,7 @@
 id: validation
 description: Verify request validation returns 400 for invalid input
 type: functional
+tier: 2
 satisfaction_criteria: Invalid requests are rejected with 400 and an error message
 
 steps:

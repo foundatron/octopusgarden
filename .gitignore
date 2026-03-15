@@ -53,6 +53,9 @@ htmlcov/
 .pytype/
 .ruff_cache/
 
+# Manual testing artifacts
+manual_testing/
+
 # Environment
 .env
 .envrc

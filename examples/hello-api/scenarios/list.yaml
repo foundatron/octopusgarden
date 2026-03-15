@@ -1,6 +1,7 @@
 id: list
 description: Create multiple items and verify list endpoint
 type: functional
+tier: 1
 satisfaction_criteria: List endpoint returns all created items with correct total count
 
 setup:

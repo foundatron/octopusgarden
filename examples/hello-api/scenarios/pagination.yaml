@@ -1,6 +1,7 @@
 id: pagination
 description: Verify pagination with limit and offset
 type: functional
+tier: 2
 satisfaction_criteria: Pagination returns correct subsets and total count
 
 setup:
