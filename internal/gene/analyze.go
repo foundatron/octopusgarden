@@ -85,6 +85,7 @@ func parseComponents(guide string) []Component {
 	var components []Component
 	var current *Component
 	inPatterns := false
+	pendingField := ""
 
 	for _, line := range strings.Split(guide, "\n") {
 		trimmed := strings.TrimRight(line, " \t")
@@ -95,6 +96,7 @@ func parseComponents(guide string) []Component {
 			}
 			current = &Component{Name: name}
 			inPatterns = false
+			pendingField = ""
 			continue
 		}
 
@@ -102,19 +104,20 @@ func parseComponents(guide string) []Component {
 			continue
 		}
 
-		if nowInPatterns, matched := applyComponentField(current, trimmed); matched {
+		if nowInPatterns, nowPending, matched := applyComponentField(current, trimmed); matched {
 			inPatterns = nowInPatterns
+			pendingField = nowPending
+			continue
+		}
+
+		if pendingField != "" && trimmed != "" {
+			applyPendingLine(current, pendingField, trimmed)
+			pendingField = ""
 			continue
 		}
 
 		if inPatterns && trimmed != "" {
-			// A bold header (e.g. **BUILD**) signals end of the components section;
-			// stop accumulating to prevent non-component guide text leaking into Patterns.
-			if strings.HasPrefix(trimmed, "**") {
-				inPatterns = false
-			} else {
-				current.Patterns += "\n" + trimmed
-			}
+			inPatterns = accumulatePattern(current, trimmed)
 		}
 	}
 
@@ -128,6 +131,36 @@ func parseComponents(guide string) []Component {
 	return components
 }
 
+// applyPendingLine fills the field named by pendingField from the continuation line.
+// A bold header (e.g. **BUILD**) is treated as a section boundary and skipped.
+func applyPendingLine(c *Component, pendingField, trimmed string) {
+	if strings.HasPrefix(trimmed, "**") {
+		return
+	}
+	switch pendingField {
+	case "interface":
+		c.Interface = strings.TrimSpace(trimmed)
+	case "dependson":
+		c.DependsOn = parseDependsOn(strings.TrimSpace(trimmed))
+	}
+}
+
+// accumulatePattern appends trimmed to c.Patterns and returns whether to remain in pattern-accumulation mode.
+// A bold header signals the end of the components section.
+func accumulatePattern(c *Component, trimmed string) (inPatterns bool) {
+	// A bold header (e.g. **BUILD**) signals end of the components section;
+	// stop accumulating to prevent non-component guide text leaking into Patterns.
+	if strings.HasPrefix(trimmed, "**") {
+		return false
+	}
+	if c.Patterns == "" {
+		c.Patterns = trimmed
+	} else {
+		c.Patterns += "\n" + trimmed
+	}
+	return true
+}
+
 // parseComponentHeader returns the component name if line matches **COMPONENT: <name>**.
 func parseComponentHeader(line string) (name string, ok bool) {
 	after, found := strings.CutPrefix(line, "**COMPONENT:")
@@ -138,22 +171,30 @@ func parseComponentHeader(line string) (name string, ok bool) {
 }
 
 // applyComponentField updates c when line matches a known field prefix.
-// Returns (true, true) when the Patterns field is matched (caller should accumulate
-// subsequent lines), (false, true) for any other matched field, (false, false) otherwise.
-func applyComponentField(c *Component, line string) (inPatterns bool, matched bool) {
+// Returns (inPatterns, pendingField, matched). pendingField is non-empty when the
+// field value was absent (value expected on the next line).
+func applyComponentField(c *Component, line string) (inPatterns bool, pendingField string, matched bool) {
 	if after, found := strings.CutPrefix(line, "Interface:"); found {
-		c.Interface = strings.TrimSpace(after)
-		return false, true
+		val := strings.TrimSpace(after)
+		c.Interface = val
+		if val == "" {
+			return false, "interface", true
+		}
+		return false, "", true
 	}
 	if after, found := strings.CutPrefix(line, "Patterns:"); found {
 		c.Patterns = strings.TrimSpace(after)
-		return true, true
+		return true, "", true
 	}
 	if after, found := strings.CutPrefix(line, "DependsOn:"); found {
-		c.DependsOn = parseDependsOn(strings.TrimSpace(after))
-		return false, true
+		val := strings.TrimSpace(after)
+		c.DependsOn = parseDependsOn(val)
+		if val == "" {
+			return false, "dependson", true
+		}
+		return false, "", true
 	}
-	return false, false
+	return false, "", false
 }
 
 // parseDependsOn splits a comma-separated dependency list; returns nil for empty or "none".
