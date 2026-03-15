@@ -614,8 +614,9 @@ steps:
     expect: "Status 200 with status 'processed'"
 ```
 
-`StepResult.Duration` reflects total wall time including retries and sleeps. Captures are applied
-only from the final successful attempt.
+`StepResult.Duration` reflects total wall time from executor resolution through execution, including
+retries and sleeps. Duration is recorded even when executor resolution fails (non-zero on error).
+Captures are applied only from the final successful attempt.
 
 ### Variable Capture and Substitution
 
