@@ -133,7 +133,7 @@ func (e *WSExecutor) connect(ctx context.Context, connID, wsURL string) error {
 	}
 	conn.SetReadLimit(MaxResponseBytes)
 
-	bgCtx, cancel := context.WithCancel(context.Background()) //nolint:containedctx // background reader needs a long-lived context
+	bgCtx, cancel := context.WithCancel(context.Background()) //nolint:containedctx,gosec // background reader needs a long-lived context; cancel stored in wsConn and called on close
 	c := &wsConn{
 		conn:   conn,
 		cancel: cancel,

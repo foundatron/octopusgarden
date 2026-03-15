@@ -109,15 +109,21 @@ func buildResponseBody(events ...string) io.ReadCloser {
 
 // inspectResponseWithPort creates an InspectResponse with a single port binding.
 func inspectResponseWithPort(containerID, hostPort string) dockercontainer.InspectResponse {
+	return inspectResponseMultiPort(containerID, map[nat.Port]string{"8080/tcp": hostPort})
+}
+
+// inspectResponseMultiPort creates an InspectResponse with arbitrary port bindings.
+// ports maps a container port (e.g. "8080/tcp") to the bound host port (e.g. "49152").
+func inspectResponseMultiPort(containerID string, ports map[nat.Port]string) dockercontainer.InspectResponse {
+	portMap := make(nat.PortMap, len(ports))
+	for port, hostPort := range ports {
+		portMap[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: hostPort}}
+	}
 	return dockercontainer.InspectResponse{
 		ContainerJSONBase: &dockercontainer.ContainerJSONBase{ID: containerID},
 		NetworkSettings: &dockercontainer.NetworkSettings{
 			NetworkSettingsBase: dockercontainer.NetworkSettingsBase{ //nolint:staticcheck // SA1019: Ports field moves to NetworkSettings in v29; correct API for v28
-				Ports: nat.PortMap{
-					nat.Port("8080/tcp"): []nat.PortBinding{
-						{HostIP: "127.0.0.1", HostPort: hostPort},
-					},
-				},
+				Ports: portMap,
 			},
 		},
 	}
@@ -433,15 +439,7 @@ func TestRunNoPortBinding(t *testing.T) {
 			return nil
 		},
 		containerInspectFunc: func(_ context.Context, _ string) (dockercontainer.InspectResponse, error) {
-			// Return inspect with empty ports map.
-			return dockercontainer.InspectResponse{
-				ContainerJSONBase: &dockercontainer.ContainerJSONBase{ID: testContainerID},
-				NetworkSettings: &dockercontainer.NetworkSettings{
-					NetworkSettingsBase: dockercontainer.NetworkSettingsBase{ //nolint:staticcheck // SA1019: Ports field moves to NetworkSettings in v29; correct API for v28
-						Ports: nat.PortMap{},
-					},
-				},
-			}, nil
+			return inspectResponseMultiPort(testContainerID, map[nat.Port]string{}), nil
 		},
 		containerStopFunc: func(_ context.Context, _ string, _ dockercontainer.StopOptions) error {
 			return nil
@@ -458,6 +456,275 @@ func TestRunNoPortBinding(t *testing.T) {
 	}
 	if !errors.Is(err, errNoPortBinding) {
 		t.Errorf("expected errNoPortBinding, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunMultiPort tests
+// ---------------------------------------------------------------------------
+
+func TestRunMultiPortSuccess(t *testing.T) {
+	tests := []struct {
+		name           string
+		ports          map[nat.Port]string
+		wantURL        string
+		wantExtraPorts map[string]string
+	}{
+		{
+			name:           "HTTPAndExtra",
+			ports:          map[nat.Port]string{"8080/tcp": "49152", "50051/tcp": "54321"},
+			wantURL:        "http://127.0.0.1:49152",
+			wantExtraPorts: map[string]string{"50051/tcp": "127.0.0.1:54321"},
+		},
+		{
+			name:  "ExtraOnly",
+			ports: map[nat.Port]string{"50051/tcp": "54321"},
+			// wantURL is empty: URL is only set when 8080/tcp is present.
+			wantURL:        "",
+			wantExtraPorts: map[string]string{"50051/tcp": "127.0.0.1:54321"},
+		},
+		{
+			name:           "HTTPOnly",
+			ports:          map[nat.Port]string{"8080/tcp": "49152"},
+			wantURL:        "http://127.0.0.1:49152",
+			wantExtraPorts: map[string]string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockDockerAPI{
+				containerCreateFunc: func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+					return dockercontainer.CreateResponse{ID: testContainerID}, nil
+				},
+				containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+					return nil
+				},
+				containerInspectFunc: func(_ context.Context, _ string) (dockercontainer.InspectResponse, error) {
+					return inspectResponseMultiPort(testContainerID, tc.ports), nil
+				},
+				containerStopFunc: func(_ context.Context, _ string, _ dockercontainer.StopOptions) error {
+					return nil
+				},
+				containerRemoveFunc: func(_ context.Context, _ string, _ dockercontainer.RemoveOptions) error {
+					return nil
+				},
+			}
+
+			m := newManager(mock, nil, newTestLogger())
+			result, stop, err := m.RunMultiPort(context.Background(), "test:latest", []string{"50051/tcp"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			defer stop()
+
+			if result.URL != tc.wantURL {
+				t.Errorf("URL = %q, want %q", result.URL, tc.wantURL)
+			}
+			if result.ContainerID != testContainerID {
+				t.Errorf("ContainerID = %q, want %q", result.ContainerID, testContainerID)
+			}
+			if len(result.ExtraPorts) != len(tc.wantExtraPorts) {
+				t.Errorf("ExtraPorts len = %d, want %d", len(result.ExtraPorts), len(tc.wantExtraPorts))
+			}
+			for k, want := range tc.wantExtraPorts {
+				if got := result.ExtraPorts[k]; got != want {
+					t.Errorf("ExtraPorts[%q] = %q, want %q", k, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRunMultiPortNoPortsBound(t *testing.T) {
+	var stoppedID, removedID string
+	mock := &mockDockerAPI{
+		containerCreateFunc: func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+			return dockercontainer.CreateResponse{ID: testContainerID}, nil
+		},
+		containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+			return nil
+		},
+		containerInspectFunc: func(_ context.Context, _ string) (dockercontainer.InspectResponse, error) {
+			return inspectResponseMultiPort(testContainerID, map[nat.Port]string{}), nil
+		},
+		containerStopFunc: func(_ context.Context, containerID string, _ dockercontainer.StopOptions) error {
+			stoppedID = containerID
+			return nil
+		},
+		containerRemoveFunc: func(_ context.Context, containerID string, _ dockercontainer.RemoveOptions) error {
+			removedID = containerID
+			return nil
+		},
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, _, err := m.RunMultiPort(context.Background(), "test:latest", []string{"50051/tcp"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errNoPortBinding) {
+		t.Errorf("expected errNoPortBinding, got: %v", err)
+	}
+	if stoppedID != testContainerID {
+		t.Errorf("stop called with %q, want %q", stoppedID, testContainerID)
+	}
+	if removedID != testContainerID {
+		t.Errorf("remove called with %q, want %q", removedID, testContainerID)
+	}
+}
+
+func TestRunMultiPortCreateError(t *testing.T) {
+	createErr := errors.New("no such image")
+	startCalled := false
+	mock := &mockDockerAPI{
+		containerCreateFunc: func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+			return dockercontainer.CreateResponse{}, createErr
+		},
+		containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+			startCalled = true
+			return nil
+		},
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, _, err := m.RunMultiPort(context.Background(), "test:latest", []string{"50051/tcp"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, createErr) {
+		t.Errorf("expected wrapped createErr, got: %v", err)
+	}
+	if startCalled {
+		t.Error("ContainerStart should not be called when create fails")
+	}
+}
+
+func TestRunMultiPortStartError(t *testing.T) {
+	startErr := errors.New("cannot start")
+	var removedID string
+	var removeForced bool
+	mock := &mockDockerAPI{
+		containerCreateFunc: func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+			return dockercontainer.CreateResponse{ID: testContainerID}, nil
+		},
+		containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+			return startErr
+		},
+		containerRemoveFunc: func(_ context.Context, containerID string, options dockercontainer.RemoveOptions) error {
+			removedID = containerID
+			removeForced = options.Force
+			return nil
+		},
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, _, err := m.RunMultiPort(context.Background(), "test:latest", []string{"50051/tcp"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, startErr) {
+		t.Errorf("expected wrapped startErr, got: %v", err)
+	}
+	if removedID != testContainerID {
+		t.Errorf("remove called with %q, want %q", removedID, testContainerID)
+	}
+	if !removeForced {
+		t.Error("ContainerRemove should use Force=true on cleanup")
+	}
+}
+
+func TestRunMultiPortInspectError(t *testing.T) {
+	inspectErr := errors.New("inspect failed")
+	var stoppedID, removedID string
+	mock := &mockDockerAPI{
+		containerCreateFunc: func(_ context.Context, _ *dockercontainer.Config, _ *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+			return dockercontainer.CreateResponse{ID: testContainerID}, nil
+		},
+		containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+			return nil
+		},
+		containerInspectFunc: func(_ context.Context, _ string) (dockercontainer.InspectResponse, error) {
+			return dockercontainer.InspectResponse{}, inspectErr
+		},
+		containerStopFunc: func(_ context.Context, containerID string, _ dockercontainer.StopOptions) error {
+			stoppedID = containerID
+			return nil
+		},
+		containerRemoveFunc: func(_ context.Context, containerID string, _ dockercontainer.RemoveOptions) error {
+			removedID = containerID
+			return nil
+		},
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, _, err := m.RunMultiPort(context.Background(), "test:latest", []string{"50051/tcp"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, inspectErr) {
+		t.Errorf("expected wrapped inspectErr, got: %v", err)
+	}
+	if stoppedID != testContainerID {
+		t.Errorf("stop called with %q, want %q", stoppedID, testContainerID)
+	}
+	if removedID != testContainerID {
+		t.Errorf("remove called with %q, want %q", removedID, testContainerID)
+	}
+}
+
+func TestRunMultiPortExposedPorts(t *testing.T) {
+	var gotConfig *dockercontainer.Config
+	var gotHostConfig *dockercontainer.HostConfig
+	extraPorts := []string{"50051/tcp", "8443/tcp"}
+	mock := &mockDockerAPI{
+		containerCreateFunc: func(_ context.Context, config *dockercontainer.Config, hostConfig *dockercontainer.HostConfig, _ *dockernetwork.NetworkingConfig, _ *ocispec.Platform, _ string) (dockercontainer.CreateResponse, error) {
+			gotConfig = config
+			gotHostConfig = hostConfig
+			return dockercontainer.CreateResponse{ID: testContainerID}, nil
+		},
+		containerStartFunc: func(_ context.Context, _ string, _ dockercontainer.StartOptions) error {
+			return nil
+		},
+		containerInspectFunc: func(_ context.Context, _ string) (dockercontainer.InspectResponse, error) {
+			return inspectResponseMultiPort(testContainerID, map[nat.Port]string{
+				"8080/tcp":  "49152",
+				"50051/tcp": "54321",
+				"8443/tcp":  "54322",
+			}), nil
+		},
+		containerStopFunc: func(_ context.Context, _ string, _ dockercontainer.StopOptions) error {
+			return nil
+		},
+		containerRemoveFunc: func(_ context.Context, _ string, _ dockercontainer.RemoveOptions) error {
+			return nil
+		},
+	}
+
+	m := newManager(mock, nil, newTestLogger())
+	_, stop, err := m.RunMultiPort(context.Background(), "test:latest", extraPorts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer stop()
+
+	allPorts := []string{"8080/tcp", "50051/tcp", "8443/tcp"}
+	for _, p := range allPorts {
+		port := nat.Port(p)
+		if _, ok := gotConfig.ExposedPorts[port]; !ok {
+			t.Errorf("ExposedPorts missing %q", p)
+		}
+		bindings, ok := gotHostConfig.PortBindings[port]
+		if !ok || len(bindings) == 0 {
+			t.Errorf("PortBindings missing %q", p)
+			continue
+		}
+		if bindings[0].HostIP != "127.0.0.1" {
+			t.Errorf("PortBindings[%q].HostIP = %q, want %q", p, bindings[0].HostIP, "127.0.0.1")
+		}
+		if bindings[0].HostPort != "0" {
+			t.Errorf("PortBindings[%q].HostPort = %q, want %q", p, bindings[0].HostPort, "0")
+		}
 	}
 }
 
@@ -542,6 +809,92 @@ func TestWaitHealthyStatusCodes(t *testing.T) {
 				t.Errorf("status %d: healthy = %v, want %v", tc.status, healthy, tc.healthy)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WaitPort tests
+// ---------------------------------------------------------------------------
+
+func TestWaitPortImmediateSuccess(t *testing.T) {
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	m := newManager(nil, nil, newTestLogger())
+	if err := m.WaitPort(context.Background(), ln.Addr().String(), 5*time.Second); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWaitPortSuccessAfterRetries(t *testing.T) {
+	// Grab an ephemeral address by listening and immediately closing.
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	// Start a listener after 200ms — well before the first 1s ticker tick.
+	// Use separate channels so a listen failure is surfaced explicitly rather
+	// than causing WaitPort to time out with an opaque error.
+	listenErrCh := make(chan error, 1)
+	done := make(chan net.Listener, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		l, listenErr := lc.Listen(context.Background(), "tcp", addr)
+		if listenErr != nil {
+			listenErrCh <- listenErr
+			return
+		}
+		done <- l
+	}()
+
+	m := newManager(nil, nil, newTestLogger())
+	if err := m.WaitPort(context.Background(), addr, 5*time.Second); err != nil {
+		// Check whether the goroutine's Listen failed — that's the root cause.
+		select {
+		case listenErr := <-listenErrCh:
+			t.Fatalf("goroutine failed to listen on %s: %v", addr, listenErr)
+		default:
+		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case listenErr := <-listenErrCh:
+		t.Fatalf("goroutine failed to listen on %s: %v", addr, listenErr)
+	case l := <-done:
+		_ = l.Close()
+	}
+}
+
+func TestWaitPortContextTimeout(t *testing.T) {
+	// Listen then immediately close to get an address not accepting connections.
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	m := newManager(nil, nil, newTestLogger())
+	// 1500ms is long enough for at least one poll cycle but short enough not to slow CI.
+	err = m.WaitPort(context.Background(), addr, 1500*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errPortUnreachable) {
+		t.Errorf("expected errPortUnreachable, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), addr) {
+		t.Errorf("error should contain address %q, got: %v", addr, err)
 	}
 }
 

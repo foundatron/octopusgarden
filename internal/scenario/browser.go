@@ -135,7 +135,7 @@ func (e *BrowserExecutor) ensureBrowser() error {
 		return nil
 	}
 
-	base := make([]chromedp.ExecAllocatorOption, len(chromedp.DefaultExecAllocatorOptions))
+	base := make([]chromedp.ExecAllocatorOption, len(chromedp.DefaultExecAllocatorOptions), len(chromedp.DefaultExecAllocatorOptions)+3)
 	copy(base, chromedp.DefaultExecAllocatorOptions[:])
 	opts := append(base,
 		chromedp.Flag("no-sandbox", true),
