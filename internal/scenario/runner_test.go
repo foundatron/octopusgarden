@@ -90,6 +90,9 @@ func TestRunnerHappyPath(t *testing.T) {
 	if !strings.Contains(step.CaptureBody, `"id": 99`) {
 		t.Errorf("capture body missing expected content: %s", step.CaptureBody)
 	}
+	if step.Duration <= 0 {
+		t.Error("expected non-zero duration for executed step")
+	}
 }
 
 func TestRunnerVariableSubstitutionInBody(t *testing.T) {
@@ -268,8 +271,14 @@ func TestRunnerTransportErrorOnJudgedStep(t *testing.T) {
 	if result.Steps[0].Err == nil {
 		t.Error("expected error on first step")
 	}
+	if result.Steps[0].Duration <= 0 {
+		t.Error("expected non-zero duration for failed step")
+	}
 	if result.Steps[1].Err != nil {
 		t.Errorf("unexpected error on second step: %v", result.Steps[1].Err)
+	}
+	if result.Steps[1].Duration <= 0 {
+		t.Error("expected non-zero duration for succeeded step")
 	}
 }
 
@@ -906,5 +915,8 @@ func TestRunnerUnknownStepType(t *testing.T) {
 
 	if !errors.Is(result.Steps[0].Err, errUnknownStepType) {
 		t.Errorf("expected errUnknownStepType, got: %v", result.Steps[0].Err)
+	}
+	if result.Steps[0].Duration <= 0 {
+		t.Error("expected non-zero duration even for executor resolution failure")
 	}
 }

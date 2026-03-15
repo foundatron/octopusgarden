@@ -62,18 +62,19 @@ func (r *Runner) Run(ctx context.Context, scenario Scenario) (Result, error) {
 	// Execute judged steps — non-fatal on failure.
 	results := make([]StepResult, 0, len(scenario.Steps))
 	for i, step := range scenario.Steps {
+		start := time.Now()
 		executor, err := r.resolveExecutor(step)
 		if err != nil {
 			results = append(results, StepResult{
 				Description: step.Description,
 				StepType:    step.StepType(),
+				Duration:    time.Since(start),
 				Err:         err,
 			})
 			r.Logger.Warn("judged step executor error", "step", i, "description", step.Description, "error", err)
 			continue
 		}
 
-		start := time.Now()
 		output, err := r.executeStep(ctx, executor, step, vars)
 		dur := time.Since(start)
 
