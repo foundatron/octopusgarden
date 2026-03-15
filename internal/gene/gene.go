@@ -66,22 +66,29 @@ func Validate(g Gene) error {
 	return nil
 }
 
+// normalizeName returns s lowercased and with internal whitespace collapsed, trimmed.
+// "HTTP Handler" → "http handler", "  B  " → "b", "   " → "".
+func normalizeName(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
 // validateComponents checks for empty/duplicate names, missing dependencies, and dependency cycles.
 func validateComponents(components []Component) error {
 	names := make(map[string]bool, len(components))
 	for _, c := range components {
-		if c.Name == "" {
+		norm := normalizeName(c.Name)
+		if norm == "" {
 			return errEmptyComponentName
 		}
-		if names[c.Name] {
+		if names[norm] {
 			return fmt.Errorf("component %q: %w", c.Name, errDuplicateComponent)
 		}
-		names[c.Name] = true
+		names[norm] = true
 	}
 
 	for _, c := range components {
 		for _, dep := range c.DependsOn {
-			if !names[dep] {
+			if !names[normalizeName(dep)] {
 				return fmt.Errorf("component %q depends on %q: %w", c.Name, dep, errMissingDependency)
 			}
 		}
@@ -95,12 +102,16 @@ func validateComponents(components []Component) error {
 func detectComponentCycles(components []Component) error {
 	adj := make(map[string][]string, len(components))
 	for _, c := range components {
-		adj[c.Name] = c.DependsOn
+		normDeps := make([]string, len(c.DependsOn))
+		for i, dep := range c.DependsOn {
+			normDeps[i] = normalizeName(dep)
+		}
+		adj[normalizeName(c.Name)] = normDeps
 	}
 	visited := make(map[string]bool, len(components))
 	inStack := make(map[string]bool, len(components))
-	for _, c := range components {
-		if err := dfsComponentCycle(c.Name, nil, adj, visited, inStack); err != nil {
+	for name := range adj {
+		if err := dfsComponentCycle(name, nil, adj, visited, inStack); err != nil {
 			return err
 		}
 	}

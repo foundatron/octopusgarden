@@ -1123,6 +1123,8 @@ When the LLM response includes `**COMPONENT: <name>**` headers, `parseComponents
 component's `Interface`, `Patterns`, and `DependsOn` fields into `Component` structs stored on the
 `Gene`. `Validate` (via `validateComponents` + `detectComponentCycles`) enforces non-empty unique
 names, all declared dependencies exist, and the dependency graph is acyclic (DFS gray/black coloring).
+Name comparison is case-insensitive and whitespace-normalized (`normalizeName`: lowercase + collapse
+internal spaces + trim); whitespace-only names are rejected as empty.
 
 [embedmd]:# (../internal/gene/gene.go go /^\/\/ Component represents/ /^}/)
 ```go

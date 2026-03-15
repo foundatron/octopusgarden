@@ -290,6 +290,48 @@ func TestValidateComponents(t *testing.T) {
 			components: []Component{{Name: "A"}, {Name: "B"}},
 			wantErr:    nil,
 		},
+		{
+			name: "case_insensitive_dep",
+			components: []Component{
+				{Name: "A", DependsOn: []string{"b"}},
+				{Name: "B"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "whitespace_variant_dep",
+			components: []Component{
+				{Name: "HTTP Handler", DependsOn: []string{"data store"}},
+				{Name: "Data Store"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "extra_whitespace_dep",
+			components: []Component{
+				{Name: "A", DependsOn: []string{"  B  "}},
+				{Name: "B"},
+			},
+			wantErr: nil,
+		},
+		{
+			name:       "duplicate_name_case_insensitive",
+			components: []Component{{Name: "Store"}, {Name: "store"}},
+			wantErr:    errDuplicateComponent,
+		},
+		{
+			name: "cycle_case_insensitive",
+			components: []Component{
+				{Name: "A", DependsOn: []string{"b"}},
+				{Name: "B", DependsOn: []string{"a"}},
+			},
+			wantErr: errDependencyCycle,
+		},
+		{
+			name:       "whitespace_only_name",
+			components: []Component{{Name: "   "}},
+			wantErr:    errEmptyComponentName,
+		},
 	}
 
 	for _, tt := range tests {
