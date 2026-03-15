@@ -538,9 +538,11 @@ satisfaction_criteria: |
 ```
 
 `weight` defaults to 1.0 in aggregate scoring when not set. `tier` is auto-inferred by `inferTier`
-in `loader.go` when not set (zero): >6 judged steps or ≥3 steps with captures → 3 (complex); >3
-judged steps or ≥1 step with captures → 2 (moderate); else → 1 (simple). The `octog lint` checker
-warns if `tier` is explicitly set outside the 1–3 range.
+in `loader.go` when not set (zero). Scoring: each step adds +1 base; `browser`, `grpc`, or `ws`
+steps add +1 extra; a gRPC step with `stream` or a WS step with `receive` adds +1 extra; a step
+with `retry` adds +1 extra; mixed step types (>1 unique type) add +2 flat. Thresholds: score >6 or
+≥3 steps with captures → 3 (complex); score >3 or ≥1 step with captures → 2 (moderate); else → 1
+(simple). The `octog lint` checker warns if `tier` is explicitly set outside the 1–3 range.
 
 #### gRPC Step
 

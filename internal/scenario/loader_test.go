@@ -228,6 +228,20 @@ func TestTierInference(t *testing.T) {
 		}
 		return steps
 	}
+	makeStepOfType := func(stepType string) Step {
+		switch stepType {
+		case "browser":
+			return Step{Browser: &BrowserRequest{Action: "navigate"}}
+		case "grpc":
+			return Step{GRPC: &GRPCRequest{Service: "svc", Method: "M"}}
+		case "ws":
+			return Step{WS: &WSRequest{URL: "/ws"}}
+		case "exec":
+			return Step{Exec: &ExecRequest{Command: "echo"}}
+		default:
+			return Step{Request: &Request{Method: "GET", Path: "/"}}
+		}
+	}
 
 	// Explicit tier round-trips through YAML without inference.
 	t.Run("explicit tier round-trips", func(t *testing.T) {
@@ -270,6 +284,69 @@ func TestTierInference(t *testing.T) {
 			name:     "3 steps 3 captures -> tier 3",
 			scenario: Scenario{ID: "t", Steps: makeStepsWithCaptures(3, 3)},
 			wantTier: 3,
+		},
+		// Weighted complexity cases.
+		{
+			// 2x browser: score = 2*(1+1) = 4 > 3 → tier 2
+			name:     "2 browser steps no captures",
+			scenario: Scenario{ID: "t", Steps: []Step{makeStepOfType("browser"), makeStepOfType("browser")}},
+			wantTier: 2,
+		},
+		{
+			// 1x grpc+stream: score = 1+1+1 = 3 ≤ 3 → tier 1
+			name: "1 grpc streaming step no captures",
+			scenario: Scenario{ID: "t", Steps: []Step{
+				{GRPC: &GRPCRequest{Service: "svc", Method: "M", Stream: &GRPCStream{}}},
+			}},
+			wantTier: 1,
+		},
+		{
+			// 2x grpc+stream, 1 capture: score = 2*(1+1+1) = 6 ≤ 6, captures=1 ≥ 1 → tier 2
+			name: "2 grpc streaming steps 1 capture",
+			scenario: Scenario{ID: "t", Steps: []Step{
+				{GRPC: &GRPCRequest{Service: "svc", Method: "M", Stream: &GRPCStream{}}, Capture: []Capture{{Name: "x", JSONPath: "$.id"}}},
+				{GRPC: &GRPCRequest{Service: "svc", Method: "M", Stream: &GRPCStream{}}},
+			}},
+			wantTier: 2,
+		},
+		{
+			// 2x http with retry: score = 2*(1+1) = 4 > 3 → tier 2
+			name: "2 steps with retry no captures",
+			scenario: Scenario{ID: "t", Steps: []Step{
+				{Request: &Request{Method: "GET", Path: "/"}, Retry: &Retry{Attempts: 3}},
+				{Request: &Request{Method: "GET", Path: "/"}, Retry: &Retry{Attempts: 3}},
+			}},
+			wantTier: 2,
+		},
+		{
+			// 1 http + 1 browser + 1 exec: base=3, browser extra=1, mixed bonus=2 → score=6 ≤ 6 → tier 2 (captures=0 but score>3)
+			name: "3 mixed types no captures",
+			scenario: Scenario{ID: "t", Steps: []Step{
+				makeStepOfType("request"),
+				makeStepOfType("browser"),
+				makeStepOfType("exec"),
+			}},
+			wantTier: 2,
+		},
+		{
+			// 1x ws with receive: score = 1+1+1 = 3 ≤ 3 → tier 1
+			name: "1 ws with receive no captures",
+			scenario: Scenario{ID: "t", Steps: []Step{
+				{WS: &WSRequest{URL: "/ws", Receive: &WSReceive{Count: 1}}},
+			}},
+			wantTier: 1,
+		},
+		{
+			// 4x http: score = 4 > 3 → tier 2
+			name:     "4 http steps no captures",
+			scenario: Scenario{ID: "t", Steps: makeSteps(4)},
+			wantTier: 2,
+		},
+		{
+			// 2x http: score = 2 ≤ 3 → tier 1
+			name:     "2 http steps no captures",
+			scenario: Scenario{ID: "t", Steps: makeSteps(2)},
+			wantTier: 1,
 		},
 	}
 
