@@ -28,11 +28,12 @@ steps:
     expect: "Status 200. Value is 'goes away'. expires_at is a non-null ISO timestamp."
 
   - description: Wait for expiration and verify key is gone
+    delay: "3s"
     request:
       method: GET
       path: /kv/ephemeral
     retry:
-      attempts: 5
+      attempts: 3
       interval: "1s"
     expect: "Status 404. The key should have expired."
 
