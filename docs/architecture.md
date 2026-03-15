@@ -1121,10 +1121,13 @@ guide → the guide is stored as a `Gene` JSON file.
 
 When the LLM response includes `**COMPONENT: <name>**` headers, `parseComponents` extracts each
 component's `Interface`, `Patterns`, and `DependsOn` fields into `Component` structs stored on the
-`Gene`. `Validate` (via `validateComponents` + `detectComponentCycles`) enforces non-empty unique
-names, all declared dependencies exist, and the dependency graph is acyclic (DFS gray/black coloring).
-Name comparison is case-insensitive and whitespace-normalized (`normalizeName`: lowercase + collapse
-internal spaces + trim); whitespace-only names are rejected as empty.
+`Gene`. Field values may appear on the same line (`Interface: desc`) or the following line
+(`Interface:\n  desc`) -- `applyComponentField` signals a pending field via its `pendingField` return
+value, and `applyPendingLine` fills it from the continuation line. `Validate` (via
+`validateComponents` + `detectComponentCycles`) enforces non-empty unique names, all declared
+dependencies exist, and the dependency graph is acyclic (DFS gray/black coloring). Name comparison is
+case-insensitive and whitespace-normalized (`normalizeName`: lowercase + collapse internal spaces +
+trim); whitespace-only names are rejected as empty.
 
 [embedmd]:# (../internal/gene/gene.go go /^\/\/ Component represents/ /^}/)
 ```go

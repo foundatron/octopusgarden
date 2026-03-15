@@ -210,6 +210,35 @@ func TestParseComponents(t *testing.T) {
 			guide: "**COMPONENT: F**\nInterface: foo\nPatterns: pattern one\n**BUILD** — go build ./cmd/...",
 			want:  []Component{{Name: "F", Interface: "foo", Patterns: "pattern one"}},
 		},
+		{
+			name:  "interface_on_next_line",
+			guide: "**COMPONENT: A**\nInterface:\n  SomeDescription\nPatterns: p\nDependsOn: none",
+			want:  []Component{{Name: "A", Interface: "SomeDescription", Patterns: "p", DependsOn: nil}},
+		},
+		{
+			name:  "dependson_on_next_line",
+			guide: "**COMPONENT: B**\nInterface: foo\nPatterns: p\nDependsOn:\n  Service, Repo",
+			want:  []Component{{Name: "B", Interface: "foo", Patterns: "p", DependsOn: []string{"Service", "Repo"}}},
+		},
+		{
+			name:  "all_fields_on_next_line",
+			guide: "**COMPONENT: C**\nInterface:\n  desc\nPatterns:\npattern1\nDependsOn:\n  X",
+			want:  []Component{{Name: "C", Interface: "desc", Patterns: "pattern1", DependsOn: []string{"X"}}},
+		},
+		{
+			name: "mixed_same_and_next_line",
+			guide: "**COMPONENT: G**\nInterface: inline\nPatterns: p\nDependsOn: none\n" +
+				"**COMPONENT: H**\nInterface:\n  nextline\nPatterns: p\nDependsOn: none",
+			want: []Component{
+				{Name: "G", Interface: "inline", Patterns: "p", DependsOn: nil},
+				{Name: "H", Interface: "nextline", Patterns: "p", DependsOn: nil},
+			},
+		},
+		{
+			name:  "pending_field_cleared_by_next_field",
+			guide: "**COMPONENT: D**\nInterface:\nPatterns: foo\nDependsOn: none",
+			want:  []Component{{Name: "D", Interface: "", Patterns: "foo", DependsOn: nil}},
+		},
 	}
 
 	for _, tt := range tests {
