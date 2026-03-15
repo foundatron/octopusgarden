@@ -99,21 +99,57 @@ func parseScenario(data []byte) (Scenario, error) {
 	return s, nil
 }
 
-// inferTier assigns a difficulty tier based on step count and capture usage.
-// Tier 3: more than 6 judged steps, or 3+ steps with captures.
-// Tier 2: more than 3 judged steps, or at least 1 step with captures.
+// inferTier assigns a difficulty tier based on weighted complexity scoring.
+//
+// Scoring:
+//   - Each step: +1 base
+//   - browser, grpc, or ws step type: +1 extra per step
+//   - gRPC step with Stream set: +1 extra
+//   - WS step with Receive set: +1 extra
+//   - Step with Retry set: +1 extra
+//   - Mixed step types (>1 unique type across all steps): +2 flat bonus
+//   - 3+ steps with captures: tier 3 regardless of score
+//
+// Tier 3: score >6 or ≥3 steps with captures.
+// Tier 2: score >3 or ≥1 step with captures.
 // Tier 1: everything else.
 func inferTier(s Scenario) int {
 	stepsWithCaptures := 0
+	score := 0
+	types := make(map[string]struct{})
+
 	for _, step := range s.Steps {
 		if len(step.Capture) > 0 {
 			stepsWithCaptures++
 		}
+		score++ // base
+
+		t := step.StepType()
+		types[t] = struct{}{}
+
+		switch t {
+		case "browser", "grpc", "ws":
+			score++
+		}
+		if step.GRPC != nil && step.GRPC.Stream != nil {
+			score++
+		}
+		if step.WS != nil && step.WS.Receive != nil {
+			score++
+		}
+		if step.Retry != nil {
+			score++
+		}
 	}
+
+	if len(types) > 1 {
+		score += 2
+	}
+
 	switch {
-	case len(s.Steps) > 6 || stepsWithCaptures >= 3:
+	case score > 6 || stepsWithCaptures >= 3:
 		return 3
-	case len(s.Steps) > 3 || stepsWithCaptures >= 1:
+	case score > 3 || stepsWithCaptures >= 1:
 		return 2
 	default:
 		return 1
