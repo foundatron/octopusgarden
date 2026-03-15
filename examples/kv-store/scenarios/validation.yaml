@@ -1,0 +1,32 @@
+id: validation
+description: Key validation rejects invalid keys
+type: functional
+tier: 2
+satisfaction_criteria: Invalid keys are rejected with 400 and an error message
+
+steps:
+  - description: Key with spaces
+    request:
+      method: PUT
+      path: /kv/bad%20key
+      body:
+        value: "test"
+    expect: "Status 400. Response has an error field explaining the key is invalid."
+
+  - description: Empty value is allowed
+    request:
+      method: PUT
+      path: /kv/valid-key
+      body:
+        value: null
+    expect: "Status 201. Response has key 'valid-key' and value null."
+
+  - description: JSON object as value
+    request:
+      method: PUT
+      path: /kv/object-val
+      body:
+        value:
+          nested: true
+          count: 42
+    expect: "Status 201. Response has value that is a JSON object with nested=true and count=42."

@@ -53,6 +53,10 @@ htmlcov/
 .pytype/
 .ruff_cache/
 
+# Test artifacts
+manual_testing/
+e2e-results/
+
 # Environment
 .env
 .envrc

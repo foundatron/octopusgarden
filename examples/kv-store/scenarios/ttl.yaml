@@ -1,0 +1,49 @@
+id: ttl
+description: TTL expiration behavior
+type: functional
+tier: 3
+satisfaction_criteria: Records with TTL expire and are excluded from GET and list
+weight: 1.5
+
+setup:
+  - description: Create a persistent key
+    request:
+      method: PUT
+      path: /kv/persistent
+      body:
+        value: "stays"
+  - description: Create a key with 2 second TTL
+    request:
+      method: PUT
+      path: /kv/ephemeral
+      body:
+        value: "goes away"
+        ttl: 2
+
+steps:
+  - description: Verify TTL key exists immediately
+    request:
+      method: GET
+      path: /kv/ephemeral
+    expect: "Status 200. Value is 'goes away'. expires_at is a non-null ISO timestamp."
+
+  - description: Wait for expiration and verify key is gone
+    request:
+      method: GET
+      path: /kv/ephemeral
+    retry:
+      attempts: 5
+      interval: "1s"
+    expect: "Status 404. The key should have expired."
+
+  - description: Persistent key still exists
+    request:
+      method: GET
+      path: /kv/persistent
+    expect: "Status 200. Value is 'stays'. expires_at is null."
+
+  - description: Expired key excluded from list
+    request:
+      method: GET
+      path: /kv?prefix=ephemeral
+    expect: "Status 200. Keys array is empty or does not contain 'ephemeral'. Count is 0."

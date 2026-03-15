@@ -1,0 +1,46 @@
+id: basic-crud
+description: Basic put, get, and delete operations
+type: functional
+tier: 1
+satisfaction_criteria: Core CRUD operations work with correct status codes and response bodies
+
+steps:
+  - description: Set a key-value pair
+    request:
+      method: PUT
+      path: /kv/test-key
+      body:
+        value: "hello world"
+    expect: "Status 201. Response has key 'test-key', value 'hello world', created_at as ISO timestamp, and expires_at is null."
+
+  - description: Get the value back
+    request:
+      method: GET
+      path: /kv/test-key
+    expect: "Status 200. Response has key 'test-key' and value 'hello world'."
+
+  - description: Overwrite the key
+    request:
+      method: PUT
+      path: /kv/test-key
+      body:
+        value: "updated"
+    expect: "Status 201. Response has key 'test-key' and value 'updated'."
+
+  - description: Verify overwrite persisted
+    request:
+      method: GET
+      path: /kv/test-key
+    expect: "Status 200. Value is 'updated', not 'hello world'."
+
+  - description: Delete the key
+    request:
+      method: DELETE
+      path: /kv/test-key
+    expect: "Status 204."
+
+  - description: Verify deletion
+    request:
+      method: GET
+      path: /kv/test-key
+    expect: "Status 404."

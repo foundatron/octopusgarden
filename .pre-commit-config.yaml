@@ -55,6 +55,21 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  # ── Shell scripts ──────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        language: system
+        entry: shellcheck
+        types: [shell]
+
+      - id: shfmt
+        name: shfmt
+        language: system
+        entry: shfmt -i 4 -ci -w
+        types: [shell]
+
   # ── GitHub Actions ───────────────────────────────────────────────────────────
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.11

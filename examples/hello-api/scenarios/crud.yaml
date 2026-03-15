@@ -1,6 +1,7 @@
 id: crud
 description: Create, read, update, and delete an item
 type: functional
+tier: 1
 satisfaction_criteria: All CRUD operations return correct status codes and response bodies
 
 setup:

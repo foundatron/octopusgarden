@@ -1,0 +1,12 @@
+id: health
+description: Health check endpoint returns ok
+type: functional
+tier: 1
+satisfaction_criteria: Health endpoint returns 200 with status ok
+
+steps:
+  - description: Check health
+    request:
+      method: GET
+      path: /health
+    expect: "Status 200. Response body contains status 'ok'."
