@@ -29,7 +29,8 @@ Create or overwrite a record.
 Retrieve a record by key.
 
 - Response: `200 OK` with the record JSON
-- If not found or expired: `404 Not Found`
+- If not found: `404 Not Found`
+- If the key exists but `expires_at` is non-null and in the past: return `404 Not Found`
 
 ### DELETE /kv/{key}
 
@@ -40,7 +41,7 @@ Delete a record.
 
 ### GET /kv
 
-List all non-expired keys.
+List keys. Exclude any key whose `expires_at` is non-null and in the past.
 
 - Query parameters:
   - `prefix` -- string, optional, filter keys by prefix
