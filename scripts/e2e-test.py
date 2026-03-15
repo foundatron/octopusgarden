@@ -4,8 +4,10 @@
 Runs attractor loop convergence across multiple specs, languages, and modes.
 Finds real issues that cheaper tests miss (TTL gaps, build failures, etc.).
 
+Tests within each suite run in parallel (controlled by E2E_PARALLEL, default 4).
+
 Typical cost: $1-3 depending on configuration
-Typical time: 5-15 minutes
+Typical time: 2-5 minutes with parallelism
 
 Usage: ./scripts/e2e-test.py              # run all suites
        ./scripts/e2e-test.py basic         # run only basic suite
@@ -20,12 +22,15 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 BINARY = "./octog"
 BUDGET = os.environ.get("E2E_BUDGET", "3")
 THRESHOLD = os.environ.get("E2E_THRESHOLD", "95")
 RESULTS_DIR = Path(os.environ.get("E2E_RESULTS_DIR", "e2e-results"))
+PARALLEL = int(os.environ.get("E2E_PARALLEL", "4"))
 
 AVAILABLE_SUITES = ("validate", "basic", "stratified", "modes", "multilang")
 
@@ -40,49 +45,72 @@ BOLD = "\033[1m" if _is_tty else ""
 RESET = "\033[0m" if _is_tty else ""
 
 
+@dataclass
+class TestResult:
+    name: str
+    kind: str  # "convergence" or "validate"
+    status: str
+    iterations: str
+    satisfaction: str
+    cost: str
+    score: float = 0.0
+    cost_f: float = 0.0
+
+
 class Results:
     def __init__(self) -> None:
         self.passed = 0
         self.failed = 0
         self.total_cost = 0.0
-        self.run_results: dict[str, RunResult] = {}
+        self.failed_runs: list[TestResult] = []
 
-    def record_convergence(
-        self,
-        name: str,
-        *,
-        status: str,
-        iterations: str,
-        satisfaction: str,
-        cost: str,
-    ) -> None:
-        cost_f = _safe_float(cost)
-        self.total_cost += cost_f
-        self.run_results[name] = RunResult(status, iterations, satisfaction, cost)
+    def record(self, tr: TestResult) -> None:
+        tr.cost_f = _safe_float(tr.cost)
+        self.total_cost += tr.cost_f
 
-        if status == "converged":
+        if tr.kind == "convergence":
+            self._print_convergence(tr)
+        else:
+            self._print_validate(tr)
+
+    def _print_convergence(self, tr: TestResult) -> None:
+        if tr.status == "converged":
             self.passed += 1
             print(
-                f"{GREEN}converged{RESET}  {satisfaction}%  {iterations} iters  ${cost}"
+                f"  {tr.name:<40s} "
+                f"{GREEN}converged{RESET}  {tr.satisfaction}%  "
+                f"{tr.iterations} iters  ${tr.cost}"
             )
-        elif status == "stalled":
+        elif tr.status == "stalled":
             self.failed += 1
+            self.failed_runs.append(tr)
             print(
-                f"{RED}stalled{RESET}    {satisfaction}%  {iterations} iters  ${cost}"
+                f"  {tr.name:<40s} "
+                f"{RED}stalled{RESET}    {tr.satisfaction}%  "
+                f"{tr.iterations} iters  ${tr.cost}"
             )
         else:
             self.failed += 1
-            print(f"{RED}error{RESET}      (see {RESULTS_DIR}/{name}.log)")
+            self.failed_runs.append(tr)
+            print(
+                f"  {tr.name:<40s} "
+                f"{RED}error{RESET}      (see {RESULTS_DIR}/{tr.name}.log)"
+            )
 
-    def record_validate(self, name: str, *, score: float, cost: float) -> None:
-        self.total_cost += cost
+    def _print_validate(self, tr: TestResult) -> None:
         threshold = float(THRESHOLD)
-        if score >= threshold:
+        if tr.score >= threshold:
             self.passed += 1
-            print(f"{GREEN}pass{RESET}       {score}%  ${cost:.4f}")
+            print(
+                f"  {tr.name:<40s} "
+                f"{GREEN}pass{RESET}       {tr.score}%  ${tr.cost_f:.4f}"
+            )
         else:
             self.failed += 1
-            print(f"{RED}fail{RESET}       {score}%  ${cost:.4f}")
+            self.failed_runs.append(tr)
+            print(
+                f"  {tr.name:<40s} {RED}fail{RESET}       {tr.score}%  ${tr.cost_f:.4f}"
+            )
 
     def summary(self) -> int:
         header("Summary")
@@ -93,28 +121,18 @@ class Results:
         )
         print(f"Total cost: ${self.total_cost:.4f}")
         print(f"Results: {RESULTS_DIR}/")
-        if self.failed > 0:
+        if self.failed_runs:
             print("\nFailed runs:")
-            for name, rr in self.run_results.items():
-                if rr.status != "converged":
+            for tr in self.failed_runs:
+                if tr.kind == "convergence":
                     print(
-                        f"  {RED}{name}{RESET}: {rr.status} at {rr.satisfaction}% "
-                        f"({rr.iterations} iters, ${rr.cost})"
+                        f"  {RED}{tr.name}{RESET}: {tr.status} at {tr.satisfaction}% "
+                        f"({tr.iterations} iters, ${tr.cost})"
                     )
-                    print(f"    Log: {RESULTS_DIR}/{name}.log")
-        return 1 if self.failed > 0 else 0
-
-
-class RunResult:
-    __slots__ = ("status", "iterations", "satisfaction", "cost")
-
-    def __init__(
-        self, status: str, iterations: str, satisfaction: str, cost: str
-    ) -> None:
-        self.status = status
-        self.iterations = iterations
-        self.satisfaction = satisfaction
-        self.cost = cost
+                else:
+                    print(f"  {RED}{tr.name}{RESET}: {tr.score}%")
+                print(f"    Log: {RESULTS_DIR}/{tr.name}.log")
+        return 1 if self.failed_runs else 0
 
 
 def _safe_float(s: str) -> float:
@@ -129,20 +147,18 @@ def header(title: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test runners
+# Test runners (return TestResult, no printing -- safe for threads)
 # ---------------------------------------------------------------------------
 
 
-def run_convergence(
-    r: Results,
+def _run_convergence(
     name: str,
     spec: str,
     scenarios: str,
     extra_flags: list[str] | None = None,
-) -> None:
-    """Run a convergence loop and record the result."""
+) -> TestResult:
+    """Run a convergence loop and return the result."""
     outfile = RESULTS_DIR / f"{name}.log"
-    print(f"  {name:<40s} ", end="", flush=True)
 
     cmd = [
         BINARY,
@@ -164,37 +180,30 @@ def run_convergence(
     with open(outfile, "w") as f:
         subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, text=True)
 
-    # Parse result from log
     log_text = outfile.read_text()
 
     def _extract(pattern: str, default: str = "0") -> str:
         m = re.search(pattern, log_text)
         return m.group(1) if m else default
 
-    status = _extract(r"Status:\s+(\S+)", "error")
-    iterations = _extract(r"Iterations:\s+(\d+)")
-    satisfaction = _extract(r"Satisfaction:\s+([\d.]+)")
-    cost = _extract(r"Cost:\s+\$([\d.]+)")
-
-    r.record_convergence(
-        name,
-        status=status,
-        iterations=iterations,
-        satisfaction=satisfaction,
-        cost=cost,
+    return TestResult(
+        name=name,
+        kind="convergence",
+        status=_extract(r"Status:\s+(\S+)", "error"),
+        iterations=_extract(r"Iterations:\s+(\d+)"),
+        satisfaction=_extract(r"Satisfaction:\s+([\d.]+)"),
+        cost=_extract(r"Cost:\s+\$([\d.]+)"),
     )
 
 
-def run_validate(
-    r: Results,
+def _run_validate(
     name: str,
     scenarios: str,
     code: str,
     extra_flags: list[str] | None = None,
-) -> None:
-    """Run validation against an existing codebase."""
+) -> TestResult:
+    """Run validation against an existing codebase and return the result."""
     outfile = RESULTS_DIR / f"{name}.log"
-    print(f"  {name:<40s} ", end="", flush=True)
 
     cmd = [
         BINARY,
@@ -210,12 +219,13 @@ def run_validate(
         *(extra_flags or []),
     ]
 
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=open(outfile, "w"),  # noqa: SIM115
-        text=True,
-    )
+    with open(outfile, "w") as f_err:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=f_err,
+            text=True,
+        )
 
     score = 0.0
     cost = 0.0
@@ -227,7 +237,33 @@ def run_validate(
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
-    r.record_validate(name, score=score, cost=cost)
+    return TestResult(
+        name=name,
+        kind="validate",
+        status="pass" if score >= float(THRESHOLD) else "fail",
+        iterations="0",
+        satisfaction=str(score),
+        cost=f"{cost:.4f}",
+        score=score,
+    )
+
+
+def _run_parallel(tasks: list[tuple], r: Results) -> None:
+    """Run tasks in parallel and record results in submission order."""
+    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+        future_to_idx = {}
+        for idx, (fn, *args) in enumerate(tasks):
+            future = pool.submit(fn, *args)
+            future_to_idx[future] = idx
+
+        # Collect results, then print in original order
+        results_by_idx: dict[int, TestResult] = {}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results_by_idx[idx] = future.result()
+
+    for idx in sorted(results_by_idx):
+        r.record(results_by_idx[idx])
 
 
 # ---------------------------------------------------------------------------
@@ -239,14 +275,22 @@ def suite_basic(r: Results) -> None:
     header("Basic Convergence")
     print("Simple convergence on bundled examples.")
 
-    run_convergence(
+    _run_parallel(
+        [
+            (
+                _run_convergence,
+                "hello-api-basic",
+                "examples/hello-api/spec.md",
+                "examples/hello-api/scenarios/",
+            ),
+            (
+                _run_convergence,
+                "todo-app-basic",
+                "examples/todo-app/spec.md",
+                "examples/todo-app/scenarios/",
+            ),
+        ],
         r,
-        "hello-api-basic",
-        "examples/hello-api/spec.md",
-        "examples/hello-api/scenarios/",
-    )
-    run_convergence(
-        r, "todo-app-basic", "examples/todo-app/spec.md", "examples/todo-app/scenarios/"
     )
 
 
@@ -254,19 +298,24 @@ def suite_stratified(r: Results) -> None:
     header("Stratified Convergence")
     print("Tier-based progressive validation.")
 
-    run_convergence(
+    _run_parallel(
+        [
+            (
+                _run_convergence,
+                "hello-api-stratified",
+                "examples/hello-api/spec.md",
+                "examples/hello-api/scenarios/",
+                ["--stratified"],
+            ),
+            (
+                _run_convergence,
+                "kv-store-stratified",
+                "examples/kv-store/spec.md",
+                "examples/kv-store/scenarios/",
+                ["--stratified"],
+            ),
+        ],
         r,
-        "hello-api-stratified",
-        "examples/hello-api/spec.md",
-        "examples/hello-api/scenarios/",
-        ["--stratified"],
-    )
-    run_convergence(
-        r,
-        "kv-store-stratified",
-        "examples/kv-store/spec.md",
-        "examples/kv-store/scenarios/",
-        ["--stratified"],
     )
 
 
@@ -274,15 +323,7 @@ def suite_modes(r: Results) -> None:
     header("Generation Modes")
     print("Agentic, patch, and gene-transfused generation.")
 
-    run_convergence(
-        r,
-        "hello-api-agentic",
-        "examples/hello-api/spec.md",
-        "examples/hello-api/scenarios/",
-        ["--agentic"],
-    )
-
-    # Gene transfusion: extract then run
+    # Gene extraction must happen before the gene convergence run
     gene_file = str(RESULTS_DIR / "genes-go-rest.json")
     subprocess.run(
         [
@@ -297,20 +338,31 @@ def suite_modes(r: Results) -> None:
         stderr=subprocess.DEVNULL,
     )
 
-    run_convergence(
+    _run_parallel(
+        [
+            (
+                _run_convergence,
+                "hello-api-agentic",
+                "examples/hello-api/spec.md",
+                "examples/hello-api/scenarios/",
+                ["--agentic"],
+            ),
+            (
+                _run_convergence,
+                "hello-api-genes",
+                "examples/hello-api/spec.md",
+                "examples/hello-api/scenarios/",
+                ["-genes", gene_file],
+            ),
+            (
+                _run_convergence,
+                "sensor-telemetry-patch",
+                "examples/sensor-telemetry/spec.md",
+                "examples/sensor-telemetry/scenarios/",
+                ["--patch"],
+            ),
+        ],
         r,
-        "hello-api-genes",
-        "examples/hello-api/spec.md",
-        "examples/hello-api/scenarios/",
-        ["-genes", gene_file],
-    )
-
-    run_convergence(
-        r,
-        "sensor-telemetry-patch",
-        "examples/sensor-telemetry/spec.md",
-        "examples/sensor-telemetry/scenarios/",
-        ["--patch"],
     )
 
 
@@ -321,9 +373,20 @@ def suite_multilang(r: Results) -> None:
     spec = "examples/kv-store/spec.md"
     scenarios = "examples/kv-store/scenarios/"
 
-    run_convergence(r, "kv-store-go", spec, scenarios, ["-language", "go"])
-    run_convergence(r, "kv-store-python", spec, scenarios, ["-language", "python"])
-    run_convergence(r, "kv-store-node", spec, scenarios, ["-language", "node"])
+    _run_parallel(
+        [
+            (_run_convergence, "kv-store-go", spec, scenarios, ["-language", "go"]),
+            (
+                _run_convergence,
+                "kv-store-python",
+                spec,
+                scenarios,
+                ["-language", "python"],
+            ),
+            (_run_convergence, "kv-store-node", spec, scenarios, ["-language", "node"]),
+        ],
+        r,
+    )
 
 
 def suite_validate(r: Results) -> None:
@@ -331,9 +394,30 @@ def suite_validate(r: Results) -> None:
     print("Validate exemplar codebases against scenarios.")
 
     scenarios = "examples/hello-api/scenarios/"
-    run_validate(r, "go-rest-validate", scenarios, "examples/exemplars/go-rest")
-    run_validate(r, "python-rest-validate", scenarios, "examples/exemplars/python-rest")
-    run_validate(r, "node-rest-validate", scenarios, "examples/exemplars/node-rest")
+
+    _run_parallel(
+        [
+            (
+                _run_validate,
+                "go-rest-validate",
+                scenarios,
+                "examples/exemplars/go-rest",
+            ),
+            (
+                _run_validate,
+                "python-rest-validate",
+                scenarios,
+                "examples/exemplars/python-rest",
+            ),
+            (
+                _run_validate,
+                "node-rest-validate",
+                scenarios,
+                "examples/exemplars/node-rest",
+            ),
+        ],
+        r,
+    )
 
 
 SUITE_MAP = {
@@ -355,6 +439,7 @@ def main() -> None:
     print("================================")
     print(f"Budget per run: ${BUDGET}")
     print(f"Threshold: {THRESHOLD}%")
+    print(f"Parallelism: {PARALLEL}")
     print()
 
     # Build if needed
