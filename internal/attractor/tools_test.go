@@ -274,6 +274,65 @@ func TestAgentToolHandler(t *testing.T) {
 	})
 }
 
+func TestResolveContained(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		rel     string
+		wantErr bool
+	}{
+		{"simple relative", "main.go", false},
+		{"nested", "a/b/c.go", false},
+		{"traversal ../", "../escape.txt", true},
+		{"deep traversal", "../../../etc/passwd", true},
+		// Absolute paths are absorbed by filepath.Join (e.g. filepath.Join(iterDir, "/etc/passwd")
+		// = iterDir+"/etc/passwd"). validatePath catches absolute paths at the tool handler layer
+		// before resolveContained is called; resolveContained itself does not reject them.
+		{"absolute /etc/passwd absorbed", "/etc/passwd", false},
+		// resolveContained allows abs == iterDir (e.g. "."), unlike writeOneFile which rejects it.
+		// Writing a directory as a file makes no sense, so writeOneFile rejects it; listing the
+		// current directory does make sense, so resolveContained permits it.
+		{"dot", ".", false},
+		{"empty string", "", false},
+		{"dot-dot cleans inside", "a/b/../../c.go", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHandler(t)
+			abs, err := h.resolveContained(tc.rel)
+			if tc.wantErr {
+				if !errors.Is(err, errPathTraversal) {
+					t.Errorf("error = %v, want errPathTraversal", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if abs == "" {
+				t.Error("returned empty path on success")
+			}
+		})
+	}
+
+	t.Run("prefix attack", func(t *testing.T) {
+		// Verify the separator prevents a directory whose name is a prefix of iterDir
+		// from passing the containment check.
+		parent := t.TempDir()
+		iterDir := filepath.Join(parent, "base")
+		if err := os.MkdirAll(iterDir, 0o750); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		h, err := newAgentToolHandler(iterDir, nil)
+		if err != nil {
+			t.Fatalf("newAgentToolHandler: %v", err)
+		}
+		// ../base-evil/file.go resolves to parent/base-evil/file.go.
+		_, gotErr := h.resolveContained("../base-evil/file.go")
+		if !errors.Is(gotErr, errPathTraversal) {
+			t.Errorf("error = %v, want errPathTraversal", gotErr)
+		}
+	})
+}
+
 // nonEmptyLines splits s by newline and returns non-empty lines.
 func nonEmptyLines(s string) []string {
 	if s == "" {
