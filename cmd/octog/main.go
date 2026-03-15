@@ -29,6 +29,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/lint"
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/observability"
+	"github.com/foundatron/octopusgarden/internal/paths"
 	"github.com/foundatron/octopusgarden/internal/preflight"
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/spec"
@@ -46,9 +47,9 @@ var (
 	errSpecAndScenariosRequired   = errors.New("--spec and --scenarios are required")
 	errScenariosAndTargetRequired = errors.New("--scenarios and either --target or --code are required")
 	errCodeAndTargetConflict      = errors.New("--code and --target are mutually exclusive")
-	errMissingAnthropicKey        = errors.New("ANTHROPIC_API_KEY not set (use env var or ~/.octopusgarden/config)")
-	errMissingOpenAIKey           = errors.New("OPENAI_API_KEY not set (use env var or ~/.octopusgarden/config)")
-	errNoAPIKey                   = errors.New("no API key found: set ANTHROPIC_API_KEY or OPENAI_API_KEY (or use ~/.octopusgarden/config)")
+	errMissingAnthropicKey        = errors.New("ANTHROPIC_API_KEY not set (use env var, config file, or `octog configure`)")
+	errMissingOpenAIKey           = errors.New("OPENAI_API_KEY not set (use env var, config file, or `octog configure`)")
+	errNoAPIKey                   = errors.New("no API key found: set ANTHROPIC_API_KEY or OPENAI_API_KEY (env var, config file, or `octog configure`)")
 	errAmbiguousProvider          = errors.New("both ANTHROPIC_API_KEY and OPENAI_API_KEY are set; use --provider to disambiguate")
 	errBelowThreshold             = errors.New("satisfaction below threshold")
 	errInvalidThreshold           = errors.New("--threshold must be between 0 and 100")
@@ -1201,15 +1202,14 @@ func openStore(ctx context.Context) (*store.Store, error) {
 }
 
 func resolveStorePath() (string, error) {
-	home, err := os.UserHomeDir()
+	p, err := paths.StorePath()
 	if err != nil {
 		return "", fmt.Errorf("resolve store path: %w", err)
 	}
-	dir := filepath.Join(home, ".octopusgarden")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := paths.EnsureParentDir(p); err != nil {
 		return "", fmt.Errorf("create store dir: %w", err)
 	}
-	return filepath.Join(dir, "runs.db"), nil
+	return p, nil
 }
 
 // executorOpts captures the parameters for building per-goroutine step executors.
@@ -1509,18 +1509,13 @@ var configKeys = []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_UR
 // configClearValue is the sentinel input that clears an existing config value.
 const configClearValue = "-"
 
-func configPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve config path: %w", err)
-	}
-	return filepath.Join(home, ".octopusgarden", "config"), nil
-}
-
 func loadConfig(logger *slog.Logger) error {
-	path, err := configPath()
+	path, warn, err := paths.ConfigFile()
 	if err != nil {
 		return err
+	}
+	if warn != "" {
+		logger.Warn(warn)
 	}
 
 	info, err := os.Stat(path)
@@ -1537,7 +1532,7 @@ func loadConfig(logger *slog.Logger) error {
 			"path", path, "mode", fmt.Sprintf("%04o", perm))
 	}
 
-	f, err := os.Open(path) //nolint:gosec // G304: path is derived from UserHomeDir, not user input
+	f, err := os.Open(path) //nolint:gosec // G304: path is derived from paths.ConfigFile(), not user input
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)
 	}
@@ -1789,9 +1784,12 @@ func configureCmd(_ context.Context, _ *slog.Logger, args []string) error {
 		return err
 	}
 
-	cfgPath, err := configPath()
+	cfgPath, warn, err := paths.ConfigFile()
 	if err != nil {
 		return err
+	}
+	if warn != "" {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n\n", warn) //nolint:gosec // G705 false positive: writing to stderr
 	}
 
 	return configureInteractive(os.Stdin, os.Stdout, cfgPath)
@@ -1863,7 +1861,7 @@ func maskValue(value string) string {
 // plus the original lines (for comment/ordering preservation). Returns an empty
 // map and nil lines if the file does not exist.
 func readConfigFile(path string) (map[string]string, []string, error) {
-	f, err := os.Open(path) //nolint:gosec // G304: path derives from configPath()/UserHomeDir
+	f, err := os.Open(path) //nolint:gosec // G304: path derives from paths.ConfigFile(), not user input
 	if errors.Is(err, fs.ErrNotExist) {
 		return make(map[string]string), nil, nil
 	}

@@ -89,8 +89,15 @@ Cross-package and multi-implementation interfaces:
 
 ## Configuration
 
-API keys go in `~/.octopusgarden/config` (preferred) or environment variables. Config file uses
-`KEY=VALUE` format, one per line. Env vars take precedence over config values.
+API keys go in the platform-native config file (preferred) or environment variables. Config file
+uses `KEY=VALUE` format, one per line. Env vars take precedence over config values.
+
+Config file location (in priority order):
+
+1. `$OCTOG_CONFIG_DIR/config` — env var override (also used for test isolation)
+1. `~/Library/Application Support/octopusgarden/config` — macOS
+1. `$XDG_CONFIG_HOME/octopusgarden/config` (or `~/.config/octopusgarden/config`) — Linux
+1. `~/.octopusgarden/config` — legacy fallback (deprecated)
 
 ```ini
 ANTHROPIC_API_KEY=sk-ant-...

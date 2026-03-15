@@ -134,7 +134,7 @@ linters:
     paths:
       - workspace   # generated attractor output — not project source code
     rules:
-      - path: "internal/(scenario|attractor|container|store|spec|lint|gene|observability|view|preflight|e2e)/"
+      - path: "internal/(scenario|attractor|container|store|spec|lint|gene|observability|view|preflight|e2e|paths)/"
         linters:
           - paralleltest  # not yet parallelized; llm package enforces this
       - path: "cmd/"
