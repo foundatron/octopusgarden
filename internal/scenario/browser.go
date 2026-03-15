@@ -244,41 +244,65 @@ func isTransientCDPError(err error) bool {
 		strings.Contains(msg, "No node with given id")
 }
 
+// retryOnTransient calls fn up to maxRetries times, retrying on transient CDP
+// errors. The action label appears only in debug log messages.
+//
+// Return values:
+//   - nil: fn succeeded
+//   - non-transient error from fn: returned immediately (caller wraps if needed)
+//   - errPageContextLost: all retries exhausted (caller wraps)
+//   - ctx.Err(): context canceled during retry sleep (caller wraps)
+func retryOnTransient(ctx context.Context, maxRetries int, retryDelay time.Duration, logger *slog.Logger, action string, fn func() error) error {
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+
+		err := fn()
+		if err == nil {
+			return nil
+		}
+
+		if !isTransientCDPError(err) {
+			return err
+		}
+
+		logger.Debug("page mid-navigation, retrying",
+			"action", action, "attempt", attempt+1, "max", maxRetries)
+	}
+
+	return errPageContextLost
+}
+
 // readPageWithRetry reads DOM state, retrying on transient CDP errors that
 // occur when the page is mid-navigation (e.g. form submit → 303 redirect).
 func (e *BrowserExecutor) readPageWithRetry(ctx context.Context, action string) (StepOutput, error) {
 	const maxRetries = 5
 	const retryDelay = 200 * time.Millisecond
 
-	for attempt := range maxRetries {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, ctx.Err())
-			case <-time.After(retryDelay):
-			}
-		}
-
+	// out is captured via closure side-effect when fn succeeds.
+	var out StepOutput
+	err := retryOnTransient(ctx, maxRetries, retryDelay, e.Logger, action, func() error {
 		var text, html, location string
-		err := chromedp.Run(ctx,
+		if runErr := chromedp.Run(ctx,
 			chromedp.WaitReady("body", chromedp.ByQuery),
 			chromedp.InnerHTML("body", &html, chromedp.ByQuery),
 			chromedp.Text("body", &text, chromedp.ByQuery),
 			chromedp.Location(&location),
-		)
-		if err == nil {
-			return buildBrowserOutput(location, text, html, -1), nil
+		); runErr != nil {
+			return runErr
 		}
-
-		if !isTransientCDPError(err) {
-			return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, err)
-		}
-
-		e.Logger.Debug("page mid-navigation, retrying DOM read",
-			"action", action, "attempt", attempt+1, "max", maxRetries)
+		out = buildBrowserOutput(location, text, html, -1)
+		return nil
+	})
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, err)
 	}
-
-	return StepOutput{}, fmt.Errorf("browser: %s read: %w", action, errPageContextLost)
+	return out, nil
 }
 
 func (e *BrowserExecutor) doFill(ctx context.Context, req BrowserRequest) (StepOutput, error) {
@@ -318,29 +342,22 @@ func (e *BrowserExecutor) doAssert(ctx context.Context, req BrowserRequest) (Ste
 	const maxRetries = 5
 	const retryDelay = 200 * time.Millisecond
 
-	for attempt := range maxRetries {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return StepOutput{}, fmt.Errorf("browser: assert: %w", ctx.Err())
-			case <-time.After(retryDelay):
-			}
-		}
-
-		out, err := e.doAssertOnce(ctx, req)
-		if err == nil {
-			return out, nil
-		}
-
-		if !isTransientCDPError(err) {
-			return StepOutput{}, err
-		}
-
-		e.Logger.Debug("page mid-navigation, retrying assert",
-			"attempt", attempt+1, "max", maxRetries)
+	// out is captured via closure side-effect when fn succeeds.
+	var out StepOutput
+	err := retryOnTransient(ctx, maxRetries, retryDelay, e.Logger, "assert", func() error {
+		var callErr error
+		out, callErr = e.doAssertOnce(ctx, req)
+		return callErr
+	})
+	if err == nil {
+		return out, nil
 	}
-
-	return StepOutput{}, fmt.Errorf("browser: assert: %w", errPageContextLost)
+	// errPageContextLost and context errors (from the sleep path or from chromedp
+	// calls inside doAssertOnce) need the browser prefix.
+	if errors.Is(err, errPageContextLost) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return StepOutput{}, fmt.Errorf("browser: assert: %w", err)
+	}
+	return StepOutput{}, err
 }
 
 func (e *BrowserExecutor) doAssertOnce(ctx context.Context, req BrowserRequest) (StepOutput, error) {
@@ -379,6 +396,27 @@ func (e *BrowserExecutor) doAssertOnce(ctx context.Context, req BrowserRequest) 
 	}
 
 	// Build assertion results as observed text (NOT errors -- let the judge score).
+	assertions := evaluateAssertions(elemText, matchCount, req)
+
+	observed := fmt.Sprintf("URL: %s\nSelector: %s\nMatching elements: %d\nElement text: %s\nAssertions:\n%s",
+		location, req.Selector, matchCount, elemText, strings.Join(assertions, "\n"))
+
+	return StepOutput{
+		Observed:    observed,
+		CaptureBody: elemText,
+		CaptureSources: map[string]string{
+			BrowserSourceText:     elemText,
+			BrowserSourceHTML:     elemHTML,
+			BrowserSourceCount:    strconv.Itoa(matchCount),
+			BrowserSourceLocation: location,
+		},
+	}, nil
+}
+
+// evaluateAssertions builds PASS/FAIL result strings for each assertion
+// configured in req. Returns an empty slice when no assertions are configured.
+// Count is skipped when req.Count is nil.
+func evaluateAssertions(elemText string, matchCount int, req BrowserRequest) []string {
 	var assertions []string
 	if req.Text != "" {
 		if strings.Contains(elemText, req.Text) {
@@ -401,20 +439,7 @@ func (e *BrowserExecutor) doAssertOnce(ctx context.Context, req BrowserRequest) 
 			assertions = append(assertions, fmt.Sprintf("FAIL: expected %d matching elements, found %d", *req.Count, matchCount))
 		}
 	}
-
-	observed := fmt.Sprintf("URL: %s\nSelector: %s\nMatching elements: %d\nElement text: %s\nAssertions:\n%s",
-		location, req.Selector, matchCount, elemText, strings.Join(assertions, "\n"))
-
-	return StepOutput{
-		Observed:    observed,
-		CaptureBody: elemText,
-		CaptureSources: map[string]string{
-			BrowserSourceText:     elemText,
-			BrowserSourceHTML:     elemHTML,
-			BrowserSourceCount:    strconv.Itoa(matchCount),
-			BrowserSourceLocation: location,
-		},
-	}, nil
+	return assertions
 }
 
 // maxObservedHTML caps the HTML included in observed output to avoid
