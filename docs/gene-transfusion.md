@@ -128,8 +128,11 @@ boundaries in the exemplar.
 
 Gene files with components are validated on load:
 
-- Component names must be non-empty and unique
-- All entries in `depends_on` must reference a component that exists in the array
+- Component names must be non-empty and unique (comparison is case-insensitive and
+  whitespace-normalized: `"HTTP Handler"` and `"http handler"` are the same name; whitespace-only
+  names are rejected as empty)
+- All entries in `depends_on` must reference a component that exists in the array (also
+  case-insensitive and whitespace-normalized: `"data store"` matches `"Data Store"`)
 - The dependency graph must be a DAG (no cycles)
 
 ## Composed Convergence
