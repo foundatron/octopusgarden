@@ -69,6 +69,7 @@ type Scenario struct {
 // Step represents a single action within a scenario.
 type Step struct {
 	Description string          `yaml:"description"`
+	Delay       string          `yaml:"delay"`
 	Request     *Request        `yaml:"request"`
 	Exec        *ExecRequest    `yaml:"exec"`
 	Browser     *BrowserRequest `yaml:"browser"`

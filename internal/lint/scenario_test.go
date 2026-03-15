@@ -1037,6 +1037,34 @@ steps:
 			wantErrors: 0,
 			wantWarns:  0,
 		},
+		{
+			name: "valid delay on step",
+			yaml: `id: test
+steps:
+  - description: A step
+    delay: "2s"
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "invalid delay on step",
+			yaml: `id: test
+steps:
+  - description: A step
+    delay: "notaduration"
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    `delay "notaduration" is not a valid duration`,
+		},
 	}
 
 	for _, tt := range tests {

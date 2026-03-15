@@ -77,6 +77,11 @@
           "type": "string",
           "description": "Natural-language expectation judged by the LLM."
         },
+        "delay": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)+$",
+          "description": "Sleep duration before executing this step (e.g., '2s', '500ms'). Useful for TTL expiration and eventual consistency testing. Duration includes delay time in StepResult."
+        },
         "retry": { "$ref": "#/$defs/retry" },
         "capture": {
           "type": "array",

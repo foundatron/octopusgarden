@@ -391,6 +391,7 @@ type Scenario struct {
 // Step represents a single action within a scenario.
 type Step struct {
 	Description string          `yaml:"description"`
+	Delay       string          `yaml:"delay"`
 	Request     *Request        `yaml:"request"`
 	Exec        *ExecRequest    `yaml:"exec"`
 	Browser     *BrowserRequest `yaml:"browser"`
@@ -619,6 +620,25 @@ steps:
 `StepResult.Duration` reflects total wall time from executor resolution through execution, including
 retries and sleeps. Duration is recorded even when executor resolution fails (non-zero on error).
 Captures are applied only from the final successful attempt.
+
+#### Pre-step Delay
+
+Steps support an optional `delay` field (Go duration string, e.g. `"2s"`, `"500ms"`) that causes
+the runner to sleep before executing the step. Useful for TTL expiration and eventual-consistency
+testing where a fixed wait is preferable to polling. The delay is applied before executor resolution
+for both setup steps (fatal — invalid delay fails the run) and judged steps (non-fatal — invalid
+delay records an error on the step). Context cancellation during delay propagates immediately.
+`octog lint` validates that `delay` parses as a valid Go duration.
+
+```yaml
+steps:
+  - description: "Wait for cache TTL to expire"
+    delay: "2s"
+    request:
+      method: GET
+      path: /items/{item_id}
+    expect: "Returns fresh data after cache expiry"
+```
 
 ### Variable Capture and Substitution
 
