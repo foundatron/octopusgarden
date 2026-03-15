@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -270,5 +272,188 @@ func TestUpdateRunNotFound(t *testing.T) {
 	err := s.UpdateRun(ctx, Run{ID: "nonexistent", Status: "converged"})
 	if !errors.Is(err, ErrRunNotFound) {
 		t.Fatalf("UpdateRun error = %v, want %v", err, ErrRunNotFound)
+	}
+}
+
+func TestAddColumnIfMissing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("column_already_exists", func(t *testing.T) {
+		s := newTestStore(t)
+		err := addColumnIfMissing(ctx, s.db, "runs", "language", "TEXT NOT NULL DEFAULT ''")
+		if err != nil {
+			t.Fatalf("addColumnIfMissing (already exists) = %v, want nil", err)
+		}
+		// Verify the table still works.
+		if err := s.RecordRun(ctx, Run{
+			ID:        "idempotent",
+			SpecPath:  "/spec.md",
+			Model:     "m",
+			Threshold: 95,
+			StartedAt: time.Now(),
+			Status:    "running",
+		}); err != nil {
+			t.Fatalf("RecordRun after idempotent migration: %v", err)
+		}
+	})
+
+	t.Run("column_missing_gets_added", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		// Create runs table without language column.
+		_, err = db.ExecContext(ctx, `CREATE TABLE runs (
+			id             TEXT PRIMARY KEY,
+			spec_path      TEXT NOT NULL,
+			model          TEXT NOT NULL,
+			threshold      REAL NOT NULL,
+			budget_usd     REAL,
+			started_at     DATETIME NOT NULL,
+			finished_at    DATETIME,
+			satisfaction   REAL,
+			iterations     INTEGER,
+			total_tokens   INTEGER,
+			total_cost_usd REAL,
+			status         TEXT NOT NULL
+		)`)
+		if err != nil {
+			t.Fatalf("CREATE TABLE: %v", err)
+		}
+
+		if err := addColumnIfMissing(ctx, db, "runs", "language", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			t.Fatalf("addColumnIfMissing = %v, want nil", err)
+		}
+
+		// Verify column exists via PRAGMA.
+		rows, err := db.QueryContext(ctx, "PRAGMA table_info(runs)")
+		if err != nil {
+			t.Fatalf("PRAGMA table_info: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		found := false
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, typ string
+			var dflt *string
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+				t.Fatalf("scan pragma row: %v", err)
+			}
+			if name == "language" {
+				found = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("pragma rows: %v", err)
+		}
+		if !found {
+			t.Fatal("language column not found after addColumnIfMissing")
+		}
+
+		// Verify insert/select with the new column works.
+		_, err = db.ExecContext(ctx, `INSERT INTO runs (id, spec_path, model, threshold, budget_usd, started_at, satisfaction, iterations, total_tokens, total_cost_usd, status, language) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"r1", "/s.md", "m", 95.0, nil, time.Now().Format(time.RFC3339), 0.0, 0, 0, 0.0, "running", "go",
+		)
+		if err != nil {
+			t.Fatalf("INSERT with language column: %v", err)
+		}
+		var lang string
+		if err := db.QueryRowContext(ctx, "SELECT language FROM runs WHERE id = 'r1'").Scan(&lang); err != nil {
+			t.Fatalf("SELECT language: %v", err)
+		}
+		if lang != "go" {
+			t.Errorf("language = %q, want %q", lang, "go")
+		}
+	})
+
+	// Identifier validation is a pure string check that returns before any DB call,
+	// so all cases can share a single store.
+	identTests := []struct {
+		name    string
+		table   string
+		column  string
+		wantErr error // nil means expect success
+	}{
+		{"invalid_table_name", "runs; DROP TABLE runs--", "language", errInvalidIdentifier},
+		{"invalid_column_name_uppercase", "runs", "Language", errInvalidIdentifier},
+		{"invalid_column_name_digits", "runs", "col1", errInvalidIdentifier},
+		{"invalid_column_name_hyphen", "runs", "my-col", errInvalidIdentifier},
+		{"valid_underscore_name", "runs", "some_col", nil},
+	}
+	sv := newTestStore(t)
+	for _, tt := range identTests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := addColumnIfMissing(ctx, sv.db, tt.table, tt.column, "TEXT")
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+
+	t.Run("empty_table_name", func(t *testing.T) {
+		s := newTestStore(t)
+		// Empty string bypasses the identifier character check (range is a no-op),
+		// but the resulting SQL is invalid and fails at the SQLite level.
+		err := addColumnIfMissing(ctx, s.db, "", "x", "TEXT")
+		if err == nil {
+			t.Fatal("expected non-nil error for empty table name, got nil")
+		}
+	})
+}
+
+func TestScanRunFromInvalidTime(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name       string
+		startedAt  string
+		finishedAt string
+		wantMsg    string
+	}{
+		{
+			name:       "invalid_started_at",
+			startedAt:  "not-a-timestamp",
+			finishedAt: "",
+			wantMsg:    "parse started_at",
+		},
+		{
+			name:       "invalid_finished_at",
+			startedAt:  time.Now().UTC().Format(time.RFC3339),
+			finishedAt: "garbage",
+			wantMsg:    "parse finished_at",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			id := "bad-time-" + tt.name
+
+			var finishedAtVal any
+			if tt.finishedAt != "" {
+				finishedAtVal = tt.finishedAt
+			}
+
+			_, err := s.db.ExecContext(ctx,
+				`INSERT INTO runs (id, spec_path, model, threshold, budget_usd, started_at, finished_at, satisfaction, iterations, total_tokens, total_cost_usd, status, language)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, "/spec.md", "model", 95.0, 0.0,
+				tt.startedAt, finishedAtVal,
+				0.0, 0, 0, 0.0, "running", "",
+			)
+			if err != nil {
+				t.Fatalf("raw INSERT: %v", err)
+			}
+
+			_, err = s.GetRun(ctx, id)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantMsg)
+			}
+		})
 	}
 }
