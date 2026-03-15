@@ -744,7 +744,7 @@ func outputValidation(agg scenario.AggregateResult, target string, threshold flo
 			return fmt.Errorf("write json: %w", err)
 		}
 	default:
-		fprintValidationResult(w, agg)
+		fprintValidationResult(w, agg, verbosity)
 		if verbosity >= 1 {
 			failures := buildDetailedFailures(agg)
 			if len(failures) > 0 {
@@ -1469,7 +1469,7 @@ func truncateObserved(s string, max int) string {
 }
 
 //nolint:gosec // G705 false positive: w is os.Stdout or test buffer, not an HTTP response
-func fprintValidationResult(w io.Writer, agg scenario.AggregateResult) {
+func fprintValidationResult(w io.Writer, agg scenario.AggregateResult, verbosity int) {
 	_, _ = fmt.Fprintln(w, "Scenarios:")
 	for _, sc := range agg.Scenarios {
 		_, _ = fmt.Fprintf(w, "  %-30s %5.1f/100  (weight %.1f)\n", sc.ScenarioID, sc.Score, sc.Weight)
@@ -1479,7 +1479,7 @@ func fprintValidationResult(w io.Writer, agg scenario.AggregateResult) {
 				label = "FAIL"
 			}
 			_, _ = fmt.Fprintf(w, "    [%s]  %3d  %s\n", label, step.StepScore.Score, step.StepResult.Description)
-			if label == "FAIL" && step.StepScore.Reasoning != "" {
+			if step.StepScore.Reasoning != "" && (label == "FAIL" || verbosity >= 2) {
 				_, _ = fmt.Fprintf(w, "           Reasoning: %s\n", step.StepScore.Reasoning)
 			}
 		}
