@@ -121,7 +121,7 @@ func defaultOpts(t *testing.T) RunOptions {
 func TestConvergesImmediately(t *testing.T) {
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
-			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01, InputTokens: 100, OutputTokens: 50}, nil
 		},
 	}
 	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
@@ -138,6 +138,9 @@ func TestConvergesImmediately(t *testing.T) {
 	}
 	if result.Iterations != 1 {
 		t.Errorf("expected 1 iteration, got %d", result.Iterations)
+	}
+	if result.TotalTokens != 150 {
+		t.Errorf("expected TotalTokens 150, got %d", result.TotalTokens)
 	}
 }
 
@@ -166,6 +169,49 @@ func TestConvergesOnIteration2(t *testing.T) {
 	}
 	if result.Iterations != 2 {
 		t.Errorf("expected 2 iterations, got %d", result.Iterations)
+	}
+}
+
+func TestTokenAccumulation(t *testing.T) {
+	// Each Generate call returns 200 input + 80 output = 280 tokens.
+	// With 3 iterations we expect TotalTokens = 3 * 280 = 840.
+	const (
+		perInput  = 200
+		perOutput = 80
+		iters     = 3
+	)
+	var callCount atomic.Int32
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{
+				Content:      validLLMOutput(),
+				CostUSD:      0.01,
+				InputTokens:  perInput,
+				OutputTokens: perOutput,
+			}, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+		n := callCount.Add(1)
+		if int(n) < iters {
+			return 50, []string{"not yet"}, 0, nil
+		}
+		return 100, nil, 0, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.StallLimit = iters + 1 // prevent stall from terminating early
+	a := New(client, &mockContainerMgr{}, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build an app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Iterations != iters {
+		t.Errorf("expected %d iterations, got %d", iters, result.Iterations)
+	}
+	want := iters * (perInput + perOutput)
+	if result.TotalTokens != want {
+		t.Errorf("TotalTokens = %d, want %d", result.TotalTokens, want)
 	}
 }
 

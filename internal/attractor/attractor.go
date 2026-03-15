@@ -174,6 +174,7 @@ type RunResult struct {
 	Iterations   int
 	Satisfaction float64
 	CostUSD      float64
+	TotalTokens  int
 	OutputDir    string
 	Status       string
 }
@@ -193,6 +194,7 @@ type runState struct {
 	baseDir                string
 	bestDir                string
 	totalCost              float64
+	totalTokens            int
 	bestSatisfaction       float64
 	stallCount             int
 	history                []iterationFeedback
@@ -233,6 +235,7 @@ func (s *runState) result(iter int, status string) *RunResult {
 		Iterations:   iter,
 		Satisfaction: s.bestSatisfaction,
 		CostUSD:      s.totalCost,
+		TotalTokens:  s.totalTokens,
 		OutputDir:    s.bestDir,
 		Status:       status,
 	}
@@ -699,6 +702,7 @@ func (a *Attractor) componentIteration(ctx context.Context, rawSpec string, comp
 		return nil, fmt.Errorf("attractor: generate component %q iteration %d: %w", comp.Name, iter, err)
 	}
 	s.totalCost += genResp.CostUSD
+	s.totalTokens += genResp.InputTokens + genResp.OutputTokens
 
 	files, parseErr := ParseFiles(genResp.Content)
 	if parseErr != nil {
@@ -829,6 +833,7 @@ func (a *Attractor) generateContent(ctx context.Context, specContent string, mes
 		return llm.GenerateResponse{}, fmt.Errorf("attractor: generate iteration %d: %w", iter, err)
 	}
 	s.totalCost += genResp.CostUSD
+	s.totalTokens += genResp.InputTokens + genResp.OutputTokens
 	s.lastInputTokens = genResp.InputTokens
 	s.lastOutputTokens = genResp.OutputTokens
 	return genResp, nil
@@ -872,6 +877,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 		return "", "", 0, nil
 	}
 	s.totalCost += wonderResp.CostUSD
+	s.totalTokens += wonderResp.InputTokens + wonderResp.OutputTokens
 	a.logger.Debug("wonder phase complete", "iteration", iter, "cost_usd", wonderResp.CostUSD)
 
 	// Check budget before proceeding to reflect phase.
@@ -909,6 +915,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 		return "", "", 0, nil
 	}
 	s.totalCost += reflectResp.CostUSD
+	s.totalTokens += reflectResp.InputTokens + reflectResp.OutputTokens
 	s.lastInputTokens = wonderResp.InputTokens + reflectResp.InputTokens
 	s.lastOutputTokens = wonderResp.OutputTokens + reflectResp.OutputTokens
 	a.logger.Debug("reflect phase complete", "iteration", iter, "cost_usd", reflectResp.CostUSD)
@@ -1041,6 +1048,7 @@ func (a *Attractor) generateAgentic(ctx context.Context, specContent, iterDir st
 	}
 
 	s.totalCost += resp.TotalCost
+	s.totalTokens += resp.InputTokens + resp.OutputTokens
 	s.lastInputTokens = resp.InputTokens
 	s.lastOutputTokens = resp.OutputTokens
 	s.lastTurns = resp.Turns
@@ -1069,8 +1077,9 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 	// Build messages: patch mode sends previous best files + failures.
 	var messages []llm.Message
 	if patching {
-		relevantFiles, triageCost := a.triageFiles(ctx, s.bestFiles, s.lastFailures, s.opts.JudgeModel)
+		relevantFiles, triageCost, triageTokens := a.triageFiles(ctx, s.bestFiles, s.lastFailures, s.opts.JudgeModel)
 		s.totalCost += triageCost
+		s.totalTokens += triageTokens
 		omitted := len(s.bestFiles) - len(relevantFiles)
 		messages = buildPatchMessages(s.history, relevantFiles, s.bestSatisfaction, omitted)
 	} else {

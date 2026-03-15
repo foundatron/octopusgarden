@@ -31,12 +31,15 @@ func TestTriageFilesSkipSmallSets(t *testing.T) {
 	}
 	files := makeFiles(3)
 	failures := []string{"something broke"}
-	got, cost := a.triageFiles(context.Background(), files, failures, "")
+	got, cost, tokens := a.triageFiles(context.Background(), files, failures, "")
 	if len(got) != len(files) {
 		t.Errorf("expected all %d files, got %d", len(files), len(got))
 	}
 	if cost != 0 {
 		t.Errorf("expected zero cost, got %f", cost)
+	}
+	if tokens != 0 {
+		t.Errorf("expected zero tokens, got %d", tokens)
 	}
 }
 
@@ -49,12 +52,15 @@ func TestTriageFilesSkipNoFailures(t *testing.T) {
 		},
 	}
 	files := makeFiles(10)
-	got, cost := a.triageFiles(context.Background(), files, nil, "")
+	got, cost, tokens := a.triageFiles(context.Background(), files, nil, "")
 	if len(got) != len(files) {
 		t.Errorf("expected all %d files, got %d", len(files), len(got))
 	}
 	if cost != 0 {
 		t.Errorf("expected zero cost, got %f", cost)
+	}
+	if tokens != 0 {
+		t.Errorf("expected zero tokens, got %d", tokens)
 	}
 }
 
@@ -68,7 +74,7 @@ func TestTriageFilesReturnsSubset(t *testing.T) {
 	}
 	files := makeFiles(10)
 	failures := []string{"nil pointer in file00.go"}
-	got, _ := a.triageFiles(context.Background(), files, failures, "model")
+	got, _, _ := a.triageFiles(context.Background(), files, failures, "model")
 	if _, ok := got["file00.go"]; !ok {
 		t.Error("expected file00.go in result")
 	}
@@ -91,7 +97,7 @@ func TestTriageFilesAlwaysIncludesDockerfile(t *testing.T) {
 	}
 	files := makeFiles(10, "Dockerfile")
 	failures := []string{"build failed"}
-	got, _ := a.triageFiles(context.Background(), files, failures, "model")
+	got, _, _ := a.triageFiles(context.Background(), files, failures, "model")
 	if _, ok := got["Dockerfile"]; !ok {
 		t.Error("Dockerfile should always be included")
 	}
@@ -107,7 +113,7 @@ func TestTriageFilesAlwaysIncludesEntryPoints(t *testing.T) {
 	}
 	files := makeFiles(10, "main.go", "go.mod", "Dockerfile", "lib/util.go")
 	failures := []string{"compilation error"}
-	got, _ := a.triageFiles(context.Background(), files, failures, "model")
+	got, _, _ := a.triageFiles(context.Background(), files, failures, "model")
 	for _, ep := range []string{"main.go", "go.mod", "Dockerfile", "lib/util.go"} {
 		if _, ok := got[ep]; !ok {
 			t.Errorf("expected entry point %q in result", ep)
@@ -125,12 +131,15 @@ func TestTriageFilesFallbackOnError(t *testing.T) {
 	}
 	files := makeFiles(10)
 	failures := []string{"something broke"}
-	got, cost := a.triageFiles(context.Background(), files, failures, "model")
+	got, cost, tokens := a.triageFiles(context.Background(), files, failures, "model")
 	if len(got) != len(files) {
 		t.Errorf("expected fallback to all %d files, got %d", len(files), len(got))
 	}
 	if cost != 0 {
 		t.Errorf("expected zero cost on error, got %f", cost)
+	}
+	if tokens != 0 {
+		t.Errorf("expected zero tokens on error, got %d", tokens)
 	}
 }
 
@@ -144,12 +153,15 @@ func TestTriageFilesUnparseableJSON(t *testing.T) {
 	}
 	files := makeFiles(10)
 	failures := []string{"something broke"}
-	got, cost := a.triageFiles(context.Background(), files, failures, "model")
+	got, cost, tokens := a.triageFiles(context.Background(), files, failures, "model")
 	if len(got) != len(files) {
 		t.Errorf("expected fallback to all %d files on bad JSON, got %d", len(files), len(got))
 	}
 	if cost != 0 {
 		t.Errorf("expected zero cost on parse error, got %f", cost)
+	}
+	if tokens != 0 {
+		t.Errorf("expected zero tokens on parse error, got %d", tokens)
 	}
 }
 
@@ -163,7 +175,7 @@ func TestTriageFilesUnknownPaths(t *testing.T) {
 	}
 	files := makeFiles(10)
 	failures := []string{"error in file00.go"}
-	got, _ := a.triageFiles(context.Background(), files, failures, "model")
+	got, _, _ := a.triageFiles(context.Background(), files, failures, "model")
 	if _, ok := got["nonexistent.go"]; ok {
 		t.Error("nonexistent.go should be dropped from result")
 	}
@@ -186,8 +198,30 @@ func TestTriageFilesCostTracked(t *testing.T) {
 	}
 	files := makeFiles(10)
 	failures := []string{"error"}
-	_, cost := a.triageFiles(context.Background(), files, failures, "model")
+	_, cost, _ := a.triageFiles(context.Background(), files, failures, "model")
 	if cost != wantCost {
 		t.Errorf("expected cost %f, got %f", wantCost, cost)
+	}
+}
+
+func TestTriageFilesTokensTracked(t *testing.T) {
+	const wantInput = 100
+	const wantOutput = 50
+	a := &Attractor{
+		llm: &mockLLMClient{
+			generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+				return llm.GenerateResponse{
+					Content:      `["file00.go"]`,
+					InputTokens:  wantInput,
+					OutputTokens: wantOutput,
+				}, nil
+			},
+		},
+	}
+	files := makeFiles(10)
+	failures := []string{"error"}
+	_, _, tokens := a.triageFiles(context.Background(), files, failures, "model")
+	if tokens != wantInput+wantOutput {
+		t.Errorf("expected tokens %d, got %d", wantInput+wantOutput, tokens)
 	}
 }
