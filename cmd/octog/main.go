@@ -531,6 +531,7 @@ func recordRun(ctx context.Context, logger *slog.Logger, st *store.Store, result
 		FinishedAt:   &finishedAt,
 		Satisfaction: result.Satisfaction,
 		Iterations:   result.Iterations,
+		TotalTokens:  result.TotalTokens,
 		TotalCostUSD: result.CostUSD,
 		Status:       result.Status,
 		Language:     language,

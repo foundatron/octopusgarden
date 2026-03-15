@@ -38,16 +38,17 @@ func isEntryPoint(path string) bool {
 
 // triageFiles asks the LLM to identify which files from allFiles are relevant to
 // the given failures. It returns a filtered map containing only the relevant files
-// plus any entry-point files present in allFiles.
+// plus any entry-point files present in allFiles, the cost in USD, and the total
+// token count used.
 //
-// Skip conditions (returns allFiles, 0 with no LLM call):
+// Skip conditions (returns allFiles, 0, 0 with no LLM call):
 //   - len(allFiles) <= 5
 //   - len(failures) == 0
 //
-// On any error, logs a warning and returns allFiles, 0.
-func (a *Attractor) triageFiles(ctx context.Context, allFiles map[string]string, failures []string, model string) (map[string]string, float64) {
+// On any error, logs a warning and returns allFiles, 0, 0.
+func (a *Attractor) triageFiles(ctx context.Context, allFiles map[string]string, failures []string, model string) (map[string]string, float64, int) {
 	if len(allFiles) <= 5 || len(failures) == 0 {
-		return allFiles, 0
+		return allFiles, 0, 0
 	}
 
 	// Build sorted file path list for deterministic prompts.
@@ -74,14 +75,15 @@ func (a *Attractor) triageFiles(ctx context.Context, allFiles map[string]string,
 	})
 	if err != nil {
 		slog.Warn("triage: LLM call failed, using all files", "error", err)
-		return allFiles, 0
+		return allFiles, 0, 0
 	}
+	tokens := resp.InputTokens + resp.OutputTokens
 
 	cleaned := llm.ExtractJSON(resp.Content)
 	var suggested []string
 	if jsonErr := json.Unmarshal([]byte(cleaned), &suggested); jsonErr != nil {
 		slog.Warn("triage: failed to parse LLM response, using all files", "error", jsonErr)
-		return allFiles, resp.CostUSD
+		return allFiles, resp.CostUSD, tokens
 	}
 
 	// Build result: LLM-suggested paths that actually exist + entry points from allFiles.
@@ -101,9 +103,9 @@ func (a *Attractor) triageFiles(ctx context.Context, allFiles map[string]string,
 	// Guard: if result is empty (LLM returned nothing useful), fall back to all files.
 	if len(result) == 0 {
 		slog.Warn("triage: result set empty after filtering, using all files")
-		return allFiles, resp.CostUSD
+		return allFiles, resp.CostUSD, tokens
 	}
 
 	slog.Debug("triage: file set narrowed", "suggested", len(suggested), "result", len(result), "total", len(allFiles))
-	return result, resp.CostUSD
+	return result, resp.CostUSD, tokens
 }

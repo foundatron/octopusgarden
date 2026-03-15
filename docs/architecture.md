@@ -735,6 +735,7 @@ type RunResult struct {
 	Iterations   int
 	Satisfaction float64
 	CostUSD      float64
+	TotalTokens  int
 	OutputDir    string
 	Status       string
 }
@@ -853,12 +854,12 @@ It asks the judge-tier model to return a JSON array of paths most relevant to th
 then merges in any entry-point files present in `allFiles` (Dockerfile, main.go, go.mod, etc.),
 regardless of LLM output.
 
-Skip conditions (returns `allFiles` unchanged, zero cost):
+Skip conditions (returns `allFiles` unchanged, zero cost, zero tokens):
 
 - `len(allFiles) <= 5`
 - `len(failures) == 0`
 
-On error or empty result, falls back to the full file set. Cost is accumulated into `totalCost`.
+On error or empty result, falls back to the full file set. Cost and token count are accumulated into `totalCost` and `totalTokens`.
 The count of omitted files is passed to `buildPatchMessages` as `omittedCount`; when > 0, a
 `(N other files not relevant to current failures, not shown)` note is appended to the prompt.
 

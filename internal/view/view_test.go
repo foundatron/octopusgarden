@@ -188,6 +188,9 @@ func TestNewStatusOutput(t *testing.T) {
 	if r0.Satisfaction != 99.0 {
 		t.Errorf("runs[0].satisfaction = %f, want 99.0", r0.Satisfaction)
 	}
+	if r0.TotalTokens != 5000 {
+		t.Errorf("runs[0].total_tokens = %d, want 5000", r0.TotalTokens)
+	}
 
 	r1 := out.Runs[1]
 	if r1.FinishedAt != nil {
