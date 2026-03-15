@@ -349,16 +349,12 @@ func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	content := "# comment\n\nANTHROPIC_API_KEY=sk-test-from-config\nOPENAI_API_KEY=sk-openai-test\n"
 
-	// Override HOME so configPath() resolves to our temp dir.
-	ogDir := filepath.Join(dir, ".octopusgarden")
-	if err := os.MkdirAll(ogDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	ogConfig := filepath.Join(ogDir, "config")
+	// Use OCTOG_CONFIG_DIR to redirect config resolution to our temp dir.
+	ogConfig := filepath.Join(dir, "config")
 	if err := os.WriteFile(ogConfig, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", dir)
+	t.Setenv("OCTOG_CONFIG_DIR", dir)
 
 	// Ensure the env vars are unset before loading.
 	// t.Setenv("", "") makes os.Getenv return "" which loadConfig treats as unset.
@@ -380,16 +376,12 @@ func TestLoadConfig(t *testing.T) {
 
 func TestLoadConfigEnvPrecedence(t *testing.T) {
 	dir := t.TempDir()
-	ogDir := filepath.Join(dir, ".octopusgarden")
-	if err := os.MkdirAll(ogDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	ogConfig := filepath.Join(ogDir, "config")
+	ogConfig := filepath.Join(dir, "config")
 	if err := os.WriteFile(ogConfig, []byte("ANTHROPIC_API_KEY=from-config\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", dir)
+	t.Setenv("OCTOG_CONFIG_DIR", dir)
 	t.Setenv("ANTHROPIC_API_KEY", "from-env")
 
 	logger := testLogger()
@@ -404,7 +396,7 @@ func TestLoadConfigEnvPrecedence(t *testing.T) {
 
 func TestLoadConfigMissing(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	t.Setenv("OCTOG_CONFIG_DIR", dir)
 
 	logger := testLogger()
 	if err := loadConfig(logger); err != nil {
@@ -414,16 +406,12 @@ func TestLoadConfigMissing(t *testing.T) {
 
 func TestLoadConfigUnknownKey(t *testing.T) {
 	dir := t.TempDir()
-	ogDir := filepath.Join(dir, ".octopusgarden")
-	if err := os.MkdirAll(ogDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	ogConfig := filepath.Join(ogDir, "config")
+	ogConfig := filepath.Join(dir, "config")
 	if err := os.WriteFile(ogConfig, []byte("UNKNOWN_KEY=value\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", dir)
+	t.Setenv("OCTOG_CONFIG_DIR", dir)
 
 	// Should not error, just warn.
 	logger := testLogger()

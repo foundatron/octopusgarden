@@ -69,6 +69,7 @@ octopusgarden/
 │   │   └── scenario.go           # CheckScenarios(): coverage, feasibility, isolation, chains
 │   ├── observability/            # OpenTelemetry tracing (OTLP/HTTP)
 │   │   └── setup.go              # InitTracer, TracingLLMClient, TracingContainerManager
+│   ├── paths/                    # Platform-native config/data path resolution (XDG, macOS, legacy)
 │   ├── view/                     # JSON view models for CLI output
 │   ├── store/                    # SQLite run history (db.go, types.go)
 │   ├── testutil/                 # Test helpers
@@ -109,6 +110,7 @@ cmd/octog
     ├── internal/llm            (client interface, anthropic, openai, models, prompts)
     ├── internal/container      (docker build/run, sessions, multi-port)
     ├── internal/spec           (parser, types, summary)
+    ├── internal/paths          (platform-native config/data path resolution)
     ├── internal/view           (JSON view models for CLI output)
     └── internal/store          (sqlite)
 ```
@@ -133,6 +135,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
 | `store` | SQLite run/iteration persistence | `db.go`, `types.go` | modernc.org/sqlite |
 | `view` | JSON view models for CLI output | `*.go` | (none) |
+| `paths` | Platform-native config/data path resolution: `ConfigDir()`, `ConfigFile()`, `DataDir()`, `StorePath()`, `EnsureParentDir()` | `paths.go` | (none) |
 | `limits` | Shared constants (MaxResponseBytes) | `limits.go` | (none) |
 | `testutil` | Test helpers | `*.go` | (none) |
 | `e2e` | End-to-end integration tests | `*.go` | multiple |
@@ -1133,8 +1136,15 @@ octog configure
 Subcommands: `interview`, `run`, `validate`, `preflight`, `status`, `lint`, `extract`, `models`, `configure`.
 
 Provider is auto-detected from which API key is set. Use `--provider` to disambiguate when both are
-present. Config file (`~/.octopusgarden/config`) supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`;
-env vars take precedence. `OPENAI_BASE_URL` overrides the OpenAI endpoint for Ollama etc.
+present. Config file supports `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; env vars take precedence.
+`OPENAI_BASE_URL` overrides the OpenAI endpoint for Ollama etc.
+
+Config file location (in priority order):
+
+1. `$OCTOG_CONFIG_DIR/config` — env var override
+2. `~/Library/Application Support/octopusgarden/config` — macOS
+3. `$XDG_CONFIG_HOME/octopusgarden/config` (or `~/.config/octopusgarden/config`) — Linux
+4. `~/.octopusgarden/config` — legacy fallback (deprecated; run `octog configure` to migrate)
 
 ## Gene Transfusion
 

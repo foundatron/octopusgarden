@@ -95,11 +95,28 @@ def run(
 def has_api_key() -> bool:
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
         return True
-    config = Path.home() / ".octopusgarden" / "config"
-    if config.is_file():
-        text = config.read_text()
-        if "ANTHROPIC_API_KEY" in text or "OPENAI_API_KEY" in text:
-            return True
+    # Check OCTOG_CONFIG_DIR override first, then platform-native paths, then legacy.
+    override = os.environ.get("OCTOG_CONFIG_DIR")
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override) / "config")
+    home = Path.home()
+    if sys.platform == "darwin":
+        candidates.append(
+            home / "Library" / "Application Support" / "octopusgarden" / "config"
+        )
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            candidates.append(Path(xdg) / "octopusgarden" / "config")
+        else:
+            candidates.append(home / ".config" / "octopusgarden" / "config")
+    candidates.append(home / ".octopusgarden" / "config")  # legacy fallback
+    for config in candidates:
+        if config.is_file():
+            text = config.read_text()
+            if "ANTHROPIC_API_KEY" in text or "OPENAI_API_KEY" in text:
+                return True
     print("Warning: No API key found. Rounds 2-3 will be skipped.")
     return False
 

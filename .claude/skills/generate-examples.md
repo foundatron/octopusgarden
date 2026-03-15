@@ -50,7 +50,7 @@ the background — run them sequentially and check each result before proceeding
 
 ## Notes
 
-- API keys are in `~/.octopusgarden/config` — no env vars needed.
+- API keys are in the platform-native config file (macOS: `~/Library/Application Support/octopusgarden/config`; Linux: `~/.config/octopusgarden/config`; legacy: `~/.octopusgarden/config`) — no env vars needed.
 - Default threshold is 95%. Do not override unless the user specifies.
 - If the user asks to run with a specific provider only, use that provider for all examples.
 - If the user asks to run a specific example, run only that one.
