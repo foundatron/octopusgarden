@@ -1,0 +1,44 @@
+id: list-prefix
+description: List keys with prefix filtering
+type: functional
+tier: 2
+satisfaction_criteria: List endpoint returns keys filtered by prefix with correct count
+
+setup:
+  - description: Create key app-config
+    request:
+      method: PUT
+      path: /kv/app-config
+      body:
+        value: "v1"
+  - description: Create key app-debug
+    request:
+      method: PUT
+      path: /kv/app-debug
+      body:
+        value: true
+  - description: Create key db-host
+    request:
+      method: PUT
+      path: /kv/db-host
+      body:
+        value: "localhost"
+
+steps:
+  - description: List all keys
+    request:
+      method: GET
+      path: /kv
+    expect: "Status 200. Response has 'keys' array with at least 3 items and 'count' field >= 3."
+
+  - description: List keys with prefix app
+    request:
+      method: GET
+      path: /kv?prefix=app
+    expect: "Status 200. Response has 'keys' array containing 'app-config' and 'app-debug' but not 'db-host'. Count is 2."
+
+  - description: List keys with prefix that matches nothing
+    request:
+      method: GET
+      path: /kv?prefix=zzz
+    expect: "Status 200. Response has empty 'keys' array and count 0."

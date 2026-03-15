@@ -2,7 +2,7 @@
 
 BINARY := octog
 
-.PHONY: all help build test test-integration test-browser coverage lint fmt generate clean docs docs-check check
+.PHONY: all help build test test-integration test-browser coverage lint fmt generate clean docs docs-check check smoke e2e
 
 all: build
 
@@ -50,5 +50,12 @@ check: ## Run all pre-push checks (build, test, lint, docs)
 	$(MAKE) lint
 	$(MAKE) docs-check
 
-clean: ## Remove built binary
+smoke: build ## Run smoke tests (rounds 1-3, ~$0.15)
+	./scripts/smoke-test.sh
+
+e2e: build ## Run full E2E convergence tests (~$1-3)
+	./scripts/e2e-test.sh
+
+clean: ## Remove built binary and test artifacts
 	rm -f $(BINARY)
+	rm -rf e2e-results/

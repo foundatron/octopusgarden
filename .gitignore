@@ -53,8 +53,9 @@ htmlcov/
 .pytype/
 .ruff_cache/
 
-# Manual testing artifacts
+# Test artifacts
 manual_testing/
+e2e-results/
 
 # Environment
 .env

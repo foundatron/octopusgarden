@@ -55,6 +55,18 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  # ── Shell scripts ──────────────────────────────────────────────────────────
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.12.0-1
+    hooks:
+      - id: shfmt
+        args: [-i, "4", -ci, -w]
+
   # ── GitHub Actions ───────────────────────────────────────────────────────────
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.11

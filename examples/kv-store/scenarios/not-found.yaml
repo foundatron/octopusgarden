@@ -1,0 +1,18 @@
+id: not-found
+description: Operations on nonexistent keys return 404
+type: functional
+tier: 1
+satisfaction_criteria: GET and DELETE on missing keys return 404
+
+steps:
+  - description: GET nonexistent key
+    request:
+      method: GET
+      path: /kv/does-not-exist
+    expect: "Status 404."
+
+  - description: DELETE nonexistent key
+    request:
+      method: DELETE
+      path: /kv/also-missing
+    expect: "Status 404."
