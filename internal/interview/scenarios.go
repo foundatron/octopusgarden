@@ -15,7 +15,7 @@ import (
 
 // scenarioMaxTokens is the maximum number of tokens to request when generating
 // scenario YAML from a spec.
-const scenarioMaxTokens = 8192
+const scenarioMaxTokens = 12288
 
 var (
 	errNoValidScenarios    = errors.New("interview: no valid scenarios generated")
