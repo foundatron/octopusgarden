@@ -106,7 +106,7 @@ func TestParseScenarioResponse(t *testing.T) {
 
 func TestBuildScenarioSystemPrompt(t *testing.T) {
 	prompt := buildScenarioSystemPrompt()
-	for _, keyword := range []string{"coverage", "feasibility", "isolation", "chains", "JSON", "step types", "testable"} {
+	for _, keyword := range []string{"coverage", "feasibility", "isolation", "chains", "JSON", "step types", "testable", "binary"} {
 		if !strings.Contains(prompt, keyword) {
 			t.Errorf("system prompt missing keyword: %q", keyword)
 		}
