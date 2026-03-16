@@ -100,7 +100,6 @@ Config file location (in priority order):
 1. `$OCTOG_CONFIG_DIR/config` — env var override (also used for test isolation)
 1. `~/Library/Application Support/octopusgarden/config` — macOS
 1. `$XDG_CONFIG_HOME/octopusgarden/config` (or `~/.config/octopusgarden/config`) — Linux
-1. `~/.octopusgarden/config` — legacy fallback (deprecated)
 
 ```ini
 ANTHROPIC_API_KEY=sk-ant-...
