@@ -72,7 +72,7 @@ octopusgarden/
 │   │   └── scenario.go           # CheckScenarios(): coverage, feasibility, isolation, chains
 │   ├── observability/            # OpenTelemetry tracing (OTLP/HTTP)
 │   │   └── setup.go              # InitTracer, TracingLLMClient, TracingContainerManager
-│   ├── paths/                    # Platform-native config/data path resolution (XDG, macOS, legacy)
+│   ├── paths/                    # Platform-native config/data path resolution (XDG, macOS)
 │   ├── view/                     # JSON view models for CLI output
 │   ├── store/                    # SQLite run history (db.go, types.go)
 │   ├── testutil/                 # Test helpers
@@ -1169,7 +1169,6 @@ Config file location (in priority order):
 1. `$OCTOG_CONFIG_DIR/config` — env var override
 2. `~/Library/Application Support/octopusgarden/config` — macOS
 3. `$XDG_CONFIG_HOME/octopusgarden/config` (or `~/.config/octopusgarden/config`) — Linux
-4. `~/.octopusgarden/config` — legacy fallback (deprecated; run `octog configure` to migrate)
 
 ## Gene Transfusion
 

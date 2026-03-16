@@ -3,7 +3,6 @@ package paths
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -13,8 +12,7 @@ func TestConfigDir_Default(t *testing.T) {
 	t.Setenv("OCTOG_CONFIG_DIR", "")
 	t.Setenv("XDG_CONFIG_HOME", "") // ensure os.UserConfigDir() uses $HOME, not a pre-set XDG dir
 
-	// Neither new nor legacy dir exists — should return new platform-native location.
-	got, warn, err := ConfigDir()
+	got, err := ConfigDir()
 	if err != nil {
 		t.Fatalf("ConfigDir() error: %v", err)
 	}
@@ -27,83 +25,18 @@ func TestConfigDir_Default(t *testing.T) {
 	if got != want {
 		t.Errorf("ConfigDir() = %q, want %q", got, want)
 	}
-	if warn != "" {
-		t.Errorf("deprecation warning should be empty, got %q", warn)
-	}
 }
 
 func TestConfigDir_EnvOverride(t *testing.T) {
 	override := t.TempDir()
 	t.Setenv("OCTOG_CONFIG_DIR", override)
 
-	got, warn, err := ConfigDir()
+	got, err := ConfigDir()
 	if err != nil {
 		t.Fatalf("ConfigDir() error: %v", err)
 	}
 	if got != override {
 		t.Errorf("ConfigDir() = %q, want %q (override)", got, override)
-	}
-	if warn != "" {
-		t.Errorf("deprecation warning should be empty, got %q", warn)
-	}
-}
-
-func TestConfigDir_LegacyFallback(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("OCTOG_CONFIG_DIR", "")
-
-	// Create legacy dir only; new platform-native dir does not exist.
-	legacyDir := filepath.Join(dir, ".octopusgarden")
-	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	got, warn, err := ConfigDir()
-	if err != nil {
-		t.Fatalf("ConfigDir() error: %v", err)
-	}
-	if got != legacyDir {
-		t.Errorf("ConfigDir() = %q, want %q (legacy fallback)", got, legacyDir)
-	}
-	if warn == "" {
-		t.Error("deprecation warning should be set when legacy path is used")
-	}
-	if !strings.Contains(warn, "octog configure") {
-		t.Errorf("deprecation warning should mention 'octog configure', got %q", warn)
-	}
-}
-
-func TestConfigDir_NewTakesPrecedence(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("OCTOG_CONFIG_DIR", "")
-
-	// Create legacy dir.
-	legacyDir := filepath.Join(dir, ".octopusgarden")
-	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create the new platform-native dir.
-	base, err := os.UserConfigDir()
-	if err != nil {
-		t.Fatalf("os.UserConfigDir() error: %v", err)
-	}
-	newDir := filepath.Join(base, "octopusgarden")
-	if err := os.MkdirAll(newDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	got, warn, err := ConfigDir()
-	if err != nil {
-		t.Fatalf("ConfigDir() error: %v", err)
-	}
-	if got != newDir {
-		t.Errorf("ConfigDir() = %q, want %q (new location wins)", got, newDir)
-	}
-	if warn != "" {
-		t.Errorf("deprecation warning should be empty when new dir exists, got %q", warn)
 	}
 }
 
@@ -111,7 +44,7 @@ func TestConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OCTOG_CONFIG_DIR", dir)
 
-	got, _, err := ConfigFile()
+	got, err := ConfigFile()
 	if err != nil {
 		t.Fatalf("ConfigFile() error: %v", err)
 	}
