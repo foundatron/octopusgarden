@@ -43,6 +43,8 @@ Minimize — stdlib first. Allowed exceptions:
 - `go.opentelemetry.io/otel` + related packages — OpenTelemetry tracing (spans for LLM calls,
   container ops, attractor loop)
 - `github.com/coder/websocket` — WebSocket client for scenario ws steps (context-native, pure Go)
+- `github.com/charmbracelet/lipgloss` — Terminal styling (colors, borders, padding)
+- `github.com/charmbracelet/glamour` — Markdown rendering in terminal
 
 ## Design Invariants
 
@@ -85,6 +87,7 @@ Cross-package and multi-implementation interfaces:
 | ContainerManager | attractor | container.Manager, observability.TracingContainerManager              |
 | containerSession | scenario  | `*container.Session`                                                  |
 | dockerAPI        | container | dockerclient.Client                                                   |
+| Display          | interview | ui.PlainDisplay, ui.StyledDisplay                                     |
 | modelLister      | cmd/octog | llm.AnthropicClient, llm.OpenAIClient                                 |
 
 ## Configuration

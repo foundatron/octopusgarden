@@ -14,7 +14,7 @@ import (
 
 const maxRounds = 20
 
-const rePromptMsg = "Enter your response (blank line to submit, or type \"done\" to generate the spec)."
+const rePromptMsg = "Enter your response (two blank lines to submit, or type \"done\" to generate the spec)."
 
 const finalInstruction = "The user is done answering questions. " +
 	"Generate the complete NLSpec-format specification now based on everything discussed."
@@ -22,22 +22,31 @@ const finalInstruction = "The user is done answering questions. " +
 // maxInputSize is the maximum size for a single scanner line (1 MiB).
 const maxInputSize = 1 << 20
 
-// Interviewer conducts a conversational interview to produce a spec.
-type Interviewer struct {
-	client llm.Client
-	in     io.Reader
-	out    io.Writer
-	model  string
+// Display controls how interview output is presented to the user.
+type Display interface {
+	AssistantMessage(text string) // LLM response (rendered as markdown in styled mode)
+	InputPrompt()                 // Show prompt indicator before user types
+	InputSummary(lineCount int)   // After submit: "[ pasted: N lines ]" if >3 lines
+	SystemMessage(text string)    // Hints, status messages
+	Separator()                   // Horizontal rule between Q&A rounds
 }
 
-// New creates an Interviewer that reads from in, writes to out, and uses the
-// given LLM client and model.
-func New(client llm.Client, in io.Reader, out io.Writer, model string) *Interviewer {
+// Interviewer conducts a conversational interview to produce a spec.
+type Interviewer struct {
+	client  llm.Client
+	in      io.Reader
+	display Display
+	model   string
+}
+
+// New creates an Interviewer that reads from in, displays output via display,
+// and uses the given LLM client and model.
+func New(client llm.Client, in io.Reader, display Display, model string) *Interviewer {
 	return &Interviewer{
-		client: client,
-		in:     in,
-		out:    out,
-		model:  model,
+		client:  client,
+		in:      in,
+		display: display,
+		model:   model,
 	}
 }
 
@@ -55,11 +64,13 @@ func (i *Interviewer) RunWithSeed(ctx context.Context, seedSpec string) (string,
 	return i.run(ctx, seedSystemPrompt, []llm.Message{{Role: "user", Content: userMsg}})
 }
 
-// readMessage collects lines until a blank line (submit) or "done" (finish).
+// readMessage collects lines until two consecutive blank lines (submit) or
+// "done" (finish). Single blank lines are preserved in the collected text.
 // It selects on both the line channel and ctx.Done so that Ctrl-C is respected
 // even while blocked waiting for input. Returns (text, done, err).
 func (i *Interviewer) readMessage(ctx context.Context, lines <-chan string, scanDone <-chan error) (string, bool, error) {
 	var collected []string
+	prevBlank := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,12 +88,18 @@ func (i *Interviewer) readMessage(ctx context.Context, lines <-chan string, scan
 				return strings.TrimSpace(strings.Join(collected, "\n")), true, nil
 			}
 			if trimmed == "" {
-				if len(collected) > 0 {
+				if prevBlank && len(collected) > 0 {
 					return strings.TrimSpace(strings.Join(collected, "\n")), false, nil
 				}
-				fmt.Fprintln(i.out, rePromptMsg) //nolint:errcheck
+				if len(collected) > 0 {
+					collected = append(collected, line)
+					prevBlank = true
+					continue
+				}
+				i.display.SystemMessage(rePromptMsg)
 				continue
 			}
+			prevBlank = false
 			collected = append(collected, line)
 		}
 	}
@@ -101,11 +118,41 @@ func (i *Interviewer) run(ctx context.Context, sysPrompt string, messages []llm.
 
 	totalCost := resp.CostUSD
 	messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
-	fmt.Fprintln(i.out, resp.Content) //nolint:errcheck
-	fmt.Fprintln(i.out, rePromptMsg)  //nolint:errcheck
+	i.display.AssistantMessage(resp.Content)
+	i.display.SystemMessage(rePromptMsg)
+	i.display.InputPrompt()
 
-	// Read lines in a background goroutine so readMessage can select on
-	// both input and ctx.Done, making Ctrl-C responsive.
+	lines, scanDone := i.startScanner(ctx)
+
+	round := 0
+	for {
+		text, done, err := i.readMessage(ctx, lines, scanDone)
+		if err != nil {
+			return "", totalCost, err
+		}
+
+		if text != "" && round < maxRounds {
+			cost, err := i.processAnswer(ctx, sysPrompt, &messages, text)
+			if err != nil {
+				return "", totalCost, err
+			}
+			totalCost += cost
+			round++
+		}
+
+		if done || round >= maxRounds {
+			if round >= maxRounds && !done {
+				i.display.SystemMessage("Maximum rounds reached. Generating spec now.")
+			}
+			spec, cost, genErr := i.generateFinal(ctx, sysPrompt, messages)
+			return spec, totalCost + cost, genErr
+		}
+	}
+}
+
+// startScanner reads lines from i.in in a background goroutine so
+// readMessage can select on both input and ctx.Done.
+func (i *Interviewer) startScanner(ctx context.Context) (<-chan string, <-chan error) {
 	scanner := bufio.NewScanner(i.in)
 	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), maxInputSize)
 	lines := make(chan string)
@@ -121,39 +168,31 @@ func (i *Interviewer) run(ctx context.Context, sysPrompt string, messages []llm.
 		scanDone <- scanner.Err()
 		close(lines)
 	}()
+	return lines, scanDone
+}
 
-	round := 0
-	for {
-		text, done, err := i.readMessage(ctx, lines, scanDone)
-		if err != nil {
-			return "", totalCost, err
-		}
-
-		if text != "" && round < maxRounds {
-			messages = append(messages, llm.Message{Role: "user", Content: text})
-			resp, err = i.client.Generate(ctx, llm.GenerateRequest{
-				SystemPrompt: sysPrompt,
-				Messages:     messages,
-				Model:        i.model,
-			})
-			if err != nil {
-				return "", totalCost, fmt.Errorf("interview: generate: %w", err)
-			}
-
-			totalCost += resp.CostUSD
-			messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
-			fmt.Fprintln(i.out, resp.Content) //nolint:errcheck
-			round++
-		}
-
-		if done || round >= maxRounds {
-			if round >= maxRounds && !done {
-				fmt.Fprintln(i.out, "Maximum rounds reached. Generating spec now.") //nolint:errcheck
-			}
-			spec, cost, genErr := i.generateFinal(ctx, sysPrompt, messages)
-			return spec, totalCost + cost, genErr
-		}
+// processAnswer sends the user's text to the LLM, appends both messages, and
+// displays the response. Returns the cost of the LLM call.
+func (i *Interviewer) processAnswer(ctx context.Context, sysPrompt string, messages *[]llm.Message, text string) (float64, error) {
+	lineCount := strings.Count(text, "\n") + 1
+	i.display.InputSummary(lineCount)
+	i.display.SystemMessage("Thinking...")
+	*messages = append(*messages, llm.Message{Role: "user", Content: text})
+	resp, err := i.client.Generate(ctx, llm.GenerateRequest{
+		SystemPrompt: sysPrompt,
+		Messages:     *messages,
+		Model:        i.model,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("interview: generate: %w", err)
 	}
+
+	*messages = append(*messages, llm.Message{Role: "assistant", Content: resp.Content})
+	i.display.Separator()
+	i.display.AssistantMessage(resp.Content)
+	i.display.SystemMessage(rePromptMsg)
+	i.display.InputPrompt()
+	return resp.CostUSD, nil
 }
 
 func (i *Interviewer) generateFinal(ctx context.Context, sysPrompt string, messages []llm.Message) (string, float64, error) {

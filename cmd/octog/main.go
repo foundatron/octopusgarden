@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mattn/go-isatty"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/spec"
 	"github.com/foundatron/octopusgarden/internal/store"
+	"github.com/foundatron/octopusgarden/internal/ui"
 	"github.com/foundatron/octopusgarden/internal/view"
 )
 
@@ -1712,7 +1714,14 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	}
 	logger.Debug("starting interview", "provider", clients.provider, "model", *model)
 
-	return interviewRun(ctx, clients.client, *model, *prompt, *output, seedContent, *scenarios, logger, os.Stdin, os.Stdout, os.Stderr)
+	var display interview.Display
+	if isatty.IsTerminal(os.Stdout.Fd()) {
+		display = ui.NewStyled(os.Stdout, os.Stdout.Fd())
+	} else {
+		display = ui.NewPlain(os.Stdout)
+	}
+
+	return interviewRun(ctx, clients.client, *model, *prompt, *output, seedContent, *scenarios, logger, os.Stdin, display, os.Stderr)
 }
 
 // interviewRun runs the interview conversation and writes the resulting spec to
@@ -1720,8 +1729,8 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 // When seedContent is non-empty, RunWithSeed is used instead of Run.
 // When generateScenarios is true, scenario YAML files are generated and written
 // to a scenarios/ directory alongside the spec.
-func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath, seedContent string, generateScenarios bool, log *slog.Logger, in io.Reader, out, errOut io.Writer) error {
-	iv := interview.New(client, in, out, model)
+func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath, seedContent string, generateScenarios bool, log *slog.Logger, in io.Reader, display interview.Display, errOut io.Writer) error {
+	iv := interview.New(client, in, display, model)
 	var (
 		spec string
 		cost float64
