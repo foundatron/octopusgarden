@@ -9,6 +9,11 @@ builds:
     binary: octog
     env:
       - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ignore:
@@ -67,4 +72,4 @@ brews:
     license: MIT
     skip_upload: auto
     test: |
-      system "#{bin}/octog", "--help"
+      system "#{bin}/octog", "--version"
