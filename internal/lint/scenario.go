@@ -358,8 +358,9 @@ func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, c
 	browserFE, hasBrowser := fields["browser"]
 	grpcFE, hasGRPC := fields["grpc"]
 	wsFE, hasWS := fields["ws"]
+	tuiFE, hasTUI := fields["tui"]
 
-	typeCount := countTrue(hasReq, hasExec, hasBrowser, hasGRPC, hasWS)
+	typeCount := countTrue(hasReq, hasExec, hasBrowser, hasGRPC, hasWS, hasTUI)
 
 	switch {
 	case typeCount > 1:
@@ -367,14 +368,14 @@ func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, c
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step has multiple step types; exactly one of request, exec, browser, grpc, or ws is required",
+			Message: "step has multiple step types; exactly one of request, exec, browser, grpc, ws, or tui is required",
 		}}
 	case typeCount == 0:
 		return "", []Diagnostic{{
 			File:    path,
 			Line:    node.Line,
 			Level:   Error,
-			Message: "step missing step type: exactly one of request, exec, browser, grpc, or ws is required",
+			Message: "step missing step type: exactly one of request, exec, browser, grpc, ws, or tui is required",
 		}}
 	case hasReq:
 		return "request", lintRequest(path, reqFE.value, cs)
@@ -386,6 +387,8 @@ func lintStepType(path string, node *yaml.Node, fields map[string]*fieldEntry, c
 		return "grpc", lintGRPC(path, grpcFE.value, cs)
 	case hasWS:
 		return "ws", lintWS(path, wsFE.value, cs)
+	case hasTUI:
+		return "tui", lintTUI(path, tuiFE.value, cs)
 	default:
 		return "", nil
 	}
@@ -982,6 +985,80 @@ func lintWS(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 	// Check receive (optional mapping with timeout and count).
 	if recvFE, ok := fields["receive"]; ok && recvFE.value.Kind == yaml.MappingNode {
 		diags = append(diags, lintWSReceive(path, recvFE.value)...)
+	}
+
+	return diags
+}
+
+func lintTUICommand(path string, fe *fieldEntry, cs *captureSet) []Diagnostic {
+	if fe.value.Kind != yaml.ScalarNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    fe.value.Line,
+			Level:   Error,
+			Message: "tui command must be a string",
+		}}
+	}
+	if fe.value.Value == "" {
+		return []Diagnostic{{
+			File:    path,
+			Line:    fe.value.Line,
+			Level:   Error,
+			Message: "tui command must not be empty",
+		}}
+	}
+	return checkVarRefs(extractVarRefs(fe.value.Value), cs, path, fe.value.Line)
+}
+
+func lintTUI(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
+	if node.Kind != yaml.MappingNode {
+		return []Diagnostic{{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "tui must be a mapping",
+		}}
+	}
+
+	var diags []Diagnostic
+	fields := nodeFields(node)
+
+	cmdFE, hasCmd := fields["command"]
+	_, hasSendKey := fields["send_key"]
+	_, hasSendText := fields["send_text"]
+	_, hasWaitFor := fields["wait_for"]
+	_, hasAssertScreen := fields["assert_screen"]
+	_, hasAssertAbsent := fields["assert_absent"]
+
+	if hasCmd {
+		diags = append(diags, lintTUICommand(path, cmdFE, cs)...)
+	} else if !hasSendKey && !hasSendText && !hasWaitFor && !hasAssertScreen && !hasAssertAbsent {
+		// Interaction step: must have at least one action field.
+		diags = append(diags, Diagnostic{
+			File:    path,
+			Line:    node.Line,
+			Level:   Error,
+			Message: "tui step requires command (launch) or at least one of send_key, send_text, wait_for, assert_screen, assert_absent (interaction)",
+		})
+	}
+
+	// Check var refs in action string fields.
+	for _, key := range []string{"send_key", "send_text", "wait_for", "assert_screen", "assert_absent"} {
+		if fe, ok := fields[key]; ok && fe.value.Value != "" {
+			diags = append(diags, checkVarRefs(extractVarRefs(fe.value.Value), cs, path, fe.value.Line)...)
+		}
+	}
+
+	// Validate timeout.
+	if timeoutFE, ok := fields["timeout"]; ok && timeoutFE.value.Value != "" {
+		if _, err := time.ParseDuration(timeoutFE.value.Value); err != nil {
+			diags = append(diags, Diagnostic{
+				File:    path,
+				Line:    timeoutFE.value.Line,
+				Level:   Error,
+				Message: fmt.Sprintf("tui timeout: invalid duration %q", timeoutFE.value.Value),
+			})
+		}
 	}
 
 	return diags

@@ -128,7 +128,7 @@ func inferTier(s Scenario) int {
 		types[t] = struct{}{}
 
 		switch t {
-		case "browser", "grpc", "ws":
+		case "browser", "grpc", "ws", "tui":
 			score++
 		}
 		if step.GRPC != nil && step.GRPC.Stream != nil {

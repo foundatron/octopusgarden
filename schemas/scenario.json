@@ -61,7 +61,8 @@
         { "required": ["exec"] },
         { "required": ["browser"] },
         { "required": ["grpc"] },
-        { "required": ["ws"] }
+        { "required": ["ws"] },
+        { "required": ["tui"] }
       ],
       "properties": {
         "description": {
@@ -73,13 +74,14 @@
         "browser": { "$ref": "#/$defs/browser_request" },
         "grpc": { "$ref": "#/$defs/grpc_request" },
         "ws": { "$ref": "#/$defs/ws_request" },
+        "tui": { "$ref": "#/$defs/tui_request" },
         "expect": {
           "type": "string",
           "description": "Natural-language expectation judged by the LLM."
         },
         "delay": {
           "type": "string",
-          "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)+$",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
           "description": "Sleep duration before executing this step (e.g., '2s', '500ms'). Useful for TTL expiration and eventual consistency testing. Duration includes delay time in StepResult."
         },
         "retry": { "$ref": "#/$defs/retry" },
@@ -101,12 +103,12 @@
         },
         "interval": {
           "type": "string",
-          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
           "description": "Delay between retries as a Go duration (e.g. '1s', '500ms'). Default: 1s."
         },
         "timeout": {
           "type": "string",
-          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
           "description": "Overall timeout cap for all retry attempts as a Go duration. Optional."
         }
       }
@@ -155,7 +157,7 @@
         },
         "timeout": {
           "type": "string",
-          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)+$",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
           "description": "Command timeout as a Go duration (e.g. '30s', '5m', '100ms'). Default: 30s."
         },
         "files": {
@@ -291,6 +293,49 @@
           "type": "integer",
           "minimum": 1,
           "description": "Number of messages to collect. Default: 1."
+        }
+      }
+    },
+    "tui_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {"required": ["command"]},
+        {"required": ["send_key"]},
+        {"required": ["send_text"]},
+        {"required": ["wait_for"]},
+        {"required": ["assert_screen"]},
+        {"required": ["assert_absent"]}
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Command to launch the TUI application (launch step). May contain {variable} references."
+        },
+        "send_key": {
+          "type": "string",
+          "description": "Key sequence to send to the TUI (e.g. 'Enter', 'ctrl+c'). May contain {variable} references."
+        },
+        "send_text": {
+          "type": "string",
+          "description": "Text to type into the TUI. May contain {variable} references."
+        },
+        "wait_for": {
+          "type": "string",
+          "description": "Text to wait for on screen before proceeding. May contain {variable} references."
+        },
+        "assert_screen": {
+          "type": "string",
+          "description": "Text that must be visible on screen. May contain {variable} references."
+        },
+        "assert_absent": {
+          "type": "string",
+          "description": "Text that must NOT be visible on screen. May contain {variable} references."
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
+          "description": "Operation timeout as a Go duration (e.g. '30s', '5s')."
         }
       }
     },
