@@ -37,6 +37,13 @@ import (
 	"github.com/foundatron/octopusgarden/internal/view"
 )
 
+// version information set by goreleaser ldflags.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 // stepPassThreshold is the per-step score below which a step is labeled FAIL
 // in validation output and considered failing for detailed feedback. This is
 // purely cosmetic — the --threshold flag on validateCmd controls the aggregate
@@ -89,6 +96,9 @@ func main() {
 	switch os.Args[1] {
 	case "--help", "-h", "-help":
 		printUsage()
+		return
+	case "--version", "-V", "version":
+		fmt.Printf("octog %s (commit %s, built %s)\n", version, commit, date)
 		return
 	case "run":
 		err = runCmd(ctx, logger, os.Args[2:])
