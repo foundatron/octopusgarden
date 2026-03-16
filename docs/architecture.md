@@ -63,6 +63,9 @@ octopusgarden/
 │   │   └── prompt.go             # Prompt templates
 │   ├── gene/                     # Gene transfusion (scan, analyze, gene types)
 │   ├── interview/                # Conversational spec-drafting assistant + spec-completeness scorer
+│   ├── ui/                      # Display implementations for interview TUI (plain + styled)
+│   │   ├── display.go           # PlainDisplay: unformatted text output
+│   │   └── styled.go            # StyledDisplay: glamour markdown rendering, lipgloss styling
 │   ├── lint/                     # Spec and scenario structural linting
 │   ├── preflight/                # LLM-based spec/scenario quality assessment
 │   │   ├── preflight.go          # Check(): spec clarity (goal, constraint, success)
@@ -98,6 +101,7 @@ cmd/octog
     │       ├── internal/llm
     │       ├── internal/attractor  (ParseFiles for scenario block extraction)
     │       └── internal/scenario   (Load for scenario YAML validation)
+    ├── internal/ui             (display implementations for interview TUI)
     ├── internal/preflight      (spec clarity, scenario quality assessment)
     │       └── internal/llm
     ├── internal/gene           (scan, analyze, gene types)
@@ -134,6 +138,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go` | (none) |
 | `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
 | `store` | SQLite run/iteration persistence | `db.go`, `types.go` | modernc.org/sqlite |
+| `ui` | Display implementations for interview TUI (plain text + styled terminal) | `display.go`, `styled.go` | lipgloss, glamour |
 | `view` | JSON view models for CLI output | `*.go` | (none) |
 | `paths` | Platform-native config/data path resolution: `ConfigDir()`, `ConfigFile()`, `DataDir()`, `StorePath()`, `EnsureParentDir()` | `paths.go` | (none) |
 | `limits` | Shared constants (MaxResponseBytes) | `limits.go` | (none) |
@@ -1012,8 +1017,24 @@ Returns per-scenario issues with dimension and actionable detail.
 
 ## Conversational Spec-Drafting (`interview.Interviewer`)
 
-`interview.New(client llm.Client, in io.Reader, out io.Writer, model string) *Interviewer` — creates
-an interviewer that conducts a multi-turn conversation to produce a spec.
+`interview.New(client llm.Client, in io.Reader, display interview.Display, model string) *Interviewer`
+— creates an interviewer that conducts a multi-turn conversation to produce a spec.
+
+The `Display` interface controls how interview output is presented:
+
+```go
+type Display interface {
+    AssistantMessage(text string) // LLM response (rendered as markdown in styled mode)
+    InputPrompt()                 // Show prompt indicator before user types
+    InputSummary(lineCount int)   // After submit: "[ pasted: N lines ]" if >3 lines
+    SystemMessage(text string)    // Hints, status messages
+    Separator()                   // Horizontal rule between Q&A rounds
+}
+```
+
+Two implementations in `internal/ui`: `PlainDisplay` (unformatted `fmt.Fprintln`) and
+`StyledDisplay` (glamour markdown rendering, lipgloss-colored prompts/separators, terminal
+width-aware). `cmd/octog` selects based on `isatty.IsTerminal(os.Stdout.Fd())`.
 
 ```go
 func (i *Interviewer) Run(ctx context.Context, initialPrompt string) (string, float64, error)
@@ -1025,6 +1046,10 @@ existing spec (`seedSpec`), injecting it into the first user message and switchi
 `seedSystemPrompt` — a variant that instructs the LLM to identify gaps and ambiguities rather than
 elicit requirements from scratch. Both methods share the same internal conversation loop (`run`),
 which accumulates messages, reads user replies from `in`, and terminates on `"done"` or EOF.
+
+Input collection uses two consecutive blank lines as the submit delimiter (not one), so single blank
+lines in pasted multi-paragraph text are preserved. A background scanner goroutine feeds lines into
+a channel, allowing `readMessage` to `select` on both input and `ctx.Done` for responsive Ctrl-C.
 
 Two system prompts live in `prompt.go`:
 

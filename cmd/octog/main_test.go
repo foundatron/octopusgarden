@@ -22,6 +22,7 @@ import (
 	"github.com/foundatron/octopusgarden/internal/llm"
 	"github.com/foundatron/octopusgarden/internal/scenario"
 	"github.com/foundatron/octopusgarden/internal/store"
+	"github.com/foundatron/octopusgarden/internal/ui"
 )
 
 // mockLLMClient implements llm.Client for testing.
@@ -1030,7 +1031,7 @@ func TestInterviewRun(t *testing.T) {
 			in := strings.NewReader(tt.userInput)
 			var out, errOut bytes.Buffer
 
-			err := interviewRun(context.Background(), client, "test-model", "What would you like to build?", outputPath, "", false, testLogger(), in, &out, &errOut)
+			err := interviewRun(context.Background(), client, "test-model", "What would you like to build?", outputPath, "", false, testLogger(), in, ui.NewPlain(&out), &errOut)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -1070,7 +1071,7 @@ func TestInterviewRun(t *testing.T) {
 		in := strings.NewReader("done\n")
 		var out, errOut bytes.Buffer
 
-		err := interviewRun(context.Background(), client, "model", "start", badPath, "", false, testLogger(), in, &out, &errOut)
+		err := interviewRun(context.Background(), client, "model", "start", badPath, "", false, testLogger(), in, ui.NewPlain(&out), &errOut)
 		if err == nil {
 			t.Fatal("expected write error, got nil")
 		}
