@@ -64,6 +64,15 @@ func (i *Interviewer) RunWithSeed(ctx context.Context, seedSpec string) (string,
 	return i.run(ctx, seedSystemPrompt, []llm.Message{{Role: "user", Content: userMsg}})
 }
 
+// lineAction signals what readMessage should do after processing a line.
+type lineAction int
+
+const (
+	lineContinue lineAction = iota // keep collecting
+	lineSubmit                     // two blank lines — submit message
+	lineDone                       // "done" keyword or EOF
+)
+
 // readMessage collects lines until two consecutive blank lines (submit) or
 // "done" (finish). Single blank lines are preserved in the collected text.
 // It selects on both the line channel and ctx.Done so that Ctrl-C is respected
@@ -77,32 +86,55 @@ func (i *Interviewer) readMessage(ctx context.Context, lines <-chan string, scan
 			return "", false, fmt.Errorf("interview: %w", ctx.Err())
 		case line, ok := <-lines:
 			if !ok {
-				// Channel closed — scanner hit EOF or error.
-				if err := <-scanDone; err != nil {
-					return "", false, fmt.Errorf("interview: scanner: %w", err)
-				}
-				return strings.TrimSpace(strings.Join(collected, "\n")), true, nil
+				return i.handleEOF(scanDone, collected)
 			}
-			trimmed := strings.TrimSpace(line)
-			if strings.EqualFold(trimmed, "done") {
-				return strings.TrimSpace(strings.Join(collected, "\n")), true, nil
-			}
-			if trimmed == "" {
-				if prevBlank && len(collected) > 0 {
-					return strings.TrimSpace(strings.Join(collected, "\n")), false, nil
-				}
-				if len(collected) > 0 {
+			action, newPrevBlank := i.processLine(line, collected, prevBlank)
+			prevBlank = newPrevBlank
+			switch action {
+			case lineDone:
+				return joinCollected(collected), true, nil
+			case lineSubmit:
+				return joinCollected(collected), false, nil
+			default:
+				if trimmed := strings.TrimSpace(line); trimmed != "" || len(collected) > 0 {
 					collected = append(collected, line)
-					prevBlank = true
-					continue
 				}
-				i.display.SystemMessage(rePromptMsg)
-				continue
 			}
-			prevBlank = false
-			collected = append(collected, line)
 		}
 	}
+}
+
+// handleEOF drains the scanner error channel and returns collected text.
+func (i *Interviewer) handleEOF(scanDone <-chan error, collected []string) (string, bool, error) {
+	if err := <-scanDone; err != nil {
+		return "", false, fmt.Errorf("interview: scanner: %w", err)
+	}
+	return joinCollected(collected), true, nil
+}
+
+// processLine determines the action for a single input line. It returns the
+// action and the updated prevBlank state.
+func (i *Interviewer) processLine(line string, collected []string, prevBlank bool) (lineAction, bool) {
+	trimmed := strings.TrimSpace(line)
+	if strings.EqualFold(trimmed, "done") {
+		return lineDone, false
+	}
+	if trimmed != "" {
+		return lineContinue, false
+	}
+	// Blank line handling.
+	if prevBlank && len(collected) > 0 {
+		return lineSubmit, true
+	}
+	if len(collected) > 0 {
+		return lineContinue, true
+	}
+	i.display.SystemMessage(rePromptMsg)
+	return lineContinue, false
+}
+
+func joinCollected(collected []string) string {
+	return strings.TrimSpace(strings.Join(collected, "\n"))
 }
 
 // run is the shared conversation loop used by Run and RunWithSeed.
