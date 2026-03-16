@@ -58,6 +58,16 @@ func ConfigFile() (string, string, error) {
 	return filepath.Join(dir, "config"), warn, nil
 }
 
+// NativeConfigFile returns the platform-native config file path, ignoring
+// any legacy fallback. Used by configure to determine the migration target.
+func NativeConfigFile() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve config dir: %w", err)
+	}
+	return filepath.Join(base, "octopusgarden", "config"), nil
+}
+
 // DataDir returns the data directory for octog (where the SQLite run-history database lives).
 // It follows XDG Base Directory conventions, keeping application data separate from config:
 //  1. OCTOG_CONFIG_DIR environment variable override (covers both config and data)

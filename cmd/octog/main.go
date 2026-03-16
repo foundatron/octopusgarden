@@ -1798,11 +1798,46 @@ func configureCmd(_ context.Context, _ *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// If using the legacy path, migrate to the new platform-native location.
 	if warn != "" {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n\n", warn) //nolint:gosec // G705 false positive: writing to stderr
+		var migErr error
+		cfgPath, migErr = migrateFromLegacy(cfgPath)
+		if migErr != nil {
+			return migErr
+		}
 	}
 
 	return configureInteractive(os.Stdin, os.Stdout, cfgPath)
+}
+
+// migrateFromLegacy moves config and run history from the legacy ~/.octopusgarden
+// directory to the platform-native location, returning the new config file path.
+func migrateFromLegacy(legacyPath string) (string, error) {
+	newPath, err := paths.NativeConfigFile()
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "Migrating config from %s to %s\n\n", legacyPath, newPath) //nolint:gosec // G705 false positive: writing to stderr
+	if err := paths.EnsureParentDir(newPath); err != nil {
+		return "", err
+	}
+
+	// Migrate runs.db if it exists in the legacy directory.
+	legacyDir := filepath.Dir(legacyPath)
+	legacyDB := filepath.Join(legacyDir, "runs.db")
+	if _, statErr := os.Stat(legacyDB); statErr == nil {
+		if newDBPath, dbErr := paths.StorePath(); dbErr == nil {
+			if renameErr := os.Rename(legacyDB, newDBPath); renameErr == nil {
+				fmt.Fprintf(os.Stderr, "Migrated run history to %s\n", newDBPath) //nolint:gosec // G705 false positive: writing to stderr
+			}
+		}
+	}
+
+	// Clean up legacy config file and directory if now empty.
+	_ = os.Remove(legacyPath)
+	_ = os.Remove(legacyDir) // only succeeds if empty
+	return newPath, nil
 }
 
 func configureInteractive(r io.Reader, w io.Writer, cfgPath string) error {
