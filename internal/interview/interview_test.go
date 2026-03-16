@@ -41,7 +41,7 @@ func TestInterviewHappyPath(t *testing.T) {
 		},
 	}
 
-	in := strings.NewReader("Go\ndone\n")
+	in := strings.NewReader("Go\n\ndone\n")
 	var out bytes.Buffer
 
 	iv := New(client, in, &out, "test-model")
@@ -70,7 +70,7 @@ func TestInterviewEmptyInput(t *testing.T) {
 		},
 	}
 
-	in := strings.NewReader("\n\nanswer\ndone\n")
+	in := strings.NewReader("\n\nanswer\n\ndone\n")
 	var out bytes.Buffer
 
 	iv := New(client, in, &out, "test-model")
@@ -101,12 +101,13 @@ func TestInterviewMaxRounds(t *testing.T) {
 		},
 	}
 
-	// 21 non-"done" lines to exceed maxRounds=20
+	// 21 non-"done" answers to exceed maxRounds=20.
+	// Each answer is followed by a blank line to submit it.
 	lines := make([]string, 21)
 	for j := range lines {
 		lines[j] = "answer"
 	}
-	in := strings.NewReader(strings.Join(lines, "\n") + "\n")
+	in := strings.NewReader(strings.Join(lines, "\n\n") + "\n\n")
 	var out bytes.Buffer
 
 	iv := New(client, in, &out, "test-model")
@@ -221,7 +222,7 @@ func TestInterviewCostTracking(t *testing.T) {
 	}
 
 	// initial call + 1 round + done → 3 calls total
-	in := strings.NewReader("answer\ndone\n")
+	in := strings.NewReader("answer\n\ndone\n")
 	var out bytes.Buffer
 	iv := New(client, in, &out, "test-model")
 	_, total, err := iv.Run(context.Background(), "Start.")
@@ -256,6 +257,55 @@ func TestInterviewEOF(t *testing.T) {
 	}
 	if spec == "" {
 		t.Error("expected auto-generated spec on EOF")
+	}
+}
+
+func TestInterviewMultiLineInput(t *testing.T) {
+	t.Parallel()
+	var capturedReqs []llm.GenerateRequest
+	calls := 0
+	responses := []llm.GenerateResponse{
+		{Content: "Tell me more.", CostUSD: 0.01},
+		{Content: "Got it!", CostUSD: 0.01},
+		{Content: "# Spec", CostUSD: 0.02},
+	}
+
+	client := &mockClient{
+		generateFn: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+			capturedReqs = append(capturedReqs, req)
+			resp := responses[calls]
+			calls++
+			return resp, nil
+		},
+	}
+
+	// Multi-line paste followed by blank line to submit, then done.
+	in := strings.NewReader("line one\nline two\nline three\n\ndone\n")
+	var out bytes.Buffer
+
+	iv := New(client, in, &out, "test-model")
+	_, _, err := iv.Run(context.Background(), "Start.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 3 calls: initial + one multi-line response + final
+	if calls != 3 {
+		t.Errorf("expected 3 generate calls, got %d", calls)
+	}
+
+	// The user message should contain all three lines joined together.
+	if len(capturedReqs) < 2 {
+		t.Fatal("expected at least 2 captured requests")
+	}
+	userMsg := capturedReqs[1].Messages[len(capturedReqs[1].Messages)-1]
+	if userMsg.Role != "user" {
+		t.Fatalf("expected user message, got %q", userMsg.Role)
+	}
+	if !strings.Contains(userMsg.Content, "line one") ||
+		!strings.Contains(userMsg.Content, "line two") ||
+		!strings.Contains(userMsg.Content, "line three") {
+		t.Errorf("multi-line input not preserved: %q", userMsg.Content)
 	}
 }
 
@@ -331,7 +381,7 @@ func TestRunWithSeedPreservesConversationLoop(t *testing.T) {
 	}
 
 	// Multi-round: answer one question then "done"
-	in := strings.NewReader("Go\ndone\n")
+	in := strings.NewReader("Go\n\ndone\n")
 	var out bytes.Buffer
 
 	iv := New(client, in, &out, "test-model")

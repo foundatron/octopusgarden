@@ -14,10 +14,13 @@ import (
 
 const maxRounds = 20
 
-const rePromptMsg = "Please enter a response (or type \"done\" to generate the spec)."
+const rePromptMsg = "Enter your response (blank line to submit, or type \"done\" to generate the spec)."
 
 const finalInstruction = "The user is done answering questions. " +
 	"Generate the complete NLSpec-format specification now based on everything discussed."
+
+// maxInputSize is the maximum size for a single scanner line (1 MiB).
+const maxInputSize = 1 << 20
 
 // Interviewer conducts a conversational interview to produce a spec.
 type Interviewer struct {
@@ -52,6 +55,39 @@ func (i *Interviewer) RunWithSeed(ctx context.Context, seedSpec string) (string,
 	return i.run(ctx, seedSystemPrompt, []llm.Message{{Role: "user", Content: userMsg}})
 }
 
+// readMessage collects lines until a blank line (submit) or "done" (finish).
+// It selects on both the line channel and ctx.Done so that Ctrl-C is respected
+// even while blocked waiting for input. Returns (text, done, err).
+func (i *Interviewer) readMessage(ctx context.Context, lines <-chan string, scanDone <-chan error) (string, bool, error) {
+	var collected []string
+	for {
+		select {
+		case <-ctx.Done():
+			return "", false, fmt.Errorf("interview: %w", ctx.Err())
+		case line, ok := <-lines:
+			if !ok {
+				// Channel closed — scanner hit EOF or error.
+				if err := <-scanDone; err != nil {
+					return "", false, fmt.Errorf("interview: scanner: %w", err)
+				}
+				return strings.TrimSpace(strings.Join(collected, "\n")), true, nil
+			}
+			trimmed := strings.TrimSpace(line)
+			if strings.EqualFold(trimmed, "done") {
+				return strings.TrimSpace(strings.Join(collected, "\n")), true, nil
+			}
+			if trimmed == "" {
+				if len(collected) > 0 {
+					return strings.TrimSpace(strings.Join(collected, "\n")), false, nil
+				}
+				fmt.Fprintln(i.out, rePromptMsg) //nolint:errcheck
+				continue
+			}
+			collected = append(collected, line)
+		}
+	}
+}
+
 // run is the shared conversation loop used by Run and RunWithSeed.
 func (i *Interviewer) run(ctx context.Context, sysPrompt string, messages []llm.Message) (string, float64, error) {
 	resp, err := i.client.Generate(ctx, llm.GenerateRequest{
@@ -66,54 +102,58 @@ func (i *Interviewer) run(ctx context.Context, sysPrompt string, messages []llm.
 	totalCost := resp.CostUSD
 	messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
 	fmt.Fprintln(i.out, resp.Content) //nolint:errcheck
+	fmt.Fprintln(i.out, rePromptMsg)  //nolint:errcheck
 
+	// Read lines in a background goroutine so readMessage can select on
+	// both input and ctx.Done, making Ctrl-C responsive.
 	scanner := bufio.NewScanner(i.in)
+	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), maxInputSize)
+	lines := make(chan string)
+	scanDone := make(chan error, 1)
+	go func() {
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+		scanDone <- scanner.Err()
+		close(lines)
+	}()
+
 	round := 0
-
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return "", totalCost, fmt.Errorf("interview: %w", err)
+	for {
+		text, done, err := i.readMessage(ctx, lines, scanDone)
+		if err != nil {
+			return "", totalCost, err
 		}
 
-		trimmed := strings.TrimSpace(scanner.Text())
-		if trimmed == "" {
-			fmt.Fprintln(i.out, rePromptMsg) //nolint:errcheck
-			continue
+		if text != "" && round < maxRounds {
+			messages = append(messages, llm.Message{Role: "user", Content: text})
+			resp, err = i.client.Generate(ctx, llm.GenerateRequest{
+				SystemPrompt: sysPrompt,
+				Messages:     messages,
+				Model:        i.model,
+			})
+			if err != nil {
+				return "", totalCost, fmt.Errorf("interview: generate: %w", err)
+			}
+
+			totalCost += resp.CostUSD
+			messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
+			fmt.Fprintln(i.out, resp.Content) //nolint:errcheck
+			round++
 		}
 
-		// round is incremented at the end of each loop body, so round >= maxRounds
-		// fires after maxRounds answers have been processed (0-indexed: rounds 0..maxRounds-1).
-		if strings.EqualFold(trimmed, "done") || round >= maxRounds {
-			if round >= maxRounds {
+		if done || round >= maxRounds {
+			if round >= maxRounds && !done {
 				fmt.Fprintln(i.out, "Maximum rounds reached. Generating spec now.") //nolint:errcheck
 			}
 			spec, cost, genErr := i.generateFinal(ctx, sysPrompt, messages)
 			return spec, totalCost + cost, genErr
 		}
-
-		messages = append(messages, llm.Message{Role: "user", Content: trimmed})
-		resp, err = i.client.Generate(ctx, llm.GenerateRequest{
-			SystemPrompt: sysPrompt,
-			Messages:     messages,
-			Model:        i.model,
-		})
-		if err != nil {
-			return "", totalCost, fmt.Errorf("interview: generate: %w", err)
-		}
-
-		totalCost += resp.CostUSD
-		messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
-		fmt.Fprintln(i.out, resp.Content) //nolint:errcheck
-		round++
 	}
-
-	if err := scanner.Err(); err != nil {
-		return "", totalCost, fmt.Errorf("interview: scanner: %w", err)
-	}
-
-	// EOF without "done" — treat as auto-generate.
-	spec, cost, err := i.generateFinal(ctx, sysPrompt, messages)
-	return spec, totalCost + cost, err
 }
 
 func (i *Interviewer) generateFinal(ctx context.Context, sysPrompt string, messages []llm.Message) (string, float64, error) {

@@ -1700,14 +1700,17 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 		seedContent = string(data)
 	}
 
-	clients, err := newLLMClient(*provider, logger)
+	// Suppress per-call LLM usage logs during the interview to keep the
+	// conversation clean for the user.
+	quietLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	clients, err := newLLMClient(*provider, quietLogger)
 	if err != nil {
 		return err
 	}
 	if *model == "" {
 		*model = defaultModel(clients.provider)
 	}
-	logger.Info("starting interview", "provider", clients.provider, "model", *model)
+	logger.Debug("starting interview", "provider", clients.provider, "model", *model)
 
 	return interviewRun(ctx, clients.client, *model, *prompt, *output, seedContent, *scenarios, logger, os.Stdin, os.Stdout, os.Stderr)
 }
