@@ -238,6 +238,8 @@ func TestTierInference(t *testing.T) {
 			return Step{WS: &WSRequest{URL: "/ws"}}
 		case "exec":
 			return Step{Exec: &ExecRequest{Command: "echo"}}
+		case "tui":
+			return Step{TUI: &TUIRequest{Command: "myapp"}}
 		default:
 			return Step{Request: &Request{Method: "GET", Path: "/"}}
 		}
@@ -337,6 +339,12 @@ func TestTierInference(t *testing.T) {
 			wantTier: 1,
 		},
 		{
+			// 2x tui: score = 2*(1+1) = 4 > 3 → tier 2 (same as browser/grpc/ws)
+			name:     "2 tui steps no captures",
+			scenario: Scenario{ID: "t", Steps: []Step{makeStepOfType("tui"), makeStepOfType("tui")}},
+			wantTier: 2,
+		},
+		{
 			// 4x http: score = 4 > 3 → tier 2
 			name:     "4 http steps no captures",
 			scenario: Scenario{ID: "t", Steps: makeSteps(4)},
@@ -369,6 +377,60 @@ func TestTierInference(t *testing.T) {
 			t.Errorf("Tier = %d, want 1", s.Tier)
 		}
 	})
+}
+
+func TestLoad_TUIStep(t *testing.T) {
+	const input = `
+id: tui-test
+description: "Test TUI step loading"
+steps:
+  - description: "Launch app"
+    tui:
+      command: myapp
+      send_key: "Enter"
+      send_text: "hello"
+      wait_for: "prompt"
+      assert_screen: "ready"
+      assert_absent: "error"
+      timeout: 10s
+    expect: "App launches and responds"
+`
+	s, err := Load(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(s.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(s.Steps))
+	}
+	step := s.Steps[0]
+	if step.StepType() != "tui" {
+		t.Errorf("StepType() = %q, want %q", step.StepType(), "tui")
+	}
+	tui := step.TUI
+	if tui == nil {
+		t.Fatal("TUI is nil")
+	}
+	if tui.Command != "myapp" {
+		t.Errorf("Command = %q, want %q", tui.Command, "myapp")
+	}
+	if tui.SendKey != "Enter" {
+		t.Errorf("SendKey = %q, want %q", tui.SendKey, "Enter")
+	}
+	if tui.SendText != "hello" {
+		t.Errorf("SendText = %q, want %q", tui.SendText, "hello")
+	}
+	if tui.WaitFor != "prompt" {
+		t.Errorf("WaitFor = %q, want %q", tui.WaitFor, "prompt")
+	}
+	if tui.AssertScreen != "ready" {
+		t.Errorf("AssertScreen = %q, want %q", tui.AssertScreen, "ready")
+	}
+	if tui.AssertAbsent != "error" {
+		t.Errorf("AssertAbsent = %q, want %q", tui.AssertAbsent, "error")
+	}
+	if tui.Timeout != "10s" {
+		t.Errorf("Timeout = %q, want %q", tui.Timeout, "10s")
+	}
 }
 
 func TestComponentFieldRoundTrip(t *testing.T) {

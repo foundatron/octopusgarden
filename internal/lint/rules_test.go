@@ -169,6 +169,14 @@ func TestScenarioRulesSync(t *testing.T) {
 		"id: test\nsteps:\n  - description: d\n    ws:\n      url: /ws\n      receive:\n        timeout: badvalue\n    expect: ok\n",
 		// SC063: ws receive count zero
 		"id: test\nsteps:\n  - description: d\n    ws:\n      url: /ws\n      receive:\n        count: 0\n    expect: ok\n",
+		// SC070: tui not a mapping
+		"id: test\nsteps:\n  - description: d\n    tui: notamapping\n    expect: ok\n",
+		// SC071: tui step empty (no command, no actions)
+		"id: test\nsteps:\n  - description: d\n    tui: {}\n    expect: ok\n",
+		// SC072: tui command empty
+		"id: test\nsteps:\n  - description: d\n    tui:\n      command: \"\"\n    expect: ok\n",
+		// SC073: tui timeout invalid
+		"id: test\nsteps:\n  - description: d\n    tui:\n      command: myapp\n      timeout: notaduration\n    expect: ok\n",
 	}
 
 	// Rules that can only be triggered by dir-level checks.

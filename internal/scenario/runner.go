@@ -17,6 +17,7 @@ const (
 var (
 	errSetupFailed          = errors.New("runner: setup step failed")
 	errNoExecutorRegistered = errors.New("no executor registered for step type")
+	errTUINotImplemented    = errors.New("tui step type is not yet implemented")
 	errRetryInvalidInterval = errors.New("retry: invalid interval")
 	errRetryInvalidTimeout  = errors.New("retry: invalid timeout")
 	errInvalidDelay         = errors.New("step: invalid delay duration")
@@ -203,6 +204,9 @@ func (r *Runner) resolveExecutor(step Step) (StepExecutor, error) {
 	st := step.StepType()
 	if st == "" {
 		return nil, errUnknownStepType
+	}
+	if st == "tui" {
+		return nil, errTUINotImplemented
 	}
 	executor, ok := r.Executors[st]
 	if !ok {

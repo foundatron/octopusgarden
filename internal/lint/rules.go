@@ -138,8 +138,8 @@ var ScenarioRules = []Rule{
 	{
 		ID:          "SC015",
 		Level:       Error,
-		Summary:     "step must have exactly one step type (request, exec, browser, grpc, or ws)",
-		MsgContains: "exactly one of request, exec, browser, grpc, or ws is required",
+		Summary:     "step must have exactly one step type (request, exec, browser, grpc, ws, or tui)",
+		MsgContains: "exactly one of request, exec, browser, grpc, ws, or tui is required",
 	},
 	{
 		ID:          "SC016",
@@ -245,7 +245,7 @@ var ScenarioRules = []Rule{
 		ID:          "SC032",
 		Level:       Error,
 		Summary:     "step must not have multiple step types",
-		MsgContains: "step has multiple step types; exactly one of request, exec, browser, grpc, or ws is required",
+		MsgContains: "step has multiple step types; exactly one of request, exec, browser, grpc, ws, or tui is required",
 	},
 	{
 		ID:          "SC033",
@@ -411,5 +411,30 @@ var ScenarioRules = []Rule{
 		Level:       Error,
 		Summary:     "ws receive count must be a positive integer",
 		MsgContains: "ws receive count must be a positive integer",
+	},
+	// TUI step rules.
+	{
+		ID:          "SC070",
+		Level:       Error,
+		Summary:     "tui must be a YAML mapping",
+		MsgContains: "tui must be a mapping",
+	},
+	{
+		ID:          "SC071",
+		Level:       Error,
+		Summary:     "tui step requires command or at least one interaction field",
+		MsgContains: "tui step requires command",
+	},
+	{
+		ID:          "SC072",
+		Level:       Error,
+		Summary:     "tui command must not be empty",
+		MsgContains: "tui command must not be empty",
+	},
+	{
+		ID:          "SC073",
+		Level:       Error,
+		Summary:     "tui timeout must be a valid Go duration",
+		MsgContains: "tui timeout: invalid duration",
 	},
 }

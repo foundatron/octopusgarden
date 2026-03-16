@@ -21,7 +21,7 @@ Violations prevent the scenario from being loaded.
 | SC012 | steps must be a non-empty array |
 | SC013 | setup must be an array |
 | SC014 | each step must be a YAML mapping |
-| SC015 | step must have exactly one step type (request, exec, browser, grpc, or ws) |
+| SC015 | step must have exactly one step type (request, exec, browser, grpc, ws, or tui) |
 | SC018 | request must be a YAML mapping |
 | SC019 | request must have a method |
 | SC020 | HTTP method must be valid — Allowed: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. |
@@ -60,6 +60,10 @@ Violations prevent the scenario from being loaded.
 | SC060 | ws must be a YAML mapping |
 | SC062 | ws receive timeout must be a valid Go duration |
 | SC063 | ws receive count must be a positive integer |
+| SC070 | tui must be a YAML mapping |
+| SC071 | tui step requires command or at least one interaction field |
+| SC072 | tui command must not be empty |
+| SC073 | tui timeout must be a valid Go duration |
 
 ## SHOULD (Warnings)
 

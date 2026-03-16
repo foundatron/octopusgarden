@@ -86,7 +86,7 @@ steps:
     expect: "ok"
 `,
 			wantErrors: 1,
-			wantMsg:    "exactly one of request, exec, browser, grpc, or ws is required",
+			wantMsg:    "exactly one of request, exec, browser, grpc, ws, or tui is required",
 		},
 		{
 			name: "missing method",
@@ -1150,6 +1150,166 @@ steps:
 	}
 	if !found {
 		t.Errorf("expected duplicate ID diagnostic; got: %v", diags)
+	}
+}
+
+func TestLintTUISteps(t *testing.T) {
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErrors int
+		wantWarns  int
+		wantMsg    string
+	}{
+		{
+			name: "valid tui launch step",
+			yaml: `id: test
+steps:
+  - description: Launch app
+    tui:
+      command: myapp
+    expect: "App launches"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "valid tui interaction step no command",
+			yaml: `id: test
+steps:
+  - description: Send key
+    tui:
+      send_key: "Enter"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "valid tui step all action fields",
+			yaml: `id: test
+steps:
+  - description: Interact
+    tui:
+      send_text: "hello"
+      wait_for: "prompt"
+      assert_screen: "ready"
+      assert_absent: "error"
+      timeout: 10s
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "tui step empty no command no actions",
+			yaml: `id: test
+steps:
+  - description: Empty tui
+    tui: {}
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "tui step requires command",
+		},
+		{
+			name: "tui step empty command",
+			yaml: `id: test
+steps:
+  - description: Bad command
+    tui:
+      command: ""
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "tui command must not be empty",
+		},
+		{
+			name: "tui step invalid timeout",
+			yaml: `id: test
+steps:
+  - description: Bad timeout
+    tui:
+      command: myapp
+      timeout: notaduration
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "tui timeout: invalid duration",
+		},
+		{
+			name: "tui and request on same step",
+			yaml: `id: test
+steps:
+  - description: Ambiguous
+    tui:
+      command: myapp
+    request:
+      method: GET
+      path: /items
+    expect: "ok"
+`,
+			wantErrors: 1,
+			wantMsg:    "multiple step types",
+		},
+		{
+			name: "tui step with captured variable reference",
+			yaml: `id: test
+setup:
+  - description: Get name
+    request:
+      method: GET
+      path: /config
+    capture:
+      - name: app_name
+        jsonpath: $.name
+steps:
+  - description: Launch with var
+    tui:
+      command: "{app_name}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  0,
+		},
+		{
+			name: "tui step with uncaptured variable",
+			yaml: `id: test
+steps:
+  - description: Launch missing var
+    tui:
+      command: "{missing_var}"
+    expect: "ok"
+`,
+			wantErrors: 0,
+			wantWarns:  1,
+			wantMsg:    "never captured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diags := lintScenarioContent("test.yaml", []byte(tt.yaml))
+			errs, warns := CountByLevel(diags)
+			if errs != tt.wantErrors {
+				t.Errorf("errors: got %d, want %d; diags: %v", errs, tt.wantErrors, diags)
+			}
+			if tt.wantWarns > 0 && warns != tt.wantWarns {
+				t.Errorf("warnings: got %d, want %d", warns, tt.wantWarns)
+			}
+			if tt.wantMsg != "" {
+				found := false
+				for _, d := range diags {
+					if strings.Contains(d.Message, tt.wantMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected diagnostic containing %q, got: %v", tt.wantMsg, diags)
+				}
+			}
+		})
 	}
 }
 

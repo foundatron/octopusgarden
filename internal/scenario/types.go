@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, grpc, or ws)")
+	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, grpc, ws, or tui)")
 	errNoCapture       = errors.New("capture has neither source nor jsonpath")
 )
 
@@ -75,6 +75,7 @@ type Step struct {
 	Browser     *BrowserRequest `yaml:"browser"`
 	GRPC        *GRPCRequest    `yaml:"grpc"`
 	WS          *WSRequest      `yaml:"ws"`
+	TUI         *TUIRequest     `yaml:"tui"`
 	Retry       *Retry          `yaml:"retry"`
 	Expect      string          `yaml:"expect"` // natural language, judged by LLM
 	Capture     []Capture       `yaml:"capture"`
@@ -87,7 +88,7 @@ type Retry struct {
 	Timeout  string `yaml:"timeout"`  // overall timeout cap (optional)
 }
 
-// StepType returns the step type key: "request", "exec", "browser", "grpc", "ws", or "" if unknown.
+// StepType returns the step type key: "request", "exec", "browser", "grpc", "ws", "tui", or "" if unknown.
 func (s Step) StepType() string {
 	if s.Request != nil {
 		return "request"
@@ -103,6 +104,9 @@ func (s Step) StepType() string {
 	}
 	if s.WS != nil {
 		return "ws"
+	}
+	if s.TUI != nil {
+		return "tui"
 	}
 	return ""
 }
@@ -179,4 +183,15 @@ type WSRequest struct {
 type WSReceive struct {
 	Timeout string `yaml:"timeout"` // receive timeout (default: 5s)
 	Count   int    `yaml:"count"`   // number of messages to collect (default: 1)
+}
+
+// TUIRequest describes a terminal UI interaction step.
+type TUIRequest struct {
+	Command      string `yaml:"command"`       // command to launch the TUI application (launch step)
+	SendKey      string `yaml:"send_key"`      // key sequence to send (e.g. "Enter", "ctrl+c")
+	SendText     string `yaml:"send_text"`     // text to type into the TUI
+	WaitFor      string `yaml:"wait_for"`      // text to wait for on screen before proceeding
+	AssertScreen string `yaml:"assert_screen"` // text that must be visible on screen
+	AssertAbsent string `yaml:"assert_absent"` // text that must NOT be visible on screen
+	Timeout      string `yaml:"timeout"`       // operation timeout as a Go duration
 }

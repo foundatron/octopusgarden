@@ -338,7 +338,7 @@ import (
 )
 
 var (
-	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, grpc, or ws)")
+	errUnknownStepType = errors.New("step has no recognized step type (need request, exec, browser, grpc, ws, or tui)")
 	errNoCapture       = errors.New("capture has neither source nor jsonpath")
 )
 
@@ -405,6 +405,7 @@ type Step struct {
 	Browser     *BrowserRequest `yaml:"browser"`
 	GRPC        *GRPCRequest    `yaml:"grpc"`
 	WS          *WSRequest      `yaml:"ws"`
+	TUI         *TUIRequest     `yaml:"tui"`
 	Retry       *Retry          `yaml:"retry"`
 	Expect      string          `yaml:"expect"` // natural language, judged by LLM
 	Capture     []Capture       `yaml:"capture"`
@@ -417,7 +418,7 @@ type Retry struct {
 	Timeout  string `yaml:"timeout"`  // overall timeout cap (optional)
 }
 
-// StepType returns the step type key: "request", "exec", "browser", "grpc", "ws", or "" if unknown.
+// StepType returns the step type key: "request", "exec", "browser", "grpc", "ws", "tui", or "" if unknown.
 func (s Step) StepType() string {
 	if s.Request != nil {
 		return "request"
@@ -433,6 +434,9 @@ func (s Step) StepType() string {
 	}
 	if s.WS != nil {
 		return "ws"
+	}
+	if s.TUI != nil {
+		return "tui"
 	}
 	return ""
 }
@@ -510,6 +514,17 @@ type WSReceive struct {
 	Timeout string `yaml:"timeout"` // receive timeout (default: 5s)
 	Count   int    `yaml:"count"`   // number of messages to collect (default: 1)
 }
+
+// TUIRequest describes a terminal UI interaction step.
+type TUIRequest struct {
+	Command      string `yaml:"command"`       // command to launch the TUI application (launch step)
+	SendKey      string `yaml:"send_key"`      // key sequence to send (e.g. "Enter", "ctrl+c")
+	SendText     string `yaml:"send_text"`     // text to type into the TUI
+	WaitFor      string `yaml:"wait_for"`      // text to wait for on screen before proceeding
+	AssertScreen string `yaml:"assert_screen"` // text that must be visible on screen
+	AssertAbsent string `yaml:"assert_absent"` // text that must NOT be visible on screen
+	Timeout      string `yaml:"timeout"`       // operation timeout as a Go duration
+}
 ```
 
 Result types (`HTTPResponse`, `StepResult`, `Result`, `StepScore`, `ScoredStep`, `ScoredScenario`,
@@ -547,7 +562,7 @@ satisfaction_criteria: |
 ```
 
 `weight` defaults to 1.0 in aggregate scoring when not set. `tier` is auto-inferred by `inferTier`
-in `loader.go` when not set (zero). Scoring: each step adds +1 base; `browser`, `grpc`, or `ws`
+in `loader.go` when not set (zero). Scoring: each step adds +1 base; `browser`, `grpc`, `ws`, or `tui`
 steps add +1 extra; a gRPC step with `stream` or a WS step with `receive` adds +1 extra; a step
 with `retry` adds +1 extra; mixed step types (>1 unique type) add +2 flat. Thresholds: score >6 or
 ≥3 steps with captures → 3 (complex); score >3 or ≥1 step with captures → 2 (moderate); else → 1
@@ -657,7 +672,7 @@ and gRPC fields. JSONPath evaluation supports dot-notation only (`$.field.sub`).
 ## Scenario Runner
 
 `Runner` (`internal/scenario/runner.go`) executes scenario steps via pluggable `StepExecutor`
-implementations (HTTP, exec, browser, gRPC). Setup steps are fatal — if any fails, the runner
+implementations (HTTP, exec, browser, gRPC, WS). The `tui` step type is recognized but returns `errTUINotImplemented` until a TUI executor is registered. Setup steps are fatal — if any fails, the runner
 returns an error immediately. Judged steps are non-fatal — transport
 errors are recorded and the step is scored 0 without making an LLM call.
 
