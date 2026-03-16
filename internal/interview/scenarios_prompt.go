@@ -89,16 +89,63 @@ Rules:
 - File names must be bare filenames only — no directory prefix (e.g., "happy-path.yaml" not "scenarios/happy-path.yaml")
 - Each file contains exactly one scenario
 - Use kebab-case for IDs and filenames (they should match)
-- Generate 3–5 scenarios that together provide good coverage
+- Generate 5–8 scenarios that together provide good coverage
 
 ## What Makes a Good Scenario Set
 
 - **Happy path**: The primary use case with valid inputs returns the expected result
+- **Happy-path variants**: include 2-3 happy paths covering full config, minimal config, and edge-case inputs
 - **Error cases**: Invalid inputs, missing auth, not-found resources return appropriate errors
+- **Exhaustive error coverage**: generate a scenario for every error/validation rule in the spec, not just a representative subset
 - **Edge cases**: Boundary values, empty collections, concurrent operations
+- **Multi-error aggregation**: when the spec mentions aggregated error reporting, include a scenario triggering multiple errors in one run
 - **Each scenario is independently runnable**: no hidden dependencies between scenarios
 - **Descriptive IDs**: "create-item-happy-path" not "test1"
 - **Specific satisfaction criteria**: describe observable outcomes, not implementation details
+
+## CLI / Exec Step Best Practices
+
+When generating exec steps, follow these patterns:
+
+**Multi-line shell commands** — use YAML block scalars to avoid quoting issues:
+` + "```yaml" + `
+exec:
+  command: |
+    bash -c '
+      cat > /tmp/config.yaml <<EOF
+    key: value
+    EOF
+      myapp --config /tmp/config.yaml
+    '
+` + "```" + `
+
+**Single-line shell commands** — wrap in bash -c for pipelines and redirects:
+` + "```yaml" + `
+exec:
+  command: "bash -c 'myapp --flag value 2>&1 | grep expected'"
+` + "```" + `
+
+**Cleanup steps** — add a cleanup step in setup to remove temp files created during the scenario:
+` + "```yaml" + `
+setup:
+  - description: Clean up temp files from previous run
+    exec:
+      command: "bash -c 'rm -f /tmp/myapp-*.yaml'"
+    expect: Exit code 0
+` + "```" + `
+
+**Assert exit codes and error content** — check exit code and that stderr is non-empty, not the exact error message:
+` + "```yaml" + `
+  - description: Run with invalid config
+    exec:
+      command: "myapp --config /tmp/bad.yaml"
+    expect: Exit code non-zero and stderr contains an error message
+    capture:
+      - name: exit_code
+        source: exitcode
+      - name: error_output
+        source: stderr
+` + "```" + `
 
 ## Example
 
@@ -149,6 +196,79 @@ steps:
       body:
         body: "No title here"
     expect: Returns 400 with an error message mentioning the missing title field
+=== END FILE ===
+
+For a CLI tool that processes config files:
+
+=== FILE: process-config-happy-path.yaml ===
+id: process-config-happy-path
+description: Processing a valid config file exits cleanly and produces expected output
+type: api
+satisfaction_criteria: |
+  The tool accepts a valid config file, processes it without errors, exits with
+  code 0, and writes output indicating successful processing.
+setup:
+  - description: Clean up temp files from previous run
+    exec:
+      command: "bash -c 'rm -f /tmp/test-config.yaml /tmp/test-output.txt'"
+    expect: Exit code 0
+steps:
+  - description: Write a valid config file
+    exec:
+      command: |
+        bash -c '
+          cat > /tmp/test-config.yaml <<EOF
+        name: example
+        value: 42
+        EOF
+        '
+    expect: Exit code 0, config file written
+  - description: Process the config file
+    exec:
+      command: "mytool --config /tmp/test-config.yaml --output /tmp/test-output.txt"
+      timeout: "10s"
+    expect: Exit code 0 and stderr is empty
+    capture:
+      - name: exit_code
+        source: exitcode
+  - description: Verify output file was created
+    exec:
+      command: "bash -c 'test -f /tmp/test-output.txt && cat /tmp/test-output.txt'"
+    expect: Exit code 0 and stdout contains the processed result
+=== END FILE ===
+
+=== FILE: process-config-missing-required-field.yaml ===
+id: process-config-missing-required-field
+description: Processing a config file missing a required field exits with an error
+type: api
+satisfaction_criteria: |
+  The tool rejects a config file missing the required name field, exits with a
+  non-zero code, and writes an error message to stderr mentioning the missing field.
+setup:
+  - description: Clean up temp files from previous run
+    exec:
+      command: "bash -c 'rm -f /tmp/bad-config.yaml'"
+    expect: Exit code 0
+steps:
+  - description: Write an invalid config file missing the required name field
+    exec:
+      command: |
+        bash -c '
+          cat > /tmp/bad-config.yaml <<EOF
+        value: 42
+        EOF
+        '
+    expect: Exit code 0, config file written
+  - description: Attempt to process the invalid config
+    exec:
+      command: "mytool --config /tmp/bad-config.yaml"
+      timeout: "10s"
+    expect: Exit code non-zero and stderr contains an error about the missing field
+    capture:
+      - name: exit_code
+        source: exitcode
+      - name: error_output
+        source: stderr
 === END FILE ===
 
 Now generate scenarios for the specification provided by the user.`
