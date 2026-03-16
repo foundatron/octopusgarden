@@ -1730,7 +1730,7 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 // When generateScenarios is true, scenario YAML files are generated and written
 // to a scenarios/ directory alongside the spec.
 func interviewRun(ctx context.Context, client llm.Client, model, initialPrompt, outputPath, seedContent string, generateScenarios bool, log *slog.Logger, in io.Reader, display interview.Display, errOut io.Writer) error {
-	iv := interview.New(client, in, display, model)
+	iv := interview.New(client, in, display, errOut, model)
 	var (
 		spec string
 		cost float64

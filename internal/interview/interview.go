@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/foundatron/octopusgarden/internal/llm"
 )
@@ -36,16 +37,19 @@ type Interviewer struct {
 	client  llm.Client
 	in      io.Reader
 	display Display
+	errOut  io.Writer
 	model   string
 }
 
 // New creates an Interviewer that reads from in, displays output via display,
-// and uses the given LLM client and model.
-func New(client llm.Client, in io.Reader, display Display, model string) *Interviewer {
+// and uses the given LLM client and model. Status output (spinners) is written
+// to errOut; pass nil to suppress.
+func New(client llm.Client, in io.Reader, display Display, errOut io.Writer, model string) *Interviewer {
 	return &Interviewer{
 		client:  client,
 		in:      in,
 		display: display,
+		errOut:  errOut,
 		model:   model,
 	}
 }
@@ -176,7 +180,9 @@ func (i *Interviewer) run(ctx context.Context, sysPrompt string, messages []llm.
 			if round >= maxRounds && !done {
 				i.display.SystemMessage("Maximum rounds reached. Generating spec now.")
 			}
+			stop := i.startSpinner("Generating spec...")
 			spec, cost, genErr := i.generateFinal(ctx, sysPrompt, messages)
+			stop()
 			return spec, totalCost + cost, genErr
 		}
 	}
@@ -225,6 +231,37 @@ func (i *Interviewer) processAnswer(ctx context.Context, sysPrompt string, messa
 	i.display.SystemMessage(rePromptMsg)
 	i.display.InputPrompt()
 	return resp.CostUSD, nil
+}
+
+// startSpinner displays a braille spinner with the given label on errOut.
+// It returns a stop function that halts the spinner and clears the line.
+// If errOut is nil, the returned function is a no-op.
+func (i *Interviewer) startSpinner(label string) func() {
+	if i.errOut == nil {
+		return func() {}
+	}
+	frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+	done := make(chan struct{})
+	ticker := time.NewTicker(100 * time.Millisecond)
+	go func() {
+		idx := 0
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Fprintf(i.errOut, "\r%c %s", frames[idx%len(frames)], label) //nolint:errcheck
+				idx++
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		ticker.Stop()
+		// Clear the spinner line: overwrite with spaces, then carriage return.
+		clearLen := len(label) + 4
+		fmt.Fprintf(i.errOut, "\r%s\r", strings.Repeat(" ", clearLen)) //nolint:errcheck
+	}
 }
 
 func (i *Interviewer) generateFinal(ctx context.Context, sysPrompt string, messages []llm.Message) (string, float64, error) {

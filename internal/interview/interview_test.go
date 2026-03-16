@@ -45,7 +45,7 @@ func TestInterviewHappyPath(t *testing.T) {
 	in := strings.NewReader("Go\n\n\ndone\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	spec, cost, err := iv.Run(context.Background(), "I want to build a CLI app.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -74,7 +74,7 @@ func TestInterviewEmptyInput(t *testing.T) {
 	in := strings.NewReader("\n\nanswer\n\n\ndone\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	_, _, err := iv.Run(context.Background(), "I want to build something.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -111,7 +111,7 @@ func TestInterviewMaxRounds(t *testing.T) {
 	in := strings.NewReader(strings.Join(lines, "\n\n\n") + "\n\n\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	spec, _, err := iv.Run(context.Background(), "Start.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -151,7 +151,7 @@ func TestInterviewDoneCaseInsensitive(t *testing.T) {
 			}
 			in := strings.NewReader(input + "\n")
 			var out bytes.Buffer
-			iv := New(client, in, ui.NewPlain(&out), "test-model")
+			iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 			spec, _, err := iv.Run(context.Background(), "Start.")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -176,7 +176,7 @@ func TestInterviewContextCancellation(t *testing.T) {
 
 	in := strings.NewReader("answer\n")
 	var out bytes.Buffer
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	_, _, err := iv.Run(ctx, "Start.")
 	if err == nil {
 		t.Fatal("expected error for canceled context")
@@ -197,7 +197,7 @@ func TestInterviewLLMError(t *testing.T) {
 
 	in := strings.NewReader("")
 	var out bytes.Buffer
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	_, _, err := iv.Run(context.Background(), "Start.")
 	if err == nil {
 		t.Fatal("expected error")
@@ -225,7 +225,7 @@ func TestInterviewCostTracking(t *testing.T) {
 	// initial call + 1 round + done → 3 calls total
 	in := strings.NewReader("answer\n\n\ndone\n")
 	var out bytes.Buffer
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	_, total, err := iv.Run(context.Background(), "Start.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -251,7 +251,7 @@ func TestInterviewEOF(t *testing.T) {
 	// Reader exhausts without "done"
 	in := strings.NewReader("partial answer")
 	var out bytes.Buffer
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	spec, _, err := iv.Run(context.Background(), "Start.")
 	if err != nil {
 		t.Fatalf("unexpected error on EOF: %v", err)
@@ -284,7 +284,7 @@ func TestInterviewMultiLineInput(t *testing.T) {
 	in := strings.NewReader("line one\nline two\nline three\n\n\ndone\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	_, _, err := iv.Run(context.Background(), "Start.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -334,7 +334,7 @@ func TestInterviewPreservesBlankLines(t *testing.T) {
 	in := strings.NewReader("paragraph one\n\nparagraph two\n\n\ndone\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	_, _, err := iv.Run(context.Background(), "Start.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -376,7 +376,7 @@ func TestRunWithSeed(t *testing.T) {
 	in := strings.NewReader("done\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	spec, cost, err := iv.RunWithSeed(context.Background(), seedSpec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -429,7 +429,7 @@ func TestRunWithSeedPreservesConversationLoop(t *testing.T) {
 	in := strings.NewReader("Go\n\n\ndone\n")
 	var out bytes.Buffer
 
-	iv := New(client, in, ui.NewPlain(&out), "test-model")
+	iv := New(client, in, ui.NewPlain(&out), nil, "test-model")
 	spec, _, err := iv.RunWithSeed(context.Background(), "## Purpose\nA CLI tool.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

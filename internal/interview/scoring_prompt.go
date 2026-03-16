@@ -1,5 +1,10 @@
 package interview
 
+// Mechanism-awareness enhancement to behavioral_completeness inspired by
+// Q00/ouroboros (https://github.com/Q00/ouroboros): Ouroboros distinguishes
+// behavioral clarity from implementation-mechanism clarity. We apply the same
+// principle here -- specs that describe desired behavior without specifying the
+// mechanism for features where the mechanism IS the hard part should score lower.
 const scoringSystemPrompt = `You are a spec-completeness evaluator. Your job is to score a software specification
 against five dimensions and identify specific gaps that would prevent an engineer from implementing
 the feature without follow-up questions.
@@ -23,6 +28,12 @@ Score each dimension from 0 to 100:
 ### behavioral_completeness (weight: 0.25)
 Does the spec describe all significant behaviors: happy paths, error paths, edge cases, and
 state transitions? Are there implicit behaviors that should be made explicit?
+
+This includes not just WHAT the system does but HOW it does it when the mechanism is
+non-obvious. If a feature requires complex infrastructure (e.g., terminal rendering, protocol
+handling, input routing), the spec must describe the mechanism, not just the desired behavior.
+Two engineers should not have to independently invent the same rendering strategy or input
+routing scheme.
 
 ### interface_precision (weight: 0.25)
 Are all interfaces (API endpoints, CLI flags, config options, data formats, types, field names)
