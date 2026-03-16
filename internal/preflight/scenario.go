@@ -57,7 +57,7 @@ func buildScenarioSystemPrompt() string {
 
 Evaluate the scenarios on four dimensions, each scored from 0.0 (completely inadequate) to 1.0 (excellent):
 
-- coverage: Do the scenarios collectively exercise all behaviors described in the spec? Are happy paths, edge cases, and failure modes represented?
+- coverage: Do the scenarios collectively exercise all behaviors described in the spec? Are happy paths, edge cases, and failure modes represented? Scope your coverage evaluation to behavior that is testable via the step types present in the scenarios — for example, exec-only suites should be scored against CLI-observable behavior such as exit codes, stdout/stderr, and file system effects. Flag genuine gaps only when the spec describes behavior that the available step types could reasonably test.
 - feasibility: Are the scenarios executable as written? Do steps reference valid endpoints, actions, and data that an implementation could satisfy?
 - isolation: Does each scenario test one coherent behavior? Are scenarios free from hidden dependencies on each other's side effects?
 - chains: For multi-step scenarios, do step sequences form coherent chains? Are captures and variable substitutions used correctly?
