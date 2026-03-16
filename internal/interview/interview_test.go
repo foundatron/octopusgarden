@@ -103,7 +103,7 @@ func TestInterviewMaxRounds(t *testing.T) {
 	}
 
 	// 21 non-"done" answers to exceed maxRounds=20.
-	// Each answer is followed by a blank line to submit it.
+	// Each answer is followed by two blank lines to submit it.
 	lines := make([]string, 21)
 	for j := range lines {
 		lines[j] = "answer"
@@ -280,7 +280,7 @@ func TestInterviewMultiLineInput(t *testing.T) {
 		},
 	}
 
-	// Multi-line paste followed by blank line to submit, then done.
+	// Multi-line paste followed by two blank lines to submit, then done.
 	in := strings.NewReader("line one\nline two\nline three\n\n\ndone\n")
 	var out bytes.Buffer
 
