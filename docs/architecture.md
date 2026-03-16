@@ -1008,7 +1008,7 @@ per-dimension strengths and gaps.
 
 Four dimensions, each scored 0.0–1.0 (unweighted average):
 
-- **Coverage** — Do scenarios exercise all spec behaviors?
+- **Coverage** — Do scenarios exercise all spec behaviors? Scoped to step types present in the suite (e.g., exec-only suites evaluated against CLI-observable behavior: exit codes, stdout/stderr, filesystem effects). Gaps flagged only for behavior the available step types could reasonably test.
 - **Feasibility** — Are scenarios executable as written?
 - **Isolation** — Does each scenario test one coherent behavior?
 - **Chains** — Are multi-step variable captures and substitutions correct?
