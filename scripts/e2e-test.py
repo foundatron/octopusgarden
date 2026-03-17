@@ -32,7 +32,7 @@ THRESHOLD = os.environ.get("E2E_THRESHOLD", "95")
 RESULTS_DIR = Path(os.environ.get("E2E_RESULTS_DIR", "e2e-results"))
 PARALLEL = int(os.environ.get("E2E_PARALLEL", "4"))
 
-AVAILABLE_SUITES = ("validate", "basic", "stratified", "modes", "multilang")
+AVAILABLE_SUITES = ("validate", "basic", "stratified", "modes", "multilang", "tui")
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -420,12 +420,26 @@ def suite_validate(r: Results) -> None:
     )
 
 
+def suite_tui(r: Results) -> None:
+    header("TUI Convergence")
+    print("Menu-driven counter TUI application.")
+
+    r.record(
+        _run_convergence(
+            "tui-demo-basic",
+            "examples/tui-demo/spec.md",
+            "examples/tui-demo/scenarios/",
+        )
+    )
+
+
 SUITE_MAP = {
     "basic": suite_basic,
     "stratified": suite_stratified,
     "modes": suite_modes,
     "multilang": suite_multilang,
     "validate": suite_validate,
+    "tui": suite_tui,
 }
 
 
