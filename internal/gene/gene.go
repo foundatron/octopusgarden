@@ -43,6 +43,7 @@ type Gene struct {
 	Language    string      `json:"language"`
 	ExtractedAt time.Time   `json:"extracted_at"`
 	Guide       string      `json:"guide"`
+	Guidance    string      `json:"guidance,omitempty"`
 	TokenCount  int         `json:"token_count"`
 	Components  []Component `json:"components,omitempty"`
 }

@@ -961,6 +961,7 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	output := fs.String("output", "genes.json", "output file path (use \"-\" for stdout)")
 	model := fs.String("model", "", "LLM model to use for extraction (default: provider-specific)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
+	guidanceFlag := fs.String("guidance", "", "extraction guidance for the LLM (use @file.txt to read from file)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: octog extract [flags]\n\nExtract coding patterns from a source directory.\n\nFlags:\n")
@@ -1008,7 +1009,12 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 		*model = defaultJudgeModel(clients.provider)
 	}
 
-	g, err := gene.Analyze(ctx, logger, clients.client, *model, *sourceDir, scan)
+	guidance, err := resolveGuidance(*guidanceFlag)
+	if err != nil {
+		return fmt.Errorf("guidance: %w", err)
+	}
+
+	g, err := gene.Analyze(ctx, logger, clients.client, *model, *sourceDir, scan, guidance)
 	if err != nil {
 		return fmt.Errorf("analyze: %w", err)
 	}
@@ -1028,6 +1034,23 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	}
 
 	return gene.Save(*output, g)
+}
+
+// resolveGuidance resolves the --guidance flag value.
+// An empty string returns ("", nil). A value starting with "@" reads the remainder as a file path.
+// Otherwise the value is returned as-is.
+func resolveGuidance(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(value, "@") {
+		data, err := os.ReadFile(value[1:])
+		if err != nil {
+			return "", fmt.Errorf("read guidance file: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	return value, nil
 }
 
 // parseAndCheckPreflight parses the spec file and optionally runs a preflight clarity check.

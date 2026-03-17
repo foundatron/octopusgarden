@@ -101,15 +101,16 @@ semantics.
 }
 ```
 
-| Field          | Type        | Description                                          |
-| -------------- | ----------- | ---------------------------------------------------- |
-| `version`      | int         | Schema version (currently 1)                         |
-| `source`       | string      | Path to the source directory that was scanned        |
-| `language`     | string      | Detected language: `go`, `python`, `node`, or `rust` |
-| `extracted_at` | string      | ISO 8601 timestamp of extraction                     |
-| `guide`        | string      | The extracted pattern guide (LLM-generated text)     |
-| `token_count`  | int         | Estimated token count of the guide                   |
-| `components`   | Component[] | Optional array of architectural components           |
+| Field          | Type        | Description                                                    |
+| -------------- | ----------- | -------------------------------------------------------------- |
+| `version`      | int         | Schema version (currently 1)                                   |
+| `source`       | string      | Path to the source directory that was scanned                  |
+| `language`     | string      | Detected language: `go`, `python`, `node`, or `rust`           |
+| `extracted_at` | string      | ISO 8601 timestamp of extraction                               |
+| `guide`        | string      | The extracted pattern guide (LLM-generated text)               |
+| `guidance`     | string      | Extraction guidance passed via `--guidance` (omitted if empty) |
+| `token_count`  | int         | Estimated token count of the guide                             |
+| `components`   | Component[] | Optional array of architectural components                     |
 
 ### Component Fields
 
@@ -289,12 +290,13 @@ Dependencies: `jq`, `octog` in `$PATH` (`make build && export PATH=$PWD/bin:$PAT
 
 ### `extract`
 
-| Flag           | Default      | Description                                             |
-| -------------- | ------------ | ------------------------------------------------------- |
-| `--source-dir` | *(required)* | Path to the source directory to extract patterns from   |
-| `--output`     | `genes.json` | Output file path (use `-` for stdout)                   |
-| `--model`      | *(auto)*     | LLM model for extraction (defaults to judge-tier model) |
-| `--provider`   | *(auto)*     | LLM provider: `anthropic` or `openai`                   |
+| Flag           | Default      | Description                                                           |
+| -------------- | ------------ | --------------------------------------------------------------------- |
+| `--source-dir` | *(required)* | Path to the source directory to extract patterns from                 |
+| `--output`     | `genes.json` | Output file path (use `-` for stdout)                                 |
+| `--model`      | *(auto)*     | LLM model for extraction (defaults to judge-tier model)               |
+| `--provider`   | *(auto)*     | LLM provider: `anthropic` or `openai`                                 |
+| `--guidance`   | *(none)*     | Extraction guidance for the LLM (use `@file.txt` to read from a file) |
 
 ### `run --genes`
 

@@ -2283,3 +2283,51 @@ func TestProgressFnTurns(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveGuidanceEmpty(t *testing.T) {
+	got, err := resolveGuidance("")
+	if err != nil {
+		t.Fatalf("resolveGuidance() error = %v", err)
+	}
+	if got != "" {
+		t.Errorf("resolveGuidance(\"\") = %q, want %q", got, "")
+	}
+}
+
+func TestResolveGuidanceInline(t *testing.T) {
+	got, err := resolveGuidance("some inline text")
+	if err != nil {
+		t.Fatalf("resolveGuidance() error = %v", err)
+	}
+	if got != "some inline text" {
+		t.Errorf("resolveGuidance() = %q, want %q", got, "some inline text")
+	}
+}
+
+func TestResolveGuidanceFromFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "guidance*.txt")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	content := "focus on error handling\n"
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	f.Close()
+
+	got, err := resolveGuidance("@" + f.Name())
+	if err != nil {
+		t.Fatalf("resolveGuidance() error = %v", err)
+	}
+	want := strings.TrimSpace(content)
+	if got != want {
+		t.Errorf("resolveGuidance() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveGuidanceFileMissing(t *testing.T) {
+	_, err := resolveGuidance("@/nonexistent/path/guidance.txt")
+	if err == nil {
+		t.Fatal("resolveGuidance() expected error for missing file, got nil")
+	}
+}

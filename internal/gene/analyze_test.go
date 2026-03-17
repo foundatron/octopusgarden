@@ -52,7 +52,7 @@ const cannedGuide = `**PATTERN** — Layered HTTP server.
 
 func TestAnalyzeBasic(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide, InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}}
-	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src/example", testScanResult())
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src/example", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestAnalyzeBasic(t *testing.T) {
 
 func TestAnalyzePromptStructure(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -84,7 +84,7 @@ func TestAnalyzePromptStructure(t *testing.T) {
 
 func TestAnalyzePromptContainsFiles(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestAnalyzePromptContainsFiles(t *testing.T) {
 
 func TestAnalyzePromptContainsLanguage(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestAnalyzePromptContainsLanguage(t *testing.T) {
 
 func TestAnalyzeSetsVersion(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -131,7 +131,7 @@ func TestAnalyzeSetsVersion(t *testing.T) {
 func TestAnalyzeSetsExtractedAt(t *testing.T) {
 	before := time.Now()
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestAnalyzeSetsExtractedAt(t *testing.T) {
 
 func TestAnalyzeSetsTokenCount(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestParseComponents(t *testing.T) {
 
 func TestAnalyzeWithComponents(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuideWithComponents}}
-	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -291,7 +291,7 @@ func TestAnalyzeWithComponents(t *testing.T) {
 
 func TestAnalyzeWithoutComponents(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -310,7 +310,7 @@ var errTestLLM = errors.New("test LLM error")
 
 func TestAnalyzeLLMError(t *testing.T) {
 	mock := &mockClient{err: errTestLLM}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if !errors.Is(err, errTestLLM) {
 		t.Errorf("Analyze() error = %v, want %v", err, errTestLLM)
 	}
@@ -318,7 +318,7 @@ func TestAnalyzeLLMError(t *testing.T) {
 
 func TestAnalyzeEmptyResponse(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: ""}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if !errors.Is(err, errEmptyExtraction) {
 		t.Errorf("Analyze() error = %v, want %v", err, errEmptyExtraction)
 	}
@@ -326,7 +326,7 @@ func TestAnalyzeEmptyResponse(t *testing.T) {
 
 func TestAnalyzeCacheControl(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -340,11 +340,43 @@ func TestAnalyzeCacheControl(t *testing.T) {
 
 func TestAnalyzeUsesModel(t *testing.T) {
 	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
-	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "my-custom-model", "/src", testScanResult())
+	_, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "my-custom-model", "/src", testScanResult(), "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
 	if mock.captured.Model != "my-custom-model" {
 		t.Errorf("Model = %q, want %q", mock.captured.Model, "my-custom-model")
+	}
+}
+
+func TestAnalyzeWithGuidance(t *testing.T) {
+	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
+	guidance := "Focus on error handling patterns"
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), guidance)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if !strings.Contains(mock.captured.SystemPrompt, "EXTRACTION GUIDANCE (from user):") {
+		t.Error("system prompt missing EXTRACTION GUIDANCE header")
+	}
+	if !strings.Contains(mock.captured.SystemPrompt, guidance) {
+		t.Errorf("system prompt missing guidance text %q", guidance)
+	}
+	if g.Guidance != guidance {
+		t.Errorf("Guidance = %q, want %q", g.Guidance, guidance)
+	}
+}
+
+func TestAnalyzeWithoutGuidance(t *testing.T) {
+	mock := &mockClient{resp: llm.GenerateResponse{Content: cannedGuide}}
+	g, err := Analyze(context.Background(), testAnalyzeLogger(), mock, "claude-haiku-4-5", "/src", testScanResult(), "")
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if strings.Contains(mock.captured.SystemPrompt, "EXTRACTION GUIDANCE") {
+		t.Error("system prompt should not contain EXTRACTION GUIDANCE when guidance is empty")
+	}
+	if g.Guidance != "" {
+		t.Errorf("Guidance = %q, want empty", g.Guidance)
 	}
 }

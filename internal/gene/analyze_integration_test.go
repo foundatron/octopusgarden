@@ -28,7 +28,7 @@ func TestAnalyzeRealLLM(t *testing.T) {
 		t.Fatalf("Scan() error = %v", err)
 	}
 
-	g, err := Analyze(context.Background(), logger, client, "claude-haiku-4-5", dir, scan)
+	g, err := Analyze(context.Background(), logger, client, "claude-haiku-4-5", dir, scan, "")
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
