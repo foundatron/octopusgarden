@@ -16,6 +16,10 @@ func TestScenarioSystemPromptCLIGuidance(t *testing.T) {
 		{"cleanup guidance", "cleanup"},
 		{"exit code assertion", "exit code"},
 		{"exec example present", "exec:"},
+		{"quality criteria self-check section", "Quality Criteria"},
+		{"capture chain requirement", "preceding step"},
+		{"isolation requirement", "Single behavior per scenario"},
+		{"bash -c requirement language", "MUST be wrapped"},
 	}
 
 	for _, tc := range tests {
