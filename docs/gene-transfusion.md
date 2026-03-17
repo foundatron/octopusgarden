@@ -39,7 +39,9 @@ Source Directory ──→ Scan ──→ Analyze (LLM) ──→ Gene JSON
 1. **Scan** (`internal/gene/scan.go`) -- walks the source directory and selects high-signal files:
    project markers (`go.mod`, `package.json`), README (truncated to 100 lines), Dockerfile,
    entrypoint, largest handler file, and largest model file. Skips test files, generated files, lock
-   files, and binary assets. Enforces a ~20,000 token budget by dropping lower-priority files.
+   files, and binary assets. Enforces a ~20,000 token budget by dropping lower-priority files. With
+   `--max-files N`, additional source files are backfilled (largest-first) up to that limit; source
+   files are trimmed first if the budget is exceeded.
 
 1. **Analyze** (`internal/gene/analyze.go`) -- sends the selected files to an LLM with a structured
    extraction prompt. The LLM produces a concise guide covering: architectural pattern, invariants,
@@ -290,13 +292,14 @@ Dependencies: `jq`, `octog` in `$PATH` (`make build && export PATH=$PWD/bin:$PAT
 
 ### `extract`
 
-| Flag           | Default      | Description                                                           |
-| -------------- | ------------ | --------------------------------------------------------------------- |
-| `--source-dir` | *(required)* | Path to the source directory to extract patterns from                 |
-| `--output`     | `genes.json` | Output file path (use `-` for stdout)                                 |
-| `--model`      | *(auto)*     | LLM model for extraction (defaults to judge-tier model)               |
-| `--provider`   | *(auto)*     | LLM provider: `anthropic` or `openai`                                 |
-| `--guidance`   | *(none)*     | Extraction guidance for the LLM (use `@file.txt` to read from a file) |
+| Flag           | Default      | Description                                                                                                                    |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--source-dir` | *(required)* | Path to the source directory to extract patterns from                                                                          |
+| `--output`     | `genes.json` | Output file path (use `-` for stdout)                                                                                          |
+| `--model`      | *(auto)*     | LLM model for extraction (defaults to judge-tier model)                                                                        |
+| `--provider`   | *(auto)*     | LLM provider: `anthropic` or `openai`                                                                                          |
+| `--guidance`   | *(none)*     | Extraction guidance for the LLM (use `@file.txt` to read from a file)                                                          |
+| `--max-files`  | `0`          | Maximum source files to scan (0 = role-based only; positive = backfill additional source files largest-first up to this limit) |
 
 ### `run --genes`
 
@@ -313,17 +316,19 @@ composed convergence activates automatically.
 
 The scanner selects files by role, in priority order:
 
-| Role         | Selection strategy                       | Example                    |
-| ------------ | ---------------------------------------- | -------------------------- |
-| `marker`     | All project markers found                | `go.mod`, `package.json`   |
-| `readme`     | First README found (truncated 100 lines) | `README.md`                |
-| `dockerfile` | First Dockerfile found                   | `Dockerfile`               |
-| `entrypoint` | First recognized entrypoint              | `main.go`, `cmd/*/main.go` |
-| `handler`    | Largest file in handler-like directories | `routes/`, `handlers/`     |
-| `model`      | Largest file in model-like directories   | `models/`, `types/`        |
+| Role         | Selection strategy                                                                                       | Example                    |
+| ------------ | -------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `marker`     | All project markers found                                                                                | `go.mod`, `package.json`   |
+| `readme`     | First README found (truncated 100 lines)                                                                 | `README.md`                |
+| `dockerfile` | First Dockerfile found                                                                                   | `Dockerfile`               |
+| `entrypoint` | First recognized entrypoint                                                                              | `main.go`, `cmd/*/main.go` |
+| `handler`    | Largest file in handler-like directories                                                                 | `routes/`, `handlers/`     |
+| `model`      | Largest file in model-like directories                                                                   | `models/`, `types/`        |
+| `source`     | Backfilled files when `--max-files N` is set; all other source files sorted largest-first, up to N total | `pkg/alpha.go`             |
 
-When the total exceeds the ~20,000 token budget, files are dropped in reverse priority: model first,
-then handler, then readme.
+When the total exceeds the ~20,000 token budget, `source`-role files are trimmed first (smallest
+first), then role-based files are dropped in reverse priority: model first, then handler, then
+readme.
 
 Skipped: `.git`, `vendor`, `node_modules`, `__pycache__`, test files (`*_test.go`, `*.test.ts`),
 generated files (`*.pb.go`, `*_generated.*`), lock files (`go.sum`, `package-lock.json`), and binary

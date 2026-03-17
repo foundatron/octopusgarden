@@ -23,7 +23,7 @@ func TestAnalyzeRealLLM(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	client := llm.NewAnthropicClient(apiKey, logger)
 
-	scan, err := Scan(context.Background(), dir)
+	scan, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
