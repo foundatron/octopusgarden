@@ -38,11 +38,17 @@ Keep the guide under 800 words. Be specific — cite actual file paths, function
 
 // Analyze uses an LLM to extract coding patterns from scanned source files,
 // producing a Gene guide for use in code generation prompts.
-func Analyze(ctx context.Context, logger *slog.Logger, client llm.Client, model string, sourceDir string, scan ScanResult) (Gene, error) {
+// guidance is optional free-text (or empty string) appended to the system prompt.
+func Analyze(ctx context.Context, logger *slog.Logger, client llm.Client, model string, sourceDir string, scan ScanResult, guidance string) (Gene, error) {
 	userMsg := buildAnalyzeUserMessage(sourceDir, scan)
 
+	systemPrompt := extractionPrompt
+	if guidance != "" {
+		systemPrompt = extractionPrompt + "\n\nEXTRACTION GUIDANCE (from user):\n" + guidance
+	}
+
 	resp, err := client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: extractionPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: userMsg}},
 		Model:        model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
@@ -62,6 +68,7 @@ func Analyze(ctx context.Context, logger *slog.Logger, client llm.Client, model 
 		Language:    scan.Language,
 		ExtractedAt: time.Now(),
 		Guide:       guide,
+		Guidance:    guidance,
 		TokenCount:  spec.EstimateTokens(guide),
 		Components:  parseComponents(guide),
 	}
