@@ -1259,11 +1259,16 @@ pipeline: `gene.Scan` selects high-signal files (markers, README, Dockerfile, en
 models) within a ~20K token budget → `gene.Analyze` sends them to an LLM to produce a structured
 guide → the guide is stored as a `Gene` JSON file.
 
-When the LLM response includes `**COMPONENT: <name>**` headers, `parseComponents` extracts each
-component's `Interface`, `Patterns`, and `DependsOn` fields into `Component` structs stored on the
-`Gene`. Field values may appear on the same line (`Interface: desc`) or the following line
-(`Interface:\n  desc`) -- `applyComponentField` signals a pending field via its `pendingField` return
-value, and `applyPendingLine` fills it from the continuation line. `Validate` (via
+When the LLM response includes component headers, `parseComponents` extracts each component's
+`Interface`, `Patterns`, and `DependsOn` fields into `Component` structs stored on the `Gene`.
+`parseComponentHeader` normalizes multiple LLM formatting variants: `**COMPONENT: <name>**` (bold),
+`## COMPONENT: name` and `### COMPONENT: name` (markdown headings) by stripping leading `#` chars
+and `**` markers before matching. Field lines are normalized by `normalizeFieldLine` which strips
+leading list markers (`-` and `*`) and bold wrapping (`**Field**:`, `**Field:**`) so that
+`applyComponentField` matches plain field names regardless of how the LLM formatted them. Field
+values may appear on the same line (`Interface: desc`) or the following line (`Interface:\n  desc`)
+-- `applyComponentField` signals a pending field via its `pendingField` return value, and
+`applyPendingLine` fills it from the continuation line. `Validate` (via
 `validateComponents` + `detectComponentCycles`) enforces non-empty unique names, all declared
 dependencies exist, and the dependency graph is acyclic (DFS gray/black coloring). Name comparison is
 case-insensitive and whitespace-normalized (`normalizeName`: lowercase + collapse internal spaces +
