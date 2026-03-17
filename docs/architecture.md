@@ -872,7 +872,7 @@ type RunResult struct {
    i. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
    j. Record SHA-256 hash of file set (for oscillation detection)
    k. Write files to workspace/{run_id}/iter_{n}/
-   l. docker build → docker run → wait for health check
+   l. docker build → startServiceContainer (capability-routing: gRPC → RunMultiPort; TUI-only → no container; HTTP/browser/legacy → Run + WaitHealthy)
    m. Run test command if configured (non-zero exit → test_fail)
    n. call validate(ctx, url, maxTier) → satisfaction, failures
       - maxTier = activeTier in stratified mode; 0 = all scenarios (non-stratified)
@@ -995,6 +995,22 @@ even after caller context cancellation. `Close()` closes the underlying Docker c
 `RunMultiPort()` starts a container exposing port 8080 (optional) plus additional ports (e.g.
 `50051/tcp` for gRPC). `StartSession()` creates a long-lived container running `sleep infinity` for
 exec-based scenarios; `Session.Exec()` runs commands inside it via `docker exec`.
+
+### Capability-Based Container Routing
+
+`startServiceContainer` (and `startComposedContainer` for composed convergence) selects the container
+strategy from `ScenarioCapabilities`:
+
+| Condition | Strategy |
+| --------- | -------- |
+| `NeedsGRPC` | `RunMultiPort` (ports 8080 + 50051); `grpcTargetProvider` set on session |
+| `NeedsTUI && !NeedsHTTP && !NeedsGRPC` | No container started; steps run locally via PTY |
+| `NeedsHTTP \|\| NeedsBrowser \|\| !NeedsExec` | `Run` + `WaitHealthy` (HTTP path, legacy fallback) |
+| `NeedsExec` (only) | `StartSession` for exec-only; no HTTP port |
+
+TUI-only scenarios skip container startup entirely — `startServiceContainer` returns an empty URL
+and nil stop function. The `serviceContainerResult` struct carries `{url, containerID, restartFn,
+stop, stalled}` back to the caller; `stop` is nil when no service container is needed.
 
 ## Stall Recovery (Wonder/Reflect)
 

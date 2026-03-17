@@ -591,6 +591,76 @@ func TestNeedsBrowserTriggersHTTPContainer(t *testing.T) {
 	}
 }
 
+func TestTUIOnlySkipsHTTPContainer(t *testing.T) {
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+			t.Fatal("Run should not be called for TUI-only scenarios")
+			return container.RunResult{}, nil, nil
+		},
+		waitHealthyFn: func(_ context.Context, _ string, _ time.Duration) error {
+			t.Fatal("WaitHealthy should not be called for TUI-only scenarios")
+			return nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Capabilities = ScenarioCapabilities{NeedsTUI: true}
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build a TUI app", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+}
+
+func TestTUIWithExecStartsSession(t *testing.T) {
+	var sessionStarted atomic.Bool
+	client := &mockLLMClient{
+		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
+			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
+		},
+	}
+	mgr := &mockContainerMgr{
+		startSessionFn: func(_ context.Context, _ string) (*container.Session, container.StopFunc, error) {
+			sessionStarted.Store(true)
+			return nil, func() {}, nil
+		},
+		runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+			t.Fatal("Run (HTTP container) should not be called for TUI+exec scenarios")
+			return container.RunResult{}, nil, nil
+		},
+	}
+	validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+		return 100, nil, 0.005, nil
+	}
+
+	opts := defaultOpts(t)
+	opts.Capabilities = ScenarioCapabilities{NeedsTUI: true, NeedsExec: true}
+
+	a := New(client, mgr, testLogger(), nil)
+	result, err := a.Run(context.Background(), "Build a TUI app with exec", opts, validate, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusConverged {
+		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !sessionStarted.Load() {
+		t.Error("expected StartSession to be called for NeedsExec=true")
+	}
+}
+
 func TestProgressCallback(t *testing.T) {
 	scores := []float64{60, 80, 100}
 	var callCount atomic.Int32
@@ -3387,6 +3457,38 @@ func TestBuildAndValidateComponent(t *testing.T) {
 		}
 	})
 
+	t.Run("tui_only", func(t *testing.T) {
+		opts := defaultOpts(t)
+		opts.Capabilities = ScenarioCapabilities{NeedsTUI: true}
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+				t.Fatal("Run should not be called for TUI-only component")
+				return container.RunResult{}, nil, nil
+			},
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				t.Fatal("RunMultiPort should not be called for TUI-only component")
+				return container.RunResult{}, nil, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		validate := func(_ context.Context, _ string, _ RestartFunc, _ int) (float64, []string, float64, error) {
+			return 100, nil, 0.01, nil
+		}
+		satisfaction, failures, err := a.buildAndValidateComponent(context.Background(), iterDir, "tui-svc", 1, validate, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if satisfaction != 100 {
+			t.Errorf("expected satisfaction=100, got %f", satisfaction)
+		}
+		if len(failures) != 0 {
+			t.Errorf("expected no failures, got %v", failures)
+		}
+	})
+
 	t.Run("build_failure", func(t *testing.T) {
 		opts := defaultOpts(t)
 		s := newTestRunState(t, opts)
@@ -3668,6 +3770,35 @@ func TestStartComposedContainer(t *testing.T) {
 		}
 		if stop != nil {
 			t.Error("expected nil stop for exec-only")
+		}
+	})
+
+	t.Run("tui_only", func(t *testing.T) {
+		opts := defaultOpts(t)
+		s := newTestRunState(t, opts)
+
+		mgr := &mockContainerMgr{
+			runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
+				t.Fatal("Run should not be called for TUI-only")
+				return container.RunResult{}, nil, nil
+			},
+			runMultiPortFn: func(_ context.Context, _ string, _ []string) (container.RunResult, container.StopFunc, error) {
+				t.Fatal("RunMultiPort should not be called for TUI-only")
+				return container.RunResult{}, nil, nil
+			},
+		}
+		a := New(noopLLMClient(), mgr, testLogger(), nil)
+
+		caps := ScenarioCapabilities{NeedsTUI: true}
+		url, stop, err := a.startComposedContainer(context.Background(), "test-tag", caps, s)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if url != "" {
+			t.Errorf("expected empty url for TUI-only, got %q", url)
+		}
+		if stop != nil {
+			t.Error("expected nil stop for TUI-only")
 		}
 	})
 
