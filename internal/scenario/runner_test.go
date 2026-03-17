@@ -1086,3 +1086,32 @@ func TestRunnerUnknownStepType(t *testing.T) {
 		t.Error("expected non-zero duration even for executor resolution failure")
 	}
 }
+
+// TestRunnerTUINoExecutorRegistered verifies that a tui step returns
+// errNoExecutorRegistered (not errTUINotImplemented) when no TUI executor is wired in.
+func TestRunnerTUINoExecutorRegistered(t *testing.T) {
+	sc := Scenario{
+		ID: "tui-unregistered",
+		Steps: []Step{
+			{
+				Description: "TUI step without registered executor",
+				TUI:         &TUIRequest{Command: "echo hello"},
+				Expect:      "Should fail with no executor",
+			},
+		},
+	}
+
+	runner := newHTTPRunner("http://unused", http.DefaultClient, newTestLogger())
+	result, err := runner.Run(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1", len(result.Steps))
+	}
+
+	if !errors.Is(result.Steps[0].Err, errNoExecutorRegistered) {
+		t.Errorf("expected errNoExecutorRegistered, got: %v", result.Steps[0].Err)
+	}
+}

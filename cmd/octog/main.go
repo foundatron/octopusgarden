@@ -399,6 +399,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 		sessionGetter: sessionGetter,
 		needsBrowser:  caps.NeedsBrowser,
 		needsWS:       caps.NeedsWS,
+		needsTUI:      caps.NeedsTUI,
 	}, grpcTargetGetter)
 	instrumentedValidate := observability.WrapValidateFn(validateFn, tp)
 
@@ -410,6 +411,7 @@ func runAttractorLoop(ctx context.Context, logger *slog.Logger, llmClient llm.Cl
 			sessionGetter: sessionGetter,
 			needsBrowser:  caps.NeedsBrowser,
 			needsWS:       caps.NeedsWS,
+			needsTUI:      caps.NeedsTUI,
 		}, grpcTargetGetter, tp)
 	}
 
@@ -477,6 +479,8 @@ func detectStepCaps(caps *attractor.ScenarioCapabilities, step scenario.Step) {
 	case "ws":
 		caps.NeedsHTTP = true
 		caps.NeedsWS = true
+	case "tui":
+		caps.NeedsTUI = true
 	}
 }
 
@@ -672,6 +676,7 @@ func validateCmd(ctx context.Context, logger *slog.Logger, args []string) error 
 		sessionGetter: func() *container.Session { return nil },
 		needsBrowser:  caps.NeedsBrowser,
 		needsWS:       caps.NeedsWS,
+		needsTUI:      caps.NeedsTUI,
 		grpcTarget:    vf.grpcTarget,
 	}, clients.client, vf.judgeModel, restartFn, vf.parallelScenarios)
 	if err != nil {
@@ -1231,6 +1236,7 @@ type executorOpts struct {
 	sessionGetter func() *container.Session
 	needsBrowser  bool
 	needsWS       bool
+	needsTUI      bool
 	grpcTarget    string
 }
 
@@ -1257,6 +1263,7 @@ func buildExecutors(opts executorOpts) (map[string]scenario.StepExecutor, func()
 		executors["ws"] = wsExec
 		closers = append(closers, wsExec.Close)
 	}
+	registerTUIExecutor(opts, executors, &closers)
 	cleanup := func() {
 		for _, fn := range closers {
 			fn()
