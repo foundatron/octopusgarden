@@ -238,6 +238,19 @@ def clean_working_tree() -> None:
         subprocess.run(["git", "clean", "-fd"], check=True)
 
 
+def cleanup_noop_branch(issue_number: str) -> None:
+    """Discard any local changes, return to main, and delete the issue branch."""
+    clean_working_tree()
+    subprocess.run(["git", "checkout", "main"], check=True)
+    result = subprocess.run(
+        ["git", "branch", "-d", f"issue-{issue_number}"], capture_output=True
+    )
+    if result.returncode != 0:
+        log(
+            f"  WARNING: could not delete branch issue-{issue_number}: {result.stderr.decode().strip()}"
+        )
+
+
 def checkout_or_create_branch(branch: str) -> None:
     result = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -293,9 +306,9 @@ def get_diff_for_review() -> str:
 # ---------------------------------------------------------------------------
 
 
-def snapshot_issues(issues: list[str], work_dir: Path) -> list[str]:
-    """Fetch and snapshot all issue content. Returns list of titles."""
-    titles: list[str] = []
+def snapshot_issues(issues: list[str], work_dir: Path) -> dict[str, str]:
+    """Fetch and snapshot all issue content. Returns {issue_number: title} for open issues only."""
+    titles: dict[str, str] = {}
     for issue_number in issues:
         log(f"Snapshotting issue #{issue_number}...")
         result = run_cmd(
@@ -307,7 +320,7 @@ def snapshot_issues(issues: list[str], work_dir: Path) -> list[str]:
                 "--repo",
                 REPO,
                 "--json",
-                "title,body,comments",
+                "title,body,comments,state",
             ],
             check=False,
         )
@@ -315,8 +328,11 @@ def snapshot_issues(issues: list[str], work_dir: Path) -> list[str]:
             log(f"ERROR: could not fetch issue #{issue_number} (does it exist?)")
             sys.exit(1)
         data = json.loads(result.stdout)
+        if data.get("state") == "CLOSED":
+            log(f"Issue #{issue_number} is already closed. Skipping.")
+            continue
         title = data["title"]
-        titles.append(title)
+        titles[issue_number] = title
         print(f"    Title: {title}")
 
         body = data.get("body") or "No description provided."
@@ -632,8 +648,9 @@ Output a revised plan incorporating your feedback, using this structure:
 (Revised risks)
 
 ### Complexity
-- Rating: simple | moderate | complex
-- Reason: (one sentence explaining the rating)"""
+- Rating: none | simple | moderate | complex
+- Reason: (one sentence explaining the rating)
+Use `none` only if the issue truly requires no file changes at all (already fixed, invalid, pure discussion with no actionable outcome). Do NOT use `none` for issues that require documentation edits, README updates, comment fixes, or any other file modification. Include a one-sentence reason on the next line as `Reason: ...`"""
 
 
 def implement_prompt(reviewed_plan_content: str) -> str:
@@ -905,15 +922,16 @@ def main() -> None:
 
     # Snapshot all issues upfront (prompt injection defense)
     titles = snapshot_issues(args.issues, work_dir)
+    open_issues = list(titles.keys())
     if not args.dry_run:
-        lock_issues(args.issues)
+        lock_issues(open_issues)
     log(
-        f"All {len(args.issues)} issues snapshotted{'' if args.dry_run else ' and locked'}. No further network fetches for issue content."
+        f"{len(open_issues)} of {len(args.issues)} issues open and snapshotted{'' if args.dry_run else ' (locked)'}. No further network fetches for issue content."
     )
 
-    total = len(args.issues)
-    for idx, issue_number in enumerate(args.issues):
-        issue_title = titles[idx]
+    total = len(open_issues)
+    for idx, issue_number in enumerate(open_issues):
+        issue_title = titles[issue_number]
         issue_snapshot = (work_dir / f"issue-{issue_number}.md").read_text()
         issue_work_dir = work_dir / issue_number
         issue_work_dir.mkdir(parents=True, exist_ok=True)
@@ -989,11 +1007,34 @@ def main() -> None:
             prompt_file,
             args.budget,
         )
-        validate_artifact(issue_work_dir / "reviewed-plan.md", 10, ["Complexity"])
-
-        # Parse complexity, select implementation model
+        # Parse complexity before min_lines validation -- a "none" plan is legitimately short
         complexity = parse_complexity(issue_work_dir / "reviewed-plan.md")
         log(f"  Complexity rating: {complexity}")
+        if complexity != "none":
+            validate_artifact(issue_work_dir / "reviewed-plan.md", 10, ["Complexity"])
+
+        if complexity == "none":
+            log(f"Issue #{issue_number} rated as no-op. Closing.")
+            close_result = subprocess.run(
+                [
+                    "gh",
+                    "issue",
+                    "close",
+                    issue_number,
+                    "--repo",
+                    REPO,
+                    "--comment",
+                    "Closing: plan review determined no code changes are needed.",
+                ],
+                capture_output=True,
+            )
+            if close_result.returncode != 0:
+                log(
+                    f"  WARNING: failed to close issue #{issue_number}: {close_result.stderr.decode().strip()}"
+                )
+            unlock_issue(issue_number)
+            cleanup_noop_branch(issue_number)
+            continue
 
         phase3_model = impl_model
         if not impl_model_override and complexity == "complex":
