@@ -33,14 +33,17 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	// SQLite only allows one concurrent writer; WAL mode handles concurrent reads.
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("store: pragma wal: %w", err)
-	}
-
+	// Set busy_timeout FIRST so the WAL mode transition below will retry
+	// for 5s instead of failing instantly with SQLITE_BUSY (261) when
+	// another process holds the lock.
 	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: pragma busy_timeout: %w", err)
+	}
+
+	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: pragma wal: %w", err)
 	}
 
 	if err := createTables(ctx, db); err != nil {
