@@ -39,7 +39,7 @@ func TestScanGoProject(t *testing.T) {
 	writeTestFile(t, dir, "handlers/user.go", "package handlers\n")
 	writeTestFile(t, dir, "Dockerfile", "FROM golang:1.24\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestScanNodeProject(t *testing.T) {
 	writeTestFile(t, dir, "index.js", "console.log('hi')\n")
 	writeTestFile(t, dir, "routes/items.js", "module.exports = {}\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestScanPythonProject(t *testing.T) {
 	writeTestFile(t, dir, "app.py", "from flask import Flask\n")
 	writeTestFile(t, dir, "routers/auth.py", "def login(): pass\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestScanRustProject(t *testing.T) {
 	writeTestFile(t, dir, "Cargo.toml", "[package]\nname = \"test\"\n")
 	writeTestFile(t, dir, "src/main.rs", "fn main() {}\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -113,7 +113,7 @@ func TestScanSelectsLargestHandler(t *testing.T) {
 	writeTestFile(t, dir, "routes/small.go", small)
 	writeTestFile(t, dir, "routes/large.go", large)
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -132,7 +132,7 @@ func TestScanSkipsTestFiles(t *testing.T) {
 	writeTestFile(t, dir, "handlers/handler.go", "package handlers\n")
 	writeTestFile(t, dir, "handlers/handler_test.go", "package handlers\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestScanSkipsVendor(t *testing.T) {
 	writeTestFile(t, dir, "main.go", "package main\n")
 	writeTestFile(t, dir, "vendor/lib/main.go", "package lib\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -166,7 +166,7 @@ func TestScanSkipsNodeModules(t *testing.T) {
 	writeTestFile(t, dir, "index.js", "console.log('hi')\n")
 	writeTestFile(t, dir, "node_modules/express/index.js", "module.exports = {}\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestScanSkipsLockFiles(t *testing.T) {
 	writeTestFile(t, dir, "go.mod", "module example\n")
 	writeTestFile(t, dir, "go.sum", "hash\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestScanSkipsBinaryFiles(t *testing.T) {
 	writeTestFile(t, dir, "main.go", "package main\n")
 	writeTestFile(t, dir, "app.exe", "MZ\x00")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -219,7 +219,7 @@ func TestScanReadmeTruncation(t *testing.T) {
 	}
 	writeTestFile(t, dir, "README.md", strings.Join(lines, "\n")+"\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestScanTokenBudget(t *testing.T) {
 	writeTestFile(t, dir, "handlers/user.go", bigContent)
 	writeTestFile(t, dir, "models/user.go", bigContent)
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -262,14 +262,14 @@ func TestScanTokenBudget(t *testing.T) {
 
 func TestScanEmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	_, err := Scan(context.Background(), dir)
+	_, err := Scan(context.Background(), dir, ScanOptions{})
 	if !errors.Is(err, errNoFiles) {
 		t.Errorf("Scan() error = %v, want %v", err, errNoFiles)
 	}
 }
 
 func TestScanDirNotExist(t *testing.T) {
-	_, err := Scan(context.Background(), filepath.Join(t.TempDir(), "nonexistent"))
+	_, err := Scan(context.Background(), filepath.Join(t.TempDir(), "nonexistent"), ScanOptions{})
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Scan() error = %v, want os.ErrNotExist", err)
 	}
@@ -280,7 +280,7 @@ func TestScanNestedEntryPoint(t *testing.T) {
 	writeTestFile(t, dir, "go.mod", "module example\n")
 	writeTestFile(t, dir, "cmd/server/main.go", "package main\nfunc main() {}\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -298,7 +298,7 @@ func TestScanMultipleMarkers(t *testing.T) {
 	writeTestFile(t, dir, "go.mod", "module example\n")
 	writeTestFile(t, dir, "package.json", `{"name":"test"}`)
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -311,7 +311,7 @@ func TestScanNoMarkerFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "app.py", "print('hello')\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -325,7 +325,7 @@ func TestScanDockerfileVariants(t *testing.T) {
 	writeTestFile(t, dir, "go.mod", "module example\n")
 	writeTestFile(t, dir, "docker/Dockerfile", "FROM golang:1.24\n")
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -347,7 +347,7 @@ func TestScanSkipsLargeFiles(t *testing.T) {
 	bigContent := strings.Repeat("x", maxFileSize+1)
 	writeTestFile(t, dir, "handlers/huge.go", bigContent)
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -363,8 +363,136 @@ func TestScanNotDir(t *testing.T) {
 	if err := os.WriteFile(f, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Scan(context.Background(), f)
+	_, err := Scan(context.Background(), f, ScanOptions{})
 	if !errors.Is(err, errNotDir) {
 		t.Errorf("Scan() error = %v, want %v", err, errNotDir)
+	}
+}
+
+func TestScanMaxFilesBackfill(t *testing.T) {
+	// A project with only a marker file and several plain .go files that don't
+	// match any handler/model/entrypoint heuristics. With MaxFiles: 10, the
+	// plain files should be backfilled as "source" role.
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	writeTestFile(t, dir, "pkg/alpha/alpha.go", "package alpha\n"+strings.Repeat("// line\n", 20))
+	writeTestFile(t, dir, "pkg/beta/beta.go", "package beta\n"+strings.Repeat("// line\n", 10))
+	writeTestFile(t, dir, "pkg/gamma/gamma.go", "package gamma\n"+strings.Repeat("// line\n", 5))
+
+	res, err := Scan(context.Background(), dir, ScanOptions{MaxFiles: 10})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	roles := map[string]int{}
+	for _, f := range res.Files {
+		roles[f.Role]++
+	}
+	if roles["marker"] != 1 {
+		t.Errorf("marker count = %d, want 1", roles["marker"])
+	}
+	if roles["source"] != 3 {
+		t.Errorf("source count = %d, want 3", roles["source"])
+	}
+}
+
+func TestScanMaxFilesZero(t *testing.T) {
+	// MaxFiles: 0 (zero value) means no backfill — only role-based files.
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	writeTestFile(t, dir, "pkg/alpha/alpha.go", "package alpha\n")
+	writeTestFile(t, dir, "pkg/beta/beta.go", "package beta\n")
+
+	res, err := Scan(context.Background(), dir, ScanOptions{})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	for _, f := range res.Files {
+		if f.Role == "source" {
+			t.Errorf("unexpected source-role file %q with MaxFiles: 0", f.Path)
+		}
+	}
+	// Only the marker should be present.
+	if len(res.Files) != 1 {
+		t.Errorf("len(Files) = %d, want 1", len(res.Files))
+	}
+}
+
+func TestScanMaxFilesExceedsCandidates(t *testing.T) {
+	// MaxFiles larger than available files: all files included, no error.
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	writeTestFile(t, dir, "pkg/a.go", "package pkg\n")
+	writeTestFile(t, dir, "pkg/b.go", "package pkg\n")
+	writeTestFile(t, dir, "pkg/c.go", "package pkg\n")
+
+	res, err := Scan(context.Background(), dir, ScanOptions{MaxFiles: 20})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	// 1 marker + 3 source = 4 total.
+	if len(res.Files) != 4 {
+		t.Errorf("len(Files) = %d, want 4", len(res.Files))
+	}
+}
+
+func TestScanMaxFilesTokenBudget(t *testing.T) {
+	// Large source files should be trimmed before role-based files when over budget.
+	dir := t.TempDir()
+	// Each char ~0.25 tokens; 40K chars ~10K tokens.
+	bigContent := strings.Repeat("x", 40_000)
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+	writeTestFile(t, dir, "pkg/big1.go", bigContent)
+	writeTestFile(t, dir, "pkg/big2.go", bigContent)
+	writeTestFile(t, dir, "pkg/big3.go", bigContent)
+
+	res, err := Scan(context.Background(), dir, ScanOptions{MaxFiles: 10})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	total := 0
+	for _, f := range res.Files {
+		total += spec.EstimateTokens(f.Content)
+	}
+	if total > tokenBudget {
+		t.Errorf("total tokens = %d, want <= %d", total, tokenBudget)
+	}
+	// The marker (go.mod) and entrypoint (main.go) must survive.
+	if findRole(res.Files, "marker") == nil {
+		t.Error("marker should survive budget enforcement")
+	}
+	if findRole(res.Files, "entrypoint") == nil {
+		t.Error("entrypoint should survive budget enforcement")
+	}
+}
+
+func TestScanSourceFileSortOrder(t *testing.T) {
+	// Largest source files should be selected first when MaxFiles limits count.
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example\n")
+	small := "package pkg\n" + strings.Repeat("// s\n", 5)
+	large := "package pkg\n" + strings.Repeat("// l\n", 50)
+	writeTestFile(t, dir, "pkg/small.go", small)
+	writeTestFile(t, dir, "pkg/large.go", large)
+
+	// MaxFiles: 2 means 1 marker + 1 source (the largest).
+	res, err := Scan(context.Background(), dir, ScanOptions{MaxFiles: 2})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	var sourceFiles []SelectedFile
+	for _, f := range res.Files {
+		if f.Role == "source" {
+			sourceFiles = append(sourceFiles, f)
+		}
+	}
+	if len(sourceFiles) != 1 {
+		t.Fatalf("source file count = %d, want 1", len(sourceFiles))
+	}
+	if sourceFiles[0].Path != "pkg/large.go" {
+		t.Errorf("selected source = %q, want %q", sourceFiles[0].Path, "pkg/large.go")
 	}
 }

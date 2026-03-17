@@ -8,14 +8,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/foundatron/octopusgarden/internal/spec"
 )
 
 var (
-	errNoFiles = errors.New("gene: no recognizable source files found")
-	errNotDir  = errors.New("gene: path is not a directory")
+	errNoFiles          = errors.New("gene: no recognizable source files found")
+	errNotDir           = errors.New("gene: path is not a directory")
+	errNegativeMaxFiles = errors.New("gene: MaxFiles must be >= 0")
 )
 
 const (
@@ -42,14 +44,26 @@ type fileCandidate struct {
 	size int64
 }
 
+// ScanOptions controls optional behavior for Scan.
+// The zero value (ScanOptions{}) preserves the original role-based-only behavior.
+type ScanOptions struct {
+	// MaxFiles is the maximum number of files to include in the result.
+	// If 0, only role-based files (marker, readme, dockerfile, entrypoint,
+	// handler, model) are selected. If positive, additional source files are
+	// backfilled up to this limit, largest first.
+	MaxFiles int
+}
+
 type walkCollector struct {
 	sourceDir         string
+	maxFiles          int
 	markers           []string
 	readme            string
 	dockerfile        string
 	entrypoints       []string
 	handlerCandidates []fileCandidate
 	modelCandidates   []fileCandidate
+	allCandidates     []fileCandidate
 }
 
 // File classification lookup tables. Read-only after init.
@@ -146,7 +160,10 @@ var modelDirs = map[string]bool{
 // Scan walks sourceDir and selects files with the highest architectural signal
 // for LLM pattern extraction. It targets approximately tokenBudget tokens of
 // content, dropping lower-priority files when the budget is exceeded.
-func Scan(ctx context.Context, sourceDir string) (ScanResult, error) {
+func Scan(ctx context.Context, sourceDir string, opts ScanOptions) (ScanResult, error) {
+	if opts.MaxFiles < 0 {
+		return ScanResult{}, fmt.Errorf("%w (got %d)", errNegativeMaxFiles, opts.MaxFiles)
+	}
 	info, err := os.Stat(sourceDir)
 	if err != nil {
 		return ScanResult{}, fmt.Errorf("gene: %w", err)
@@ -155,7 +172,7 @@ func Scan(ctx context.Context, sourceDir string) (ScanResult, error) {
 		return ScanResult{}, errNotDir
 	}
 
-	wc := &walkCollector{sourceDir: sourceDir}
+	wc := &walkCollector{sourceDir: sourceDir, maxFiles: opts.MaxFiles}
 	if err := filepath.WalkDir(sourceDir, wc.walkFn(ctx)); err != nil {
 		return ScanResult{}, fmt.Errorf("gene: walk: %w", err)
 	}
@@ -220,6 +237,12 @@ func (wc *walkCollector) classify(rel string, d fs.DirEntry) error {
 
 	if inDirSet(rel, modelDirs) {
 		wc.modelCandidates = append(wc.modelCandidates, fileCandidate{path: rel, size: size})
+	}
+
+	// Collect all non-marker, non-readme, non-dockerfile files as candidates
+	// for source-role backfill (used when MaxFiles > 0).
+	if wc.maxFiles > 0 && !markerFiles[name] && !isReadme(name) && !isDockerfile(rel) {
+		wc.allCandidates = append(wc.allCandidates, fileCandidate{path: rel, size: size})
 	}
 
 	return nil
@@ -328,66 +351,107 @@ func detectLanguage(markerPaths []string) string {
 	return ""
 }
 
-func (wc *walkCollector) buildResult() (ScanResult, error) {
+// backfillSourceFiles appends source-role files to files, sorted largest-first,
+// until len(files) reaches wc.maxFiles or candidates are exhausted.
+func (wc *walkCollector) backfillSourceFiles(files []SelectedFile) ([]SelectedFile, error) {
+	// Sort a copy so wc.allCandidates is not mutated (safe for repeated calls).
+	candidates := make([]fileCandidate, len(wc.allCandidates))
+	copy(candidates, wc.allCandidates)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].size > candidates[j].size
+	})
+	selected := make(map[string]bool, len(files))
+	for _, f := range files {
+		selected[f.Path] = true
+	}
+	for _, cand := range candidates {
+		if len(files) >= wc.maxFiles {
+			break
+		}
+		if selected[cand.path] {
+			continue
+		}
+		content, err := readFileContent(filepath.Join(wc.sourceDir, cand.path))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, SelectedFile{Path: cand.path, Content: content, Role: "source"})
+	}
+	return files, nil
+}
+
+// collectRoleFiles reads and returns the role-based files (marker, readme,
+// dockerfile, entrypoint, handler, model) determined during the walk.
+func (wc *walkCollector) collectRoleFiles() ([]SelectedFile, error) {
 	files := make([]SelectedFile, 0, len(wc.markers)+4)
 
-	// Markers.
 	for _, rel := range wc.markers {
 		content, err := readFileContent(filepath.Join(wc.sourceDir, rel))
 		if err != nil {
-			return ScanResult{}, err
+			return nil, err
 		}
 		files = append(files, SelectedFile{Path: rel, Content: content, Role: "marker"})
 	}
 
-	// README (truncated).
 	if wc.readme != "" {
 		content, err := readFileTruncated(filepath.Join(wc.sourceDir, wc.readme), readmeMaxLines)
 		if err != nil {
-			return ScanResult{}, err
+			return nil, err
 		}
 		files = append(files, SelectedFile{Path: wc.readme, Content: content, Role: "readme"})
 	}
 
-	// Dockerfile.
 	if wc.dockerfile != "" {
 		content, err := readFileContent(filepath.Join(wc.sourceDir, wc.dockerfile))
 		if err != nil {
-			return ScanResult{}, err
+			return nil, err
 		}
 		files = append(files, SelectedFile{Path: wc.dockerfile, Content: content, Role: "dockerfile"})
 	}
 
-	// Entrypoint: pick first found.
 	if len(wc.entrypoints) > 0 {
 		rel := wc.entrypoints[0]
 		content, err := readFileContent(filepath.Join(wc.sourceDir, rel))
 		if err != nil {
-			return ScanResult{}, err
+			return nil, err
 		}
 		files = append(files, SelectedFile{Path: rel, Content: content, Role: "entrypoint"})
 	}
 
-	// Handler: pick largest.
 	if best := selectLargest(wc.handlerCandidates); best != nil {
 		content, err := readFileContent(filepath.Join(wc.sourceDir, best.path))
 		if err != nil {
-			return ScanResult{}, err
+			return nil, err
 		}
 		files = append(files, SelectedFile{Path: best.path, Content: content, Role: "handler"})
 	}
 
-	// Model: pick largest.
 	if best := selectLargest(wc.modelCandidates); best != nil {
 		content, err := readFileContent(filepath.Join(wc.sourceDir, best.path))
 		if err != nil {
-			return ScanResult{}, err
+			return nil, err
 		}
 		files = append(files, SelectedFile{Path: best.path, Content: content, Role: "model"})
 	}
 
+	return files, nil
+}
+
+func (wc *walkCollector) buildResult() (ScanResult, error) {
+	files, err := wc.collectRoleFiles()
+	if err != nil {
+		return ScanResult{}, err
+	}
+
 	if len(files) == 0 {
 		return ScanResult{}, errNoFiles
+	}
+
+	if wc.maxFiles > 0 && len(files) < wc.maxFiles {
+		files, err = wc.backfillSourceFiles(files)
+		if err != nil {
+			return ScanResult{}, err
+		}
 	}
 
 	lang := detectLanguage(wc.markers)
@@ -410,6 +474,23 @@ func selectLargest(candidates []fileCandidate) *fileCandidate {
 }
 
 func enforceTokenBudget(files []SelectedFile) []SelectedFile {
+	// Trim source-role files one at a time, smallest first (last added,
+	// since they were appended largest-first). This is O(n*s) where s is the
+	// number of source files removed, but MaxFiles is capped at tens of files
+	// in practice so the cost is negligible.
+	for totalTokens(files) > tokenBudget {
+		idx := -1
+		for i := len(files) - 1; i >= 0; i-- {
+			if files[i].Role == "source" {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			break
+		}
+		files = append(files[:idx], files[idx+1:]...)
+	}
 	// Drop in reverse priority: model -> handler -> readme.
 	dropOrder := []string{"model", "handler", "readme"}
 	for _, role := range dropOrder {

@@ -1089,6 +1089,7 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	model := fs.String("model", "", "LLM model to use for extraction (default: provider-specific)")
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 	guidanceFlag := fs.String("guidance", "", "extraction guidance for the LLM (use @file.txt to read from file)")
+	maxFiles := fs.Int("max-files", 0, "maximum source files to scan (0 for role-based only, positive to backfill additional source files)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: octog extract [flags]
@@ -1141,7 +1142,7 @@ Flags:
 		return errSourceDirNotDir
 	}
 
-	scan, err := gene.Scan(ctx, *sourceDir)
+	scan, err := gene.Scan(ctx, *sourceDir, gene.ScanOptions{MaxFiles: *maxFiles})
 	if err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}

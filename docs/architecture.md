@@ -1235,7 +1235,7 @@ octog validate   --scenarios <dir> --target <url> [--grpc-target host:port] [--j
 octog preflight  [--judge-model claude-haiku-4-5] [--threshold 0.8] [--verbose] [--scenarios <dir>] <spec-path>
 octog status     [--format text|json]
 octog lint       [--spec <path>] [--scenarios <dir>]
-octog extract    --source-dir <path> [--output genes.json] [--model ...] [--provider anthropic|openai]
+octog extract    --source-dir <path> [--output genes.json] [--model ...] [--provider anthropic|openai] [--max-files N] [--guidance "..."|@file.txt]
 octog models     [--provider anthropic|openai]
 octog configure
 ```
@@ -1255,9 +1255,13 @@ Config file location (in priority order):
 ## Gene Transfusion
 
 Gene transfusion bootstraps code generation by extracting patterns from an exemplar codebase. The
-pipeline: `gene.Scan` selects high-signal files (markers, README, Dockerfile, entrypoint, handlers,
-models) within a ~20K token budget → `gene.Analyze` sends them to an LLM to produce a structured
-guide → the guide is stored as a `Gene` JSON file.
+pipeline: `gene.Scan(ctx, dir, ScanOptions)` selects high-signal files (markers, README, Dockerfile,
+entrypoint, handlers, models) within a ~20K token budget → `gene.Analyze` sends them to an LLM to
+produce a structured guide → the guide is stored as a `Gene` JSON file.
+
+`ScanOptions.MaxFiles` (default 0 = role-based only): when positive, additional `source`-role files
+are backfilled largest-first until the total reaches `MaxFiles`. Source files are trimmed first
+during token budget enforcement. Negative values return `errNegativeMaxFiles`.
 
 When the LLM response includes component headers, `parseComponents` extracts each component's
 `Interface`, `Patterns`, and `DependsOn` fields into `Component` structs stored on the `Gene`.

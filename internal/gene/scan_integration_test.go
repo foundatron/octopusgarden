@@ -12,7 +12,7 @@ import (
 func TestScanSelfProject(t *testing.T) {
 	dir := testutil.RepoRoot(t)
 
-	res, err := Scan(context.Background(), dir)
+	res, err := Scan(context.Background(), dir, ScanOptions{})
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
