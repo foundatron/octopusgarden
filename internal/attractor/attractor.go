@@ -628,6 +628,9 @@ func (a *Attractor) startComposedContainer(ctx context.Context, tag string, caps
 		}
 		s.grpcTargetProvider(res.grpcTarget)
 		return res.url, func() { res.stop(); s.grpcTargetProvider("") }, nil
+	case caps.NeedsTUI && !caps.NeedsHTTP && !caps.NeedsGRPC:
+		// TUI-only: no container service needed.
+		return "", nil, nil
 	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
 		res, hErr := a.startHTTPContainer(ctx, 0, tag, s.opts.HealthTimeout, s)
 		if hErr != nil {
@@ -1171,35 +1174,19 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		defer s.sessionProvider(nil) // clear session after validation
 	}
 
-	var restartFn RestartFunc
-	switch {
-	case caps.NeedsGRPC:
-		res, err := a.startGRPCContainer(ctx, iter, tag, caps, s)
-		if err != nil {
-			return nil, err
-		}
-		if res.stop == nil {
-			return res.stalled, nil
-		}
-		defer res.stop()
-		url = res.url
-		containerID = res.containerID
-		s.grpcTargetProvider(res.grpcTarget)
-		defer s.grpcTargetProvider("") // clear after validation
-	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
-		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
-		res, err := a.startHTTPContainer(ctx, iter, tag, s.opts.HealthTimeout, s)
-		if err != nil {
-			return nil, err
-		}
-		if res.stop == nil {
-			return res.stalled, nil
-		}
-		defer res.stop()
-		url = res.url
-		containerID = res.containerID
-		restartFn = res.restart
+	svc, svcErr := a.startServiceContainer(ctx, iter, tag, caps, s)
+	if svcErr != nil {
+		return nil, svcErr
 	}
+	if svc.stalled != nil {
+		return svc.stalled, nil
+	}
+	if svc.stop != nil {
+		defer svc.stop()
+	}
+	url = svc.url
+	containerID = svc.containerID
+	restartFn := svc.restartFn
 
 	// Run test command before validation when configured and an HTTP container is available.
 	if skip, stall, err := a.runTestCommand(ctx, iter, containerID, s); err != nil || skip {
@@ -1247,6 +1234,55 @@ func (a *Attractor) runTestCommand(ctx context.Context, iter int, containerID st
 		return true, a.checkStalled(iter, s), nil
 	}
 	return false, nil, nil
+}
+
+// serviceContainerResult holds the outputs of startServiceContainer.
+type serviceContainerResult struct {
+	url         string
+	containerID string
+	restartFn   RestartFunc
+	stop        func()     // nil when no service container is needed (TUI-only, exec-only)
+	stalled     *RunResult // non-nil when startup failed and stall limit is reached
+}
+
+// startServiceContainer selects and starts the appropriate service container based on capabilities.
+// It returns a serviceContainerResult whose stop function (if non-nil) must be deferred by the caller.
+func (a *Attractor) startServiceContainer(ctx context.Context, iter int, tag string, caps ScenarioCapabilities, s *runState) (serviceContainerResult, error) {
+	switch {
+	case caps.NeedsGRPC:
+		res, err := a.startGRPCContainer(ctx, iter, tag, caps, s)
+		if err != nil {
+			return serviceContainerResult{}, err
+		}
+		if res.stop == nil {
+			return serviceContainerResult{stalled: res.stalled}, nil
+		}
+		s.grpcTargetProvider(res.grpcTarget)
+		return serviceContainerResult{
+			url:         res.url,
+			containerID: res.containerID,
+			stop:        func() { res.stop(); s.grpcTargetProvider("") },
+		}, nil
+	case caps.NeedsTUI && !caps.NeedsHTTP && !caps.NeedsGRPC:
+		// TUI-only: steps run locally via PTY, no container service needed.
+		return serviceContainerResult{}, nil
+	case caps.NeedsHTTP || caps.NeedsBrowser || !caps.NeedsExec:
+		// If only HTTP needed, or no capabilities detected (legacy), use Run + WaitHealthy.
+		res, err := a.startHTTPContainer(ctx, iter, tag, s.opts.HealthTimeout, s)
+		if err != nil {
+			return serviceContainerResult{}, err
+		}
+		if res.stop == nil {
+			return serviceContainerResult{stalled: res.stalled}, nil
+		}
+		return serviceContainerResult{
+			url:         res.url,
+			containerID: res.containerID,
+			restartFn:   res.restart,
+			stop:        res.stop,
+		}, nil
+	}
+	return serviceContainerResult{}, nil
 }
 
 // httpContainerResult holds the outputs of startHTTPContainer.
