@@ -154,6 +154,24 @@ func parseLogLevel() slog.Level {
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage: octog <command> [flags]
 
+OctopusGarden is an autonomous software factory: write a spec and a set of
+holdout scenarios, then let the attractor loop generate code, run the
+scenarios inside a container, score satisfaction via an LLM judge, and feed
+failures back until convergence — zero human code review required.
+
+Typical workflow:
+  1. interview   Draft a spec interactively (or write one by hand).
+  2. preflight   Verify the spec is clear enough before spending budget.
+  3. lint        Catch formatting errors in spec and scenario files.
+  4. run         Run the attractor loop: spec + scenarios → converged code.
+  5. validate    Re-validate a running service at any time without re-running.
+  6. status      Review run history, scores, and costs.
+
+Optional:
+  extract    Extract coding patterns from an existing codebase (gene transfusion).
+  models     List models available from the configured provider.
+  configure  Set API keys in the platform config file.
+
 Commands:
   interview  Interactively draft a spec through conversation
   run        Run the attractor loop to generate software from a spec
@@ -194,7 +212,45 @@ func runCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	stratifiedFlag := fs.Bool("stratified", false, "validate scenarios by ascending difficulty tier (1→2→3), converging each tier before advancing")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog run [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog run [flags]
+
+Run the attractor loop: the LLM generates code from --spec, the code is built
+and run in a Docker container, holdout --scenarios are executed against it, an
+LLM judge scores each scenario (0-100), and failures are fed back as context
+for the next iteration. The loop converges when the aggregate satisfaction
+score reaches --threshold (default 95%%) or the --budget is exhausted.
+
+Holdout isolation is enforced: the attractor never sees scenario files during
+generation. Only the spec content is provided to the generation model.
+
+Examples:
+  # Basic run with spec and scenarios
+  octog run --spec spec.md --scenarios scenarios/
+
+  # Tighten budget and lower convergence threshold for rapid prototyping
+  octog run --spec spec.md --scenarios scenarios/ --budget 2.00 --threshold 80
+
+  # Apply gene transfusion from an existing Go codebase
+  octog run --spec spec.md --scenarios scenarios/ \
+    --genes genes.json --patch
+
+  # Agentic generation mode with multi-turn tool use (Anthropic only)
+  octog run --spec spec.md --scenarios scenarios/ --agentic
+
+Key flags:
+  --spec, --scenarios   Required. Paths to spec file and scenarios directory.
+  --budget              Max USD to spend (default 5.00).
+  --threshold           Convergence target, 0-100 (default 95).
+  --model               Generation model (default: provider-specific).
+  --judge-model         Scoring model (default: provider-specific).
+  --language            Target language: go, python, node, rust, auto.
+  --genes               Path to genes.json from 'octog extract'.
+  --patch               Send only changed files on iteration 2+.
+  --agentic             Enable multi-turn tool-use generation (Anthropic only).
+  --stratified          Converge scenarios tier-by-tier (1→2→3).
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -599,7 +655,30 @@ func parseValidateFlags(args []string) (validateFlags, error) {
 	fs.IntVar(&vf.parallelScenarios, "parallel-scenarios", 1, "number of scenarios to run concurrently (>1 disables container restart; scenarios share container state)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog validate [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog validate [flags]
+
+Run scenario files against a live service and score each one via an LLM judge.
+Each scenario step is executed (HTTP, exec, browser, gRPC, WebSocket, or TUI),
+responses are captured, and the judge assigns a 0-100 satisfaction score. The
+aggregate score is printed; exit code 1 is returned if --threshold is set and
+the score falls below it.
+
+Use --target to point at an already-running service, or --code to let octog
+build and manage the container lifecycle itself.
+
+Examples:
+  # Validate against a running service
+  octog validate --scenarios scenarios/ --target http://localhost:8080
+
+  # Build and run the container, then validate (restarts between scenarios)
+  octog validate --scenarios scenarios/ --code ./myapp/
+
+  # Enforce a minimum score and get JSON output for CI
+  octog validate --scenarios scenarios/ --target http://localhost:8080 \
+    --threshold 90 --format json
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -790,7 +869,21 @@ func statusCmd(ctx context.Context, _ *slog.Logger, args []string) error {
 	format := fs.String("format", "text", "output format: text or json")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog status [flags]\n\nShow recent runs, scores, and costs.\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog status [flags]
+
+Show recent attractor loop runs from the local SQLite history database,
+including run ID, status, language, model, satisfaction score, iteration
+count, and total cost.
+
+Examples:
+  # Show a summary table of all runs
+  octog status
+
+  # Emit machine-readable JSON for scripting
+  octog status --format json
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -866,7 +959,21 @@ func modelsCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	provider := fs.String("provider", "", "LLM provider: anthropic or openai (auto-detected from env if omitted)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog models [flags]\n\nList available models.\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog models [flags]
+
+Query the configured provider's API and list available model IDs, display
+names, and creation dates. Useful for choosing values for --model and
+--judge-model in 'octog run' and 'octog validate'.
+
+Examples:
+  # List Anthropic models (auto-detected from ANTHROPIC_API_KEY)
+  octog models
+
+  # List OpenAI models explicitly
+  octog models --provider openai
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -907,7 +1014,27 @@ func lintCmd(_ context.Context, _ *slog.Logger, args []string) error {
 	scenariosFlag := fs.String("scenarios", "", "path to scenarios directory to lint")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog lint [flags]\n\nCheck spec and scenario files for errors.\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog lint [flags]
+
+Statically check spec markdown and scenario YAML files for structural and
+semantic errors before running the attractor loop. Diagnostics are classified
+as errors (block convergence) or warnings (non-fatal). Exits with code 1 if
+any errors are found.
+
+At least one of --spec or --scenarios must be provided.
+
+Examples:
+  # Lint only the spec file
+  octog lint --spec spec.md
+
+  # Lint only the scenarios directory
+  octog lint --scenarios scenarios/
+
+  # Lint both spec and scenarios together
+  octog lint --spec spec.md --scenarios scenarios/
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -964,7 +1091,33 @@ func extractCmd(ctx context.Context, logger *slog.Logger, args []string) error {
 	guidanceFlag := fs.String("guidance", "", "extraction guidance for the LLM (use @file.txt to read from file)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog extract [flags]\n\nExtract coding patterns from a source directory.\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog extract [flags]
+
+Scan an existing codebase and extract idiomatic coding patterns into a gene
+file (genes.json). The gene file is passed to 'octog run' via --genes to
+guide the generation model toward patterns consistent with the exemplar
+codebase — a technique called gene transfusion.
+
+Language is auto-detected from the source directory (go.mod, package.json,
+Cargo.toml, pyproject.toml, or requirements.txt). The --guidance flag lets
+you steer the LLM toward specific aspects of the codebase to extract; use
+@file.txt to read guidance from a file.
+
+Examples:
+  # Extract patterns from a Go project
+  octog extract --source-dir ./myapp --output genes.json
+
+  # Extract with targeted guidance
+  octog extract --source-dir ./myapp --guidance "focus on error handling"
+
+  # Read guidance from a file
+  octog extract --source-dir ./myapp --guidance @guidance.txt
+
+  # Write gene output to stdout (for piping or inspection)
+  octog extract --source-dir ./myapp --output -
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -1102,7 +1255,28 @@ func preflightCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	scenarios := fs.String("scenarios", "", "directory of scenario YAML files to assess against the spec (both spec and scenario checks always run; use exit code to gate on either)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog preflight [flags] <spec-path>\n\nAssess spec clarity before running the attractor loop.\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog preflight [flags] <spec-path>
+
+Assess the clarity and completeness of a spec before spending attractor loop
+budget. The LLM judge evaluates multiple dimensions (e.g. scope, ambiguity,
+testability) and produces a 0.0-1.0 aggregate score. If the score is below
+--threshold, the command exits with code 1 so it can gate CI pipelines.
+
+When --scenarios is provided, scenario quality is assessed in addition to the
+spec, using the same threshold.
+
+Examples:
+  # Quick clarity check with default threshold (0.8)
+  octog preflight spec.md
+
+  # Show per-dimension strengths and gaps
+  octog preflight --verbose spec.md
+
+  # Gate on both spec and scenario quality
+  octog preflight --scenarios scenarios/ spec.md
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -1702,7 +1876,30 @@ func interviewCmd(ctx context.Context, logger *slog.Logger, args []string) error
 	scenarios := fs.Bool("scenarios", false, "generate holdout scenario YAML files alongside the spec")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog interview [flags]\n\nInteractively draft a spec through conversation.\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog interview [flags]
+
+Start a conversational session to draft a spec file. The LLM asks clarifying
+questions to help you articulate requirements, constraints, and acceptance
+criteria. The resulting spec is written to --output (default: spec.md).
+
+Use --seed to provide an existing spec for the LLM to improve rather than
+starting from scratch. --seed and --prompt are mutually exclusive.
+
+With --scenarios, the interview also generates a set of holdout scenario YAML
+files alongside the spec, ready to pass to 'octog run'.
+
+Examples:
+  # Start a fresh interview
+  octog interview
+
+  # Improve an existing spec
+  octog interview --seed existing-spec.md --output improved-spec.md
+
+  # Draft spec and scenarios in one session
+  octog interview --scenarios --output spec.md
+
+Flags:
+`)
 		fs.PrintDefaults()
 	}
 
@@ -1826,7 +2023,20 @@ func writeGeneratedScenarios(ctx context.Context, client llm.Client, model, spec
 func configureCmd(_ context.Context, _ *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: octog configure\n\nInteractively configure API keys and settings.\n")
+		fmt.Fprintf(os.Stderr, `Usage: octog configure
+
+Interactively set API keys and other settings. Values are written to the
+platform-native config file in KEY=VALUE format. Environment variables take
+precedence over config file values at runtime.
+
+Config file location:
+  macOS:   ~/Library/Application Support/octopusgarden/config
+  Linux:   ~/.config/octopusgarden/config (or $XDG_CONFIG_HOME/octopusgarden/config)
+  Override: set OCTOG_CONFIG_DIR to use a custom path
+
+Example:
+  octog configure
+`)
 	}
 
 	if err := fs.Parse(args); err != nil {
