@@ -168,20 +168,47 @@ func accumulatePattern(c *Component, trimmed string) (inPatterns bool) {
 	return true
 }
 
-// parseComponentHeader returns the component name if line matches **COMPONENT: <name>**.
+// parseComponentHeader returns the component name if line matches **COMPONENT: <name>**
+// or markdown heading variants like ## COMPONENT: name or ### COMPONENT: name.
 func parseComponentHeader(line string) (name string, ok bool) {
-	after, found := strings.CutPrefix(line, "**COMPONENT:")
+	// Strip leading # chars, whitespace, and optional bold markers to normalize
+	// heading prefixes (## COMPONENT: / ### COMPONENT: / **COMPONENT:**).
+	stripped := strings.TrimLeft(line, "#")
+	stripped = strings.TrimLeft(stripped, " \t")
+	stripped = strings.TrimPrefix(stripped, "**")
+
+	after, found := strings.CutPrefix(stripped, "COMPONENT:")
 	if !found {
 		return "", false
 	}
 	return strings.TrimSpace(strings.TrimSuffix(after, "**")), true
 }
 
+// normalizeFieldLine strips markdown list and bold formatting from a field line
+// so that applyComponentField can match plain field names regardless of LLM formatting.
+// Handles two bold patterns: **Field**: value (bold name, colon outside) and
+// **Field:** value (bold name with colon inside).
+func normalizeFieldLine(s string) string {
+	s = strings.TrimLeft(s, " \t")
+	// Strip leading list markers: "- " or "* "
+	if strings.HasPrefix(s, "- ") || strings.HasPrefix(s, "* ") {
+		s = s[2:]
+	}
+	s = strings.TrimLeft(s, " \t")
+	if strings.HasPrefix(s, "**") {
+		s = s[2:]                             // remove opening **
+		s = strings.Replace(s, "**:", ":", 1) // handles **Field**: → Field:
+		s = strings.Replace(s, "**", "", 1)   // handles **Field:** → Field: (trailing ** gone)
+	}
+	return s
+}
+
 // applyComponentField updates c when line matches a known field prefix.
 // Returns (inPatterns, pendingField, matched). pendingField is non-empty when the
 // field value was absent (value expected on the next line).
 func applyComponentField(c *Component, line string) (inPatterns bool, pendingField string, matched bool) {
-	if after, found := strings.CutPrefix(line, "Interface:"); found {
+	normalized := normalizeFieldLine(line)
+	if after, found := strings.CutPrefix(normalized, "Interface:"); found {
 		val := strings.TrimSpace(after)
 		c.Interface = val
 		if val == "" {
@@ -189,11 +216,11 @@ func applyComponentField(c *Component, line string) (inPatterns bool, pendingFie
 		}
 		return false, "", true
 	}
-	if after, found := strings.CutPrefix(line, "Patterns:"); found {
+	if after, found := strings.CutPrefix(normalized, "Patterns:"); found {
 		c.Patterns = strings.TrimSpace(after)
 		return true, "", true
 	}
-	if after, found := strings.CutPrefix(line, "DependsOn:"); found {
+	if after, found := strings.CutPrefix(normalized, "DependsOn:"); found {
 		val := strings.TrimSpace(after)
 		c.DependsOn = parseDependsOn(val)
 		if val == "" {

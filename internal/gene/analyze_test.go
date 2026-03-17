@@ -239,6 +239,60 @@ func TestParseComponents(t *testing.T) {
 			guide: "**COMPONENT: D**\nInterface:\nPatterns: foo\nDependsOn: none",
 			want:  []Component{{Name: "D", Interface: "", Patterns: "foo", DependsOn: nil}},
 		},
+		{
+			name:  "bold_list_fields",
+			guide: "**COMPONENT: model**\n- **Interface**: Type definitions\n- **Patterns**: Immutable structs\n- **DependsOn**: none",
+			want:  []Component{{Name: "model", Interface: "Type definitions", Patterns: "Immutable structs", DependsOn: nil}},
+		},
+		{
+			name:  "markdown_heading_component",
+			guide: "## COMPONENT: router\nInterface: handles routing\nPatterns: mux-based\nDependsOn: none",
+			want:  []Component{{Name: "router", Interface: "handles routing", Patterns: "mux-based", DependsOn: nil}},
+		},
+		{
+			name:  "bold_list_multiline_patterns",
+			guide: "**COMPONENT: svc**\n- **Interface**: exposes API\n- **Patterns**: first line\nsecond line\n- **DependsOn**: repo",
+			want: []Component{{
+				Name:      "svc",
+				Interface: "exposes API",
+				Patterns:  "first line\nsecond line",
+				DependsOn: []string{"repo"},
+			}},
+		},
+		{
+			name: "mixed_formatting",
+			guide: "**COMPONENT: plain**\nInterface: foo\nPatterns: bar\nDependsOn: none\n" +
+				"**COMPONENT: bold**\n- **Interface**: baz\n- **Patterns**: qux\n- **DependsOn**: plain",
+			want: []Component{
+				{Name: "plain", Interface: "foo", Patterns: "bar", DependsOn: nil},
+				{Name: "bold", Interface: "baz", Patterns: "qux", DependsOn: []string{"plain"}},
+			},
+		},
+		{
+			name: "real_world_guidance_output",
+			guide: "**COMPONENT: Handler**\n" +
+				"- **Interface**: Accepts HTTP requests, delegates to Service\n" +
+				"- **Patterns**: Uses net/http ServeHTTP; validates input at boundary\n" +
+				"- **DependsOn**: Service\n" +
+				"**COMPONENT: Service**\n" +
+				"- **Interface**: Business logic; returns domain types\n" +
+				"- **Patterns**: Pure functions, no global state\n" +
+				"- **DependsOn**: none",
+			want: []Component{
+				{
+					Name:      "Handler",
+					Interface: "Accepts HTTP requests, delegates to Service",
+					Patterns:  "Uses net/http ServeHTTP; validates input at boundary",
+					DependsOn: []string{"Service"},
+				},
+				{
+					Name:      "Service",
+					Interface: "Business logic; returns domain types",
+					Patterns:  "Pure functions, no global state",
+					DependsOn: nil,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
