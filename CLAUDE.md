@@ -45,6 +45,8 @@ Minimize — stdlib first. Allowed exceptions:
 - `github.com/coder/websocket` — WebSocket client for scenario ws steps (context-native, pure Go)
 - `github.com/charmbracelet/lipgloss` — Terminal styling (colors, borders, padding)
 - `github.com/charmbracelet/glamour` — Markdown rendering in terminal
+- `github.com/creack/pty` — PTY allocation for TUI scenario steps (Unix-only)
+- `github.com/ActiveState/vt10x` — VT10x terminal emulator for TUI screen capture
 
 ## Design Invariants
 
@@ -79,16 +81,16 @@ Minimize — stdlib first. Allowed exceptions:
 
 Cross-package and multi-implementation interfaces:
 
-| Interface        | Package   | Implementations                                                       |
-| ---------------- | --------- | --------------------------------------------------------------------- |
-| Client           | llm       | AnthropicClient, OpenAIClient, observability.TracingLLMClient         |
-| AgentClient      | llm       | AnthropicClient, observability.TracingLLMClient (conditional)         |
-| StepExecutor     | scenario  | HTTPExecutor, ExecExecutor, BrowserExecutor, GRPCExecutor, WSExecutor |
-| ContainerManager | attractor | container.Manager, observability.TracingContainerManager              |
-| containerSession | scenario  | `*container.Session`                                                  |
-| dockerAPI        | container | dockerclient.Client                                                   |
-| Display          | interview | ui.PlainDisplay, ui.StyledDisplay                                     |
-| modelLister      | cmd/octog | llm.AnthropicClient, llm.OpenAIClient                                 |
+| Interface        | Package   | Implementations                                                                    |
+| ---------------- | --------- | ---------------------------------------------------------------------------------- |
+| Client           | llm       | AnthropicClient, OpenAIClient, observability.TracingLLMClient                      |
+| AgentClient      | llm       | AnthropicClient, observability.TracingLLMClient (conditional)                      |
+| StepExecutor     | scenario  | HTTPExecutor, ExecExecutor, BrowserExecutor, GRPCExecutor, WSExecutor, TUIExecutor |
+| ContainerManager | attractor | container.Manager, observability.TracingContainerManager                           |
+| containerSession | scenario  | `*container.Session`                                                               |
+| dockerAPI        | container | dockerclient.Client                                                                |
+| Display          | interview | ui.PlainDisplay, ui.StyledDisplay                                                  |
+| modelLister      | cmd/octog | llm.AnthropicClient, llm.OpenAIClient                                              |
 
 ## Configuration
 

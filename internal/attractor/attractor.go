@@ -106,6 +106,7 @@ type ScenarioCapabilities struct {
 	NeedsBrowser bool // any scenario has browser steps
 	NeedsGRPC    bool // any scenario has grpc steps
 	NeedsWS      bool // any scenario has ws steps (modifier on NeedsHTTP — same port 8080)
+	NeedsTUI     bool // any scenario has tui steps (Unix only)
 }
 
 // ContainerManager is the interface to Docker container operations.

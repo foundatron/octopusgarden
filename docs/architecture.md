@@ -235,7 +235,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 
 - **Status**: Implemented
 - **Files**: `scenario/runner.go`, `scenario/grpc.go`, step executors
-- **Method**: Sequential step execution with variable capture/substitution. Pluggable executors: HTTP, exec, browser (chromedp), gRPC (reflection), WebSocket. Setup steps fatal, judged steps non-fatal.
+- **Method**: Sequential step execution with variable capture/substitution. Pluggable executors: HTTP, exec, browser (chromedp), gRPC (reflection), WebSocket, TUI (pty/vt10x, Unix only). Setup steps fatal, judged steps non-fatal.
 - **Parallelism**: `validate --parallel-scenarios N` runs up to N scenarios concurrently using a semaphore-bounded goroutine pool. Each goroutine owns its own `Runner`, `Judge`, and executor instances. Container restart is disabled when `N > 1` (scenarios share container state); use `--parallel-scenarios 1` (the default) when clean state between scenarios is required.
 - **Limitations**: Sequential steps within a scenario only. No parallel step groups. No conditional branching. JSONPath is dot-notation only (no filters, array slicing, or recursive descent).
 
@@ -663,6 +663,50 @@ steps:
     expect: "Returns fresh data after cache expiry"
 ```
 
+#### TUI Step
+
+TUI steps interact with terminal applications running under a PTY (Unix only; build tag `!windows`).
+A single process persists across steps within a scenario; each `command` field terminates any
+previous process and starts a fresh one.
+
+```yaml
+steps:
+  - description: "Launch the TUI app"
+    tui:
+      command: "myapp --config /etc/app.yaml"
+      wait_for: "Main Menu"
+      timeout: "5s"
+    expect: "TUI launches and shows main menu"
+  - description: "Navigate and select"
+    tui:
+      send_key: "down"
+      wait_for: "Settings"
+      timeout: "2s"
+    expect: "Cursor moves to Settings option"
+  - description: "Open settings panel"
+    tui:
+      send_key: "enter"
+      assert_screen: "Settings Panel"
+      assert_absent: "Error"
+    expect: "Settings panel opens without errors"
+```
+
+Field semantics:
+
+- `command` — launches a new process under an 80×24 PTY via `sh -c`. Closes any existing process first.
+- `send_key` — sends a named ANSI key sequence: `enter`, `escape`, `tab`, `backspace`, `space`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `delete`, or `ctrl+a`–`ctrl+z`.
+- `send_text` — writes raw text bytes to the PTY (use `\n` for newline).
+- `wait_for` — polls the terminal screen at 10ms intervals until the text appears; fails with timeout error if `timeout` elapses (default `5s`).
+- `assert_screen` / `assert_absent` — check screen content; results appear in `Observed` as `PASS`/`FAIL` annotations (non-fatal — always returns `StepOutput`).
+- `timeout` — applies to `wait_for` (Go duration string, default `5s`).
+
+Capture sources: `screen` (current terminal screen, trailing whitespace stripped per line),
+`exit_code` (populated only after the process exits).
+
+`TUIExecutor` is stateful across steps. `Close()` signals the entire process group with `SIGTERM`,
+waits up to 500ms, then `SIGKILL` if still running. Registered via `registerTUIExecutor`
+(`cmd/octog/tui.go`) when `ScenarioCapabilities.NeedsTUI` is true; no-op on Windows (`tui_windows.go`).
+
 ### Variable Capture and Substitution
 
 The runner executes steps sequentially, evaluates `capture` rules against response bodies, stores
@@ -672,9 +716,11 @@ and gRPC fields. JSONPath evaluation supports dot-notation only (`$.field.sub`).
 ## Scenario Runner
 
 `Runner` (`internal/scenario/runner.go`) executes scenario steps via pluggable `StepExecutor`
-implementations (HTTP, exec, browser, gRPC, WS). The `tui` step type is recognized but returns `errTUINotImplemented` until a TUI executor is registered. Setup steps are fatal — if any fails, the runner
-returns an error immediately. Judged steps are non-fatal — transport
-errors are recorded and the step is scored 0 without making an LLM call.
+implementations (HTTP, exec, browser, gRPC, WS, TUI). All step types are dispatched through the
+executor map; unregistered types return `errNoExecutorRegistered`. `TUIExecutor` is registered when
+any scenario contains a `tui` step (Unix only; build tag `!windows`). Setup steps are fatal — if any
+fails, the runner returns an error immediately. Judged steps are non-fatal — transport errors are
+recorded and the step is scored 0 without making an LLM call.
 
 ## LLM Judge
 

@@ -3,11 +3,13 @@ module github.com/foundatron/octopusgarden
 go 1.24.0
 
 require (
+	github.com/ActiveState/vt10x v1.3.1
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/chromedp/chromedp v0.14.2
 	github.com/coder/websocket v1.8.14
+	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.6.0
 	github.com/jhump/protoreflect/v2 v2.0.0-beta.2
@@ -28,6 +30,7 @@ require (
 
 require (
 	github.com/Microsoft/go-winio v0.4.21 // indirect
+	github.com/Netflix/go-expect v0.0.0-20180615182759-c93bf25de8e8 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
@@ -57,6 +60,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
+	github.com/kr/pty v1.1.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-runewidth v0.0.17 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect

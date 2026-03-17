@@ -433,6 +433,7 @@ func TestDetectCapabilities(t *testing.T) {
 		wantHTTP    bool
 		wantExec    bool
 		wantBrowser bool
+		wantTUI     bool
 	}{
 		{
 			name:      "empty scenarios",
@@ -557,6 +558,34 @@ func TestDetectCapabilities(t *testing.T) {
 			wantHTTP:    true,
 			wantBrowser: true,
 		},
+		{
+			name: "tui step detected",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "tui-scenario",
+					Steps: []scenario.Step{
+						{TUI: &scenario.TUIRequest{Command: "echo hello"}},
+					},
+				},
+			},
+			wantTUI: true,
+		},
+		{
+			name: "tui in setup detected",
+			scenarios: []scenario.Scenario{
+				{
+					ID: "tui-setup",
+					Setup: []scenario.Step{
+						{TUI: &scenario.TUIRequest{Command: "echo setup"}},
+					},
+					Steps: []scenario.Step{
+						{Request: &scenario.Request{Method: "GET", Path: "/health"}},
+					},
+				},
+			},
+			wantHTTP: true,
+			wantTUI:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -570,6 +599,9 @@ func TestDetectCapabilities(t *testing.T) {
 			}
 			if caps.NeedsBrowser != tt.wantBrowser {
 				t.Errorf("NeedsBrowser = %v, want %v", caps.NeedsBrowser, tt.wantBrowser)
+			}
+			if caps.NeedsTUI != tt.wantTUI {
+				t.Errorf("NeedsTUI = %v, want %v", caps.NeedsTUI, tt.wantTUI)
 			}
 		})
 	}
