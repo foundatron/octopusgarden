@@ -52,6 +52,7 @@ type scenarioPreflightResponse struct {
 	Issues      []ScenarioIssue `json:"issues"`
 }
 
+// buildScenarioSystemPrompt is coupled with internal/interview/scenarios_prompt.go -- keep dimensions aligned.
 func buildScenarioSystemPrompt() string {
 	return `You are a scenario quality analyst. Your job is to assess how well a set of test scenarios covers and exercises a software specification.
 

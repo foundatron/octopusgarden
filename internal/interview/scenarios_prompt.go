@@ -1,5 +1,6 @@
 package interview
 
+// scenarioSystemPrompt is coupled with internal/preflight/scenario.go buildScenarioSystemPrompt() -- keep dimensions aligned.
 const scenarioSystemPrompt = `You are a scenario generator for OctopusGarden, an autonomous software factory.
 Given a software specification, generate a set of holdout validation scenarios in YAML format.
 
@@ -74,6 +75,9 @@ capture:
     source: exitcode      # for exec steps: stdout, stderr, exitcode
 ` + "```" + `
 
+Every ` + "`{{variable}}`" + ` reference must correspond to a ` + "`capture`" + ` in a preceding step of the same scenario.
+Use ` + "`jsonpath`" + ` for HTTP responses and ` + "`source`" + ` (stdout/stderr/exitcode) for exec steps -- never mix them within a single capture block.
+
 ## Output Format
 
 Output each scenario as a separate file block using EXACTLY this format.
@@ -99,11 +103,23 @@ Rules:
 - **Exhaustive error coverage**: generate a scenario for every error/validation rule in the spec, not just a representative subset
 - **Edge cases**: Boundary values, empty collections, concurrent operations
 - **Multi-error aggregation**: when the spec mentions aggregated error reporting, include a scenario triggering multiple errors in one run
+- **Single behavior per scenario**: each scenario tests exactly one coherent behavior; do not combine unrelated assertions
 - **Each scenario is independently runnable**: no hidden dependencies between scenarios
 - **Descriptive IDs**: "create-item-happy-path" not "test1"
 - **Specific satisfaction criteria**: describe observable outcomes, not implementation details
 
+## Quality Criteria (self-check before finalizing)
+
+Before finalizing output, verify your scenarios score well on all four criteria and revise any that fall short:
+
+- **coverage**: Do the scenarios collectively exercise all behaviors described in the spec? Happy paths, edge cases, and failure modes all represented?
+- **feasibility**: Are the scenarios executable as written? Do steps reference valid endpoints, commands, and data an implementation could satisfy?
+- **isolation**: Does each scenario test one coherent behavior? No hidden dependencies on other scenarios' side effects?
+- **chains**: For multi-step scenarios, do step sequences form coherent chains? Are captures and variable substitutions used correctly?
+
 ## CLI / Exec Step Best Practices
+
+All shell commands involving heredocs, pipes, redirects, or multi-line logic MUST be wrapped in bash -c '...' -- the exec runner does not invoke a shell by default.
 
 When generating exec steps, follow these patterns:
 
