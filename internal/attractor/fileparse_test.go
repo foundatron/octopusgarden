@@ -200,6 +200,106 @@ second content
 	}
 }
 
+func TestParseFilesWithMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantFiles   int
+		wantDropped []string
+		wantTrunc   bool
+		wantErr     error
+	}{
+		{
+			name: "all files closed",
+			input: `=== FILE: main.go ===
+package main
+=== END FILE ===
+=== FILE: go.mod ===
+module app
+=== END FILE ===`,
+			wantFiles:   2,
+			wantDropped: nil,
+			wantTrunc:   false,
+		},
+		{
+			name: "truncated mid-block",
+			input: `=== FILE: main.go ===
+package main
+=== END FILE ===
+=== FILE: handler.go ===
+package main
+func handle() {`,
+			wantFiles:   1,
+			wantDropped: []string{"handler.go"},
+			wantTrunc:   true,
+		},
+		{
+			name: "unclosed block replaced by new block",
+			input: `=== FILE: first.go ===
+first content
+=== FILE: second.go ===
+second content
+=== END FILE ===`,
+			wantFiles:   1,
+			wantDropped: []string{"first.go"},
+			wantTrunc:   false,
+		},
+		{
+			name: "multiple dropped plus truncation",
+			input: `=== FILE: a.go ===
+aaa
+=== FILE: b.go ===
+bbb
+=== END FILE ===
+=== FILE: c.go ===
+ccc
+=== FILE: d.go ===
+ddd`,
+			wantFiles:   1,
+			wantDropped: []string{"a.go", "c.go", "d.go"},
+			wantTrunc:   true,
+		},
+		{
+			name: "all unclosed returns error",
+			input: `=== FILE: only.go ===
+never closed`,
+			wantErr: errNoFiles,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseFilesWithMetadata(tt.input)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected error %v, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(result.Files) != tt.wantFiles {
+				t.Errorf("files: got %d, want %d", len(result.Files), tt.wantFiles)
+			}
+			if result.Truncated != tt.wantTrunc {
+				t.Errorf("truncated: got %v, want %v", result.Truncated, tt.wantTrunc)
+			}
+
+			if len(result.DroppedFiles) != len(tt.wantDropped) {
+				t.Fatalf("dropped: got %v, want %v", result.DroppedFiles, tt.wantDropped)
+			}
+			for i, want := range tt.wantDropped {
+				if result.DroppedFiles[i] != want {
+					t.Errorf("dropped[%d]: got %q, want %q", i, result.DroppedFiles[i], want)
+				}
+			}
+		})
+	}
+}
+
 func TestMergeFiles(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -266,13 +266,13 @@ func capabilityInstructions(caps ScenarioCapabilities) string {
 	case caps.NeedsTUI && caps.NeedsExec:
 		return `- Generate ALL files needed for a working terminal user interface (TUI) application
 - Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
-- The application is a full-screen TUI program (e.g., using the Bubble Tea model/update/view pattern)
+- The application is a full-screen TUI program that renders to the alternate screen buffer
 - The application must also support CLI subcommands for non-interactive operations
 - Do NOT start an HTTP server or listen on any port`
 	case caps.NeedsTUI:
 		return `- Generate ALL files needed for a working terminal user interface (TUI) application
 - Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
-- The application is a full-screen TUI program (e.g., using the Bubble Tea model/update/view pattern)
+- The application is a full-screen TUI program that renders to the alternate screen buffer
 - Do NOT start an HTTP server or listen on any port`
 	case caps.NeedsExec:
 		return `- Generate ALL files needed for a working command-line application
@@ -296,12 +296,29 @@ func capabilityTrailingInstructions(caps ScenarioCapabilities) string {
 		return "- The application MUST serve gRPC on port 50051\n- Include all .proto files and configuration files"
 	case needsHTTP && caps.NeedsExec:
 		return "- Include all dependencies and configuration files"
+	case caps.NeedsTUI && caps.NeedsExec:
+		return "- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)\n- The application must render a full-screen TUI and respond to keyboard input\n- The application must also support CLI subcommands\n- Include all dependencies and configuration files"
 	case caps.NeedsTUI:
 		return "- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)\n- The application must render a full-screen TUI and respond to keyboard input\n- Include all dependencies and configuration files"
 	case caps.NeedsExec:
 		return "- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)\n- Include all dependencies and configuration files"
 	default:
 		return "- The application MUST listen on port 8080\n- Include all dependencies and configuration files"
+	}
+}
+
+// selectExampleBlock returns the ExampleBlock matching the capability profile.
+// Used by both buildLanguageExample (for prompt examples) and ensureBuildInfrastructure
+// (for synthetic Dockerfile selection). gRPC is not handled here — buildLanguageExample
+// has a dedicated gRPC path.
+func selectExampleBlock(tmpl LanguageTemplate, caps ScenarioCapabilities) ExampleBlock {
+	switch {
+	case caps.NeedsTUI:
+		return tmpl.TUIExample
+	case caps.NeedsExec:
+		return tmpl.CLIExample
+	default:
+		return tmpl.HTTPExample
 	}
 }
 
@@ -318,17 +335,17 @@ func buildLanguageExample(tmpl LanguageTemplate, caps ScenarioCapabilities) stri
 		return ""
 	}
 
-	var ex ExampleBlock
-	switch {
-	case caps.NeedsGRPC:
+	if caps.NeedsGRPC {
 		// gRPC gets a proto example + Dockerfile with gRPC setup, not the standard example.
 		return buildGRPCExample(tmpl)
-	case caps.NeedsTUI:
-		ex = tmpl.TUIExample
-	case caps.NeedsExec:
-		ex = tmpl.CLIExample
-	default:
-		ex = tmpl.HTTPExample
+	}
+
+	ex := selectExampleBlock(tmpl, caps)
+
+	// Skip example block when the template has no entry file (e.g., TUI --
+	// framework choice is driven by spec/genes, not by the language template).
+	if ex.EntryFile == "" {
+		return ""
 	}
 
 	var b strings.Builder
@@ -430,7 +447,7 @@ func buildDepRules(language string) string {
 // Iteration 1 gets a simple "Generate" prompt; subsequent iterations include
 // the last 3 failure summaries with categorized headers.
 func buildMessages(iter int, history []iterationFeedback) []llm.Message {
-	if iter == 1 || len(history) == 0 {
+	if len(history) == 0 {
 		return []llm.Message{
 			{Role: "user", Content: "Generate the application according to the specification. Output all files using the === FILE: path === format."},
 		}
@@ -829,6 +846,73 @@ func buildAgenticPatchMessages(history []iterationFeedback, bestFiles map[string
 	return []llm.Message{
 		{Role: "user", Content: b.String()},
 	}
+}
+
+// buildLogNoisePrefixes lists line prefixes from package manager output that drown out
+// actual build errors. Lines starting with any of these are stripped from build feedback.
+var buildLogNoisePrefixes = []string{
+	"fetch ",     // apk fetch
+	"(1/", "(2/", // apk progress counters
+	"OK:",          // apk summary
+	"Get:", "Hit:", // apt-get
+	"Reading ",       // apt reading state
+	"Building ",      // apt building dependency tree
+	"Selecting ",     // dpkg selecting
+	"Preparing ",     // dpkg preparing
+	"Unpacking ",     // dpkg unpacking
+	"Setting up ",    // dpkg setup
+	"Processing ",    // dpkg processing
+	"Downloading ",   // general download progress
+	"Installing ",    // pip/npm install chatter
+	"  Downloading ", // pip indented download
+	"  Using ",       // pip using cached
+}
+
+// stripBuildNoise removes package manager installation chatter from Docker build
+// error output so that actual compilation errors are visible within the feedback
+// byte budget. The last 50 lines are always preserved unconditionally because
+// build errors cluster at the end.
+func stripBuildNoise(errMsg string) string {
+	buildLogMarker := "\nBuild log:\n"
+	idx := strings.Index(errMsg, buildLogMarker)
+	if idx < 0 {
+		return errMsg
+	}
+	prefix := errMsg[:idx+len(buildLogMarker)]
+	logSection := errMsg[idx+len(buildLogMarker):]
+
+	lines := strings.Split(logSection, "\n")
+
+	// Always preserve the last 50 lines unconditionally (errors cluster at end).
+	const preserveTail = 50
+	filterEnd := len(lines) - preserveTail
+	if filterEnd <= 0 {
+		return errMsg
+	}
+
+	filtered := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if i >= filterEnd {
+			filtered = append(filtered, line)
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if isNoiseLine(trimmed) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return prefix + strings.Join(filtered, "\n")
+}
+
+// isNoiseLine returns true if the line is package manager chatter.
+func isNoiseLine(trimmed string) bool {
+	for _, pfx := range buildLogNoisePrefixes {
+		if strings.HasPrefix(trimmed, pfx) {
+			return true
+		}
+	}
+	return false
 }
 
 // formatScoreTrajectory formats a slice of scores as "50 → 45 → 40".

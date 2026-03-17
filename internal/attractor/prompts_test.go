@@ -415,7 +415,7 @@ func TestBuildSystemPromptWithLanguage(t *testing.T) {
 			lang: "go",
 			caps: ScenarioCapabilities{},
 			wantContain: []string{
-				"golang:1.24-alpine",
+				"golang:1.25-alpine",
 				"main.go",
 				"go mod tidy",
 			},
@@ -425,7 +425,7 @@ func TestBuildSystemPromptWithLanguage(t *testing.T) {
 			lang: "go",
 			caps: ScenarioCapabilities{NeedsExec: true},
 			wantContain: []string{
-				"golang:1.24-alpine",
+				"golang:1.25-alpine",
 				"os.Args",
 			},
 		},
@@ -1517,12 +1517,13 @@ func TestTUICapabilityInstructions(t *testing.T) {
 			caps: ScenarioCapabilities{NeedsTUI: true},
 			wantContain: []string{
 				"terminal user interface (TUI)",
-				"Bubble Tea",
+				"alternate screen buffer",
 				"Do NOT start an HTTP server",
 			},
 			wantAbsent: []string{
 				"CLI tool invoked via command-line arguments",
 				"MUST listen on port 8080",
+				"Bubble Tea", // framework-specific guidance belongs in language examples, not capability instructions
 			},
 		},
 		{
@@ -1530,13 +1531,14 @@ func TestTUICapabilityInstructions(t *testing.T) {
 			caps: ScenarioCapabilities{NeedsTUI: true, NeedsExec: true},
 			wantContain: []string{
 				"terminal user interface (TUI)",
-				"Bubble Tea",
+				"alternate screen buffer",
 				"CLI subcommands",
 				"Do NOT start an HTTP server",
 			},
 			wantAbsent: []string{
 				"CLI tool invoked via command-line arguments",
 				"MUST listen on port 8080",
+				"Bubble Tea",
 			},
 		},
 	}
@@ -1574,13 +1576,10 @@ func TestTUILanguageExample(t *testing.T) {
 		t.Fatal("go language template not found")
 	}
 
-	// TUI-only should use TUI example.
+	// TUI-only should skip example block (framework choice driven by spec/genes).
 	tuiExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsTUI: true})
-	if !strings.Contains(tuiExample, "charm.land/bubbletea/v2") {
-		t.Error("TUI example should contain bubbletea v2 import")
-	}
-	if !strings.Contains(tuiExample, "tea.NewProgram") {
-		t.Error("TUI example should contain tea.NewProgram")
+	if tuiExample != "" {
+		t.Errorf("TUI example should be empty (no framework-specific example), got:\n%s", tuiExample)
 	}
 
 	// TUI+Exec should skip example (combined capability).
@@ -1606,5 +1605,95 @@ func TestTUISystemPromptIntegration(t *testing.T) {
 	}
 	if strings.Contains(prompt, "CLI tool invoked via command-line arguments") {
 		t.Error("system prompt with TUI+Exec should not fall through to exec-only instructions")
+	}
+}
+
+// buildNoisyLog generates a build log with n noise lines followed by suffix lines.
+func buildNoisyLog(noiseCount int, suffix string) string {
+	var b strings.Builder
+	b.WriteString("build error\nBuild log:\nStep 1/5 : FROM alpine\n")
+	for i := range noiseCount {
+		b.WriteString("fetch http://dl-cdn.alpinelinux.org/pkg" + string(rune('A'+i%26)) + "\n")
+	}
+	b.WriteString(suffix)
+	return b.String()
+}
+
+func TestStripBuildNoise(t *testing.T) {
+	t.Run("no build log section", func(t *testing.T) {
+		got := stripBuildNoise("plain error message")
+		if got != "plain error message" {
+			t.Errorf("expected passthrough, got: %s", got)
+		}
+	})
+
+	t.Run("reduces noise line count", func(t *testing.T) {
+		in := buildNoisyLog(100, "Step 2/5 : RUN go build\nmain.go:5:2: undefined: foo\n")
+		got := stripBuildNoise(in)
+		if !strings.Contains(got, "undefined: foo") {
+			t.Error("expected error line to be preserved")
+		}
+		inCount := strings.Count(in, "fetch http://dl-cdn")
+		gotCount := strings.Count(got, "fetch http://dl-cdn")
+		if gotCount >= inCount {
+			t.Errorf("expected noise reduction: %d noise lines in, %d out", inCount, gotCount)
+		}
+	})
+
+	t.Run("preserves Step lines", func(t *testing.T) {
+		in := buildNoisyLog(100, "Step 2/3 : RUN go build\nmain.go:1: error\n")
+		got := stripBuildNoise(in)
+		if !strings.Contains(got, "Step 1/5") {
+			t.Error("Step line should be preserved")
+		}
+	})
+
+	t.Run("short log preserved entirely", func(t *testing.T) {
+		in := "err\nBuild log:\nfetch http://example.com\nStep 2/3 : RUN go build\nmain.go:1: error\n"
+		got := stripBuildNoise(in)
+		if got != in {
+			t.Errorf("short log should be preserved entirely, got:\n%s", got)
+		}
+	})
+
+	t.Run("preserves last 50 lines unconditionally", func(t *testing.T) {
+		var b strings.Builder
+		b.WriteString("err\nBuild log:\n")
+		for i := range 100 {
+			b.WriteString("fetch http://example.com/pkg" + string(rune('A'+i%26)) + "\n")
+		}
+		b.WriteString("final error line\n")
+		got := stripBuildNoise(b.String())
+		if !strings.Contains(got, "final error line") {
+			t.Error("final error line should be preserved")
+		}
+	})
+}
+
+func TestBuildMessagesWithSeededHistory(t *testing.T) {
+	// When history is seeded (e.g. from composed fallback), iter 1 should include feedback.
+	history := []iterationFeedback{
+		{
+			iteration: 0,
+			kind:      feedbackBuildError,
+			message:   "A prior composed build attempt failed: component X compilation error",
+		},
+	}
+
+	msgs := buildMessages(1, history)
+	content := msgs[0].Content
+	if !strings.Contains(content, "composed build attempt failed") {
+		t.Errorf("iter 1 with seeded history should include feedback, got:\n%s", content)
+	}
+	if !strings.Contains(content, "BUILD FAILURE") {
+		t.Errorf("iter 1 with seeded history should include categorized header, got:\n%s", content)
+	}
+}
+
+func TestBuildMessagesEmptyHistoryIter1(t *testing.T) {
+	// Without seeded history, iter 1 should produce the simple generate prompt.
+	msgs := buildMessages(1, nil)
+	if strings.Contains(msgs[0].Content, "previous attempt") {
+		t.Error("iter 1 with no history should not reference previous attempts")
 	}
 }

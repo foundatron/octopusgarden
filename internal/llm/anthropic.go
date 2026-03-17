@@ -3,8 +3,12 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -21,6 +25,12 @@ var (
 // maxRetries is set higher than the SDK default (2) to handle sustained
 // bursts of 529 Overloaded responses during parallel judge calls.
 const maxRetries = 5
+
+// streamRetries is the number of times to retry a streaming request when the
+// TCP connection drops mid-stream (connection reset, EOF, broken pipe). The
+// SDK's built-in retries only cover pre-response errors; once SSE events are
+// flowing, a network interruption requires restarting the entire request.
+const streamRetries = 2
 
 // defaultMaxTurns is the fallback when AgentRequest.MaxTurns is zero.
 const defaultMaxTurns = 10
@@ -69,6 +79,20 @@ func (c *AnthropicClient) logUsage(prefix, model string, usage anthropic.Usage) 
 	return m
 }
 
+// buildSystemBlocks converts a system prompt and optional cache control into Anthropic SDK text blocks.
+func buildSystemBlocks(systemPrompt string, cc *CacheControl) []anthropic.TextBlockParam {
+	if systemPrompt == "" {
+		return nil
+	}
+	block := anthropic.TextBlockParam{Text: systemPrompt}
+	if cc != nil {
+		block.CacheControl = anthropic.CacheControlEphemeralParam{
+			TTL: anthropic.CacheControlEphemeralTTLTTL5m,
+		}
+	}
+	return []anthropic.TextBlockParam{block}
+}
+
 // Generate calls the Anthropic Messages API to generate code.
 func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	maxTokens := int64(req.MaxTokens)
@@ -76,19 +100,7 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		maxTokens = int64(MaxOutputTokens(req.Model))
 	}
 
-	// Build system prompt blocks.
-	var system []anthropic.TextBlockParam
-	if req.SystemPrompt != "" {
-		block := anthropic.TextBlockParam{
-			Text: req.SystemPrompt,
-		}
-		if req.CacheControl != nil {
-			block.CacheControl = anthropic.CacheControlEphemeralParam{
-				TTL: anthropic.CacheControlEphemeralTTLTTL5m,
-			}
-		}
-		system = append(system, block)
-	}
+	system := buildSystemBlocks(req.SystemPrompt, req.CacheControl)
 
 	// Build messages.
 	messages := make([]anthropic.MessageParam, len(req.Messages))
@@ -113,7 +125,7 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		params.Temperature = anthropic.Float(*req.Temperature)
 	}
 
-	resp, err := c.client.Messages.New(ctx, params)
+	resp, err := c.streamMessage(ctx, params)
 	if err != nil {
 		return GenerateResponse{}, fmt.Errorf("anthropic generate: %w", err)
 	}
@@ -179,15 +191,7 @@ func (c *AnthropicClient) AgentLoop(ctx context.Context, req AgentRequest, handl
 		maxTokens = int64(MaxOutputTokens(req.Model))
 	}
 
-	// Build system blocks using same pattern as Generate.
-	var system []anthropic.TextBlockParam
-	if req.SystemPrompt != "" {
-		block := anthropic.TextBlockParam{Text: req.SystemPrompt}
-		if req.CacheControl != nil {
-			block.CacheControl = anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
-		}
-		system = append(system, block)
-	}
+	system := buildSystemBlocks(req.SystemPrompt, req.CacheControl)
 
 	tools, err := buildAgentToolParams(req.Tools)
 	if err != nil {
@@ -207,7 +211,7 @@ func (c *AnthropicClient) AgentLoop(ctx context.Context, req AgentRequest, handl
 			Tools:     tools,
 		}
 
-		resp, err := c.client.Messages.New(ctx, params)
+		resp, err := c.streamMessage(ctx, params)
 		if err != nil {
 			return AgentResponse{Turns: turn, InputTokens: totalInput, OutputTokens: totalOutput, TotalCost: totalCost},
 				fmt.Errorf("anthropic agent loop: %w", err)
@@ -256,6 +260,66 @@ func (c *AnthropicClient) AgentLoop(ctx context.Context, req AgentRequest, handl
 		OutputTokens: totalOutput,
 		TotalCost:    totalCost,
 	}, ErrMaxTurnsExceeded
+}
+
+// streamMessage sends a streaming request and accumulates the response into a Message.
+// It retries on transient network errors (connection reset, EOF, broken pipe) that
+// occur mid-stream, since the SDK's built-in retries only cover pre-response failures.
+func (c *AnthropicClient) streamMessage(ctx context.Context, params anthropic.MessageNewParams) (anthropic.Message, error) {
+	var lastErr error
+	for attempt := range streamRetries + 1 {
+		if attempt > 0 {
+			c.logger.Warn("retrying streaming request after transient error",
+				"attempt", attempt+1,
+				"error", lastErr,
+			)
+		}
+		msg, err := c.doStream(ctx, params)
+		if err == nil {
+			return msg, nil
+		}
+		if !isTransientNetError(err) {
+			return anthropic.Message{}, err
+		}
+		lastErr = err
+	}
+	return anthropic.Message{}, lastErr
+}
+
+// doStream performs a single streaming request and accumulates the response.
+func (c *AnthropicClient) doStream(ctx context.Context, params anthropic.MessageNewParams) (msg anthropic.Message, err error) {
+	stream := c.client.Messages.NewStreaming(ctx, params)
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close stream: %w", closeErr)
+		}
+	}()
+
+	for stream.Next() {
+		if err = msg.Accumulate(stream.Current()); err != nil {
+			return anthropic.Message{}, fmt.Errorf("accumulate: %w", err)
+		}
+	}
+	if err = stream.Err(); err != nil {
+		return anthropic.Message{}, err
+	}
+	return msg, nil
+}
+
+// isTransientNetError returns true for network errors that warrant retrying
+// a streaming request: connection reset, unexpected EOF, broken pipe.
+func isTransientNetError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	// The error may be wrapped in ways that defeat errors.Is (e.g. net.OpError
+	// containing a raw syscall.Errno). Fall back to string matching.
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "unexpected EOF") ||
+		strings.Contains(msg, "EOF")
 }
 
 // buildAgentToolParams converts a ToolDef slice into Anthropic SDK tool params.
@@ -394,18 +458,7 @@ func (c *AnthropicClient) agentProcessToolUse(
 
 // Judge calls the Anthropic Messages API to score satisfaction.
 func (c *AnthropicClient) Judge(ctx context.Context, req JudgeRequest) (JudgeResponse, error) {
-	var system []anthropic.TextBlockParam
-	if req.SystemPrompt != "" {
-		block := anthropic.TextBlockParam{
-			Text: req.SystemPrompt,
-		}
-		if req.CacheControl != nil {
-			block.CacheControl = anthropic.CacheControlEphemeralParam{
-				TTL: anthropic.CacheControlEphemeralTTLTTL5m,
-			}
-		}
-		system = append(system, block)
-	}
+	system := buildSystemBlocks(req.SystemPrompt, req.CacheControl)
 
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock(req.UserPrompt)),

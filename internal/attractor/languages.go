@@ -5,7 +5,7 @@ import "slices"
 // LanguageTemplate holds language-specific code generation examples and configuration.
 type LanguageTemplate struct {
 	Name        string       // human-readable name: "Go", "Python", "Node.js", "Rust"
-	BaseImage   string       // Docker base image: "golang:1.24-alpine"
+	BaseImage   string       // Docker base image: "golang:1.25-alpine"
 	HTTPExample ExampleBlock // example entry file + Dockerfile for HTTP apps
 	CLIExample  ExampleBlock // example entry file + Dockerfile for CLI apps
 	TUIExample  ExampleBlock // example entry file + Dockerfile for TUI apps
@@ -24,7 +24,7 @@ type ExampleBlock struct {
 var languageRegistry = map[string]LanguageTemplate{
 	"go": {
 		Name:      "Go",
-		BaseImage: "golang:1.24-alpine",
+		BaseImage: "golang:1.25-alpine",
 		HTTPExample: ExampleBlock{
 			EntryFile: "main.go",
 			EntryContent: `package main
@@ -34,7 +34,7 @@ import "net/http"
 func main() {
 	http.ListenAndServe(":8080", nil)
 }`,
-			Dockerfile: `FROM golang:1.24-alpine
+			Dockerfile: `FROM golang:1.25-alpine
 WORKDIR /app
 COPY go.mod ./
 COPY . .
@@ -58,7 +58,7 @@ func main() {
 	}
 	fmt.Println("Hello from", os.Args[1])
 }`,
-			Dockerfile: `FROM golang:1.24-alpine
+			Dockerfile: `FROM golang:1.25-alpine
 WORKDIR /app
 COPY go.mod ./
 COPY . .
@@ -66,29 +66,10 @@ RUN go mod tidy
 RUN go build -o /usr/local/bin/myapp .`,
 		},
 		TUIExample: ExampleBlock{
-			EntryFile: "main.go",
-			EntryContent: `package main
-
-import (
-	"fmt"
-	"os"
-
-	tea "charm.land/bubbletea/v2"
-)
-
-type model struct{ msg string }
-
-func (m model) Init() (model, tea.Cmd)                 { return m, nil }
-func (m model) Update(msg tea.Msg) (model, tea.Cmd)    { return m, nil }
-func (m model) View() string                            { return m.msg }
-
-func main() {
-	if _, err := tea.NewProgram(model{msg: "Hello"}, tea.WithAltScreen()).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}`,
-			Dockerfile: `FROM golang:1.24-alpine
+			// EntryFile and EntryContent intentionally empty: TUI framework choice
+			// (Bubble Tea, tview, tcell, etc.) is driven by the spec and genes,
+			// not by octopusgarden's language template.
+			Dockerfile: `FROM golang:1.25-alpine
 WORKDIR /app
 COPY go.mod ./
 COPY . .
