@@ -183,6 +183,8 @@ Commands:
   models     List available models
   configure  Interactively configure API keys
 
+Prerequisites: Docker (for run/validate), an LLM API key (ANTHROPIC_API_KEY or OPENAI_API_KEY).
+
 Run 'octog <command> --help' for details.
 `)
 }
@@ -237,6 +239,42 @@ Examples:
   # Agentic generation mode with multi-turn tool use (Anthropic only)
   octog run --spec spec.md --scenarios scenarios/ --agentic
 
+Requires: Docker daemon running.
+
+Spec format (--spec):
+  Markdown file. The level-1 heading (# Title) becomes the project name.
+  Subsequent sections describe desired behavior. Be explicit about ports,
+  endpoints, data models, and error handling -- the spec is the sole input
+  to the generation model.
+  Optional metadata line "Test-Command: <cmd>" anywhere in the spec runs
+  inside the container after health check; non-zero exit triggers re-generation.
+
+Scenario format (--scenarios):
+  Directory of YAML files. Each file defines one scenario.
+  Required fields: id (string), steps (list).
+  Optional: description, type, tier (1-3), weight, satisfaction_criteria,
+  setup (steps that run before judged steps; failures are fatal).
+
+  Each step has one action key: request (HTTP), exec (shell), browser,
+  grpc, ws, or tui.
+  - request: method (GET/POST/PUT/PATCH/DELETE), path (required).
+    Optional: headers (map), body (string).
+  - exec: command (string), args (list of strings).
+
+  expect: natural-language string scored by the LLM judge (0-100), NOT a
+  programmatic assertion. Example: "Status 200. Body contains name 'foo'."
+
+  capture: extract values from responses for later steps.
+    source: body (default), header, or status.
+    json_path: dot-notation path (e.g. $.id, $.data.items[0].name).
+    variable: name to store as. Use {variable_name} in later step paths,
+    bodies, headers, and commands for substitution.
+
+  setup: steps listed under setup run before judged steps and are fatal on
+  failure. Use for creating test fixtures.
+  delay: duration string (e.g. "2s") to wait before a step.
+  retry: object with attempts (int), interval (duration), timeout (duration).
+
 Key flags:
   --spec, --scenarios   Required. Paths to spec file and scenarios directory.
   --budget              Max USD to spend (default 5.00).
@@ -248,6 +286,8 @@ Key flags:
   --patch               Send only changed files on iteration 2+.
   --agentic             Enable multi-turn tool-use generation (Anthropic only).
   --stratified          Converge scenarios tier-by-tier (1→2→3).
+
+Exit codes: 0 = converged, 1 = budget exhausted or error.
 
 Flags:
 `)
@@ -663,8 +703,13 @@ responses are captured, and the judge assigns a 0-100 satisfaction score. The
 aggregate score is printed; exit code 1 is returned if --threshold is set and
 the score falls below it.
 
+Unlike 'run', validate does not generate code -- it tests an existing service.
 Use --target to point at an already-running service, or --code to let octog
-build and manage the container lifecycle itself.
+build and manage the container lifecycle itself. For --code, the directory must
+contain a Dockerfile. The container is built, started, health-checked on port
+8080, then scenarios run against it.
+
+See 'octog run --help' for spec and scenario format documentation.
 
 Examples:
   # Validate against a running service
@@ -676,6 +721,8 @@ Examples:
   # Enforce a minimum score and get JSON output for CI
   octog validate --scenarios scenarios/ --target http://localhost:8080 \
     --threshold 90 --format json
+
+Exit codes: 0 = passed (or no threshold set), 1 = below threshold or error.
 
 Flags:
 `)
@@ -1033,6 +1080,8 @@ Examples:
   # Lint both spec and scenarios together
   octog lint --spec spec.md --scenarios scenarios/
 
+Exit codes: 0 = no errors, 1 = errors found (warnings alone do not cause failure).
+
 Flags:
 `)
 		fs.PrintDefaults()
@@ -1099,10 +1148,47 @@ file (genes.json). The gene file is passed to 'octog run' via --genes to
 guide the generation model toward patterns consistent with the exemplar
 codebase — a technique called gene transfusion.
 
-Language is auto-detected from the source directory (go.mod, package.json,
-Cargo.toml, pyproject.toml, or requirements.txt). The --guidance flag lets
-you steer the LLM toward specific aspects of the codebase to extract; use
-@file.txt to read guidance from a file.
+How it works:
+  1. Scan: select architecturally-significant files from --source-dir.
+  2. Analyze: send selected files to an LLM to extract a structured guide.
+  3. Save: write the guide + metadata to genes.json.
+
+The guide produced contains sections: PATTERN (architecture), INVARIANTS
+(hard rules), EDGE CASES (error handling), STACK (language/framework),
+STRUCTURE (directory layout), BOOT (startup), BUILD (Dockerfile/CI), and
+optionally COMPONENTS (named module boundaries with interfaces and
+dependencies). When passed to 'octog run --genes', the guide is injected
+into the generation prompt so generated code follows the exemplar's patterns.
+
+File selection:
+  Language is auto-detected from marker files (go.mod, package.json,
+  Cargo.toml, pyproject.toml, or requirements.txt).
+  By default (--max-files 0), only role-based files are selected:
+    - Marker file (go.mod, etc.)
+    - README
+    - Dockerfile
+    - Entrypoint (main.go, index.ts, app.py, src/main.rs)
+    - Handler (largest file in routes/, handlers/, controllers/, api/)
+    - Model (largest file in models/, types/, schema/, entities/)
+  With --max-files N, additional source files are backfilled largest-first
+  up to N total files. All selections are capped at a 20,000-token budget.
+  Test files, generated files, lock files, and vendor directories are
+  excluded automatically.
+
+Cross-language use:
+  Genes extracted from one language can guide generation in another.
+  For example, extracting from a Go codebase and running with
+  --language python preserves architectural invariants while adapting
+  to idiomatic Python constructs.
+
+Components:
+  For multi-module codebases, the LLM may produce COMPONENT sections
+  in the guide, each with an interface, patterns, and dependency list.
+  When components are present, 'octog run' can use --stratified to
+  converge component-by-component in dependency order.
+
+The --guidance flag steers the LLM toward specific aspects of the codebase;
+use @file.txt to read guidance from a file.
 
 Examples:
   # Extract patterns from a Go project
@@ -1114,8 +1200,14 @@ Examples:
   # Read guidance from a file
   octog extract --source-dir ./myapp --guidance @guidance.txt
 
+  # Include more source files for richer pattern extraction
+  octog extract --source-dir ./myapp --max-files 15
+
   # Write gene output to stdout (for piping or inspection)
   octog extract --source-dir ./myapp --output -
+
+  # Use extracted genes in a run
+  octog run --spec spec.md --scenarios scenarios/ --genes genes.json
 
 Flags:
 `)
@@ -1275,6 +1367,8 @@ Examples:
 
   # Gate on both spec and scenario quality
   octog preflight --scenarios scenarios/ spec.md
+
+Exit codes: 0 = above threshold, 1 = below threshold.
 
 Flags:
 `)
