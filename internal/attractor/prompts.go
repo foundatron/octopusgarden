@@ -263,6 +263,17 @@ func capabilityInstructions(caps ScenarioCapabilities) string {
 - Include a Dockerfile that builds the application and installs it in PATH
 - The application MUST listen on port 8080 for HTTP requests
 - The application must also support command-line invocation for CLI operations` + ws
+	case caps.NeedsTUI && caps.NeedsExec:
+		return `- Generate ALL files needed for a working terminal user interface (TUI) application
+- Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
+- The application is a full-screen TUI program (e.g., using the Bubble Tea model/update/view pattern)
+- The application must also support CLI subcommands for non-interactive operations
+- Do NOT start an HTTP server or listen on any port`
+	case caps.NeedsTUI:
+		return `- Generate ALL files needed for a working terminal user interface (TUI) application
+- Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
+- The application is a full-screen TUI program (e.g., using the Bubble Tea model/update/view pattern)
+- Do NOT start an HTTP server or listen on any port`
 	case caps.NeedsExec:
 		return `- Generate ALL files needed for a working command-line application
 - Include a Dockerfile that builds the application. The built binary must be available in PATH inside the container.
@@ -285,6 +296,8 @@ func capabilityTrailingInstructions(caps ScenarioCapabilities) string {
 		return "- The application MUST serve gRPC on port 50051\n- Include all .proto files and configuration files"
 	case needsHTTP && caps.NeedsExec:
 		return "- Include all dependencies and configuration files"
+	case caps.NeedsTUI:
+		return "- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)\n- The application must render a full-screen TUI and respond to keyboard input\n- Include all dependencies and configuration files"
 	case caps.NeedsExec:
 		return "- The Dockerfile must install the binary to a PATH location (e.g. /usr/local/bin/)\n- Include all dependencies and configuration files"
 	default:
@@ -300,6 +313,7 @@ func buildLanguageExample(tmpl LanguageTemplate, caps ScenarioCapabilities) stri
 	switch {
 	case needsHTTP && caps.NeedsGRPC,
 		caps.NeedsExec && caps.NeedsGRPC,
+		caps.NeedsTUI && caps.NeedsExec,
 		needsHTTP && caps.NeedsExec:
 		return ""
 	}
@@ -309,6 +323,8 @@ func buildLanguageExample(tmpl LanguageTemplate, caps ScenarioCapabilities) stri
 	case caps.NeedsGRPC:
 		// gRPC gets a proto example + Dockerfile with gRPC setup, not the standard example.
 		return buildGRPCExample(tmpl)
+	case caps.NeedsTUI:
+		ex = tmpl.TUIExample
 	case caps.NeedsExec:
 		ex = tmpl.CLIExample
 	default:
@@ -344,7 +360,7 @@ message Item { string id = 1; string name = 2; }
 // buildComponentPrompt creates the system prompt for component-scoped generation.
 // The spec is placed first (with cache_control: ephemeral on the system message) so that
 // the shared prefix is cacheable across components. Component-specific content follows.
-func buildComponentPrompt(spec string, component gene.Component, depInterfaces map[string]string, caps ScenarioCapabilities, language string) string {
+func buildComponentPrompt(spec string, component gene.Component, depInterfaces map[string]string, language string) string {
 	var b strings.Builder
 	b.WriteString(systemPromptPrefix)
 	b.WriteString(spec)
@@ -372,8 +388,33 @@ func buildComponentPrompt(spec string, component gene.Component, depInterfaces m
 		}
 	}
 
-	b.WriteString(buildCapabilitySuffix(caps, language))
+	b.WriteString(buildComponentSuffix(language))
 	b.WriteString(buildDepRules(language))
+	return b.String()
+}
+
+// buildComponentSuffix returns file-format instructions for component generation.
+// Unlike buildCapabilitySuffix, it omits all Dockerfile and capability instructions
+// since components generate only source code; build infrastructure is synthesized
+// after merge.
+func buildComponentSuffix(language string) string {
+	var b strings.Builder
+	b.WriteString("\n\nINSTRUCTIONS:\n")
+	b.WriteString("- Generate ONLY the source code files for this component\n")
+	b.WriteString("- Do NOT generate a Dockerfile, dependency manifests, or build infrastructure — those will be generated in a separate integration step\n")
+	b.WriteString("- Output each file in this exact format:\n\n")
+	b.WriteString("=== FILE: path/to/file ===\nfile content here\n=== END FILE ===\n")
+
+	// Append language-specific example if available (use HTTP example as representative).
+	if tmpl, ok := LookupLanguage(language); ok {
+		ex := tmpl.HTTPExample
+		if ex.EntryFile != "" {
+			fmt.Fprintf(&b, "\nEXAMPLE (showing correct format):\n\n")
+			fmt.Fprintf(&b, "=== FILE: %s ===\n%s\n=== END FILE ===\n", ex.EntryFile, ex.EntryContent)
+		}
+	}
+
+	b.WriteString("\n- Generate ONLY the file blocks, minimize explanatory text\n")
 	return b.String()
 }
 

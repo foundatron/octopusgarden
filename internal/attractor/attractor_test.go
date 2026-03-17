@@ -2896,6 +2896,88 @@ func TestComposedConvergence_FileMergeOverlap(t *testing.T) {
 	}
 }
 
+func TestEnsureBuildInfrastructure_SynthesizesDockerfile(t *testing.T) {
+	files := map[string]string{
+		"main.go": "package main\n",
+	}
+	ensureBuildInfrastructure(files, "go", ScenarioCapabilities{}, testLogger())
+
+	if _, ok := files["Dockerfile"]; !ok {
+		t.Fatal("expected synthetic Dockerfile to be added")
+	}
+	if _, ok := files["go.mod"]; !ok {
+		t.Fatal("expected synthetic go.mod to be added")
+	}
+}
+
+func TestEnsureBuildInfrastructure_SelectsTUIDockerfile(t *testing.T) {
+	files := map[string]string{
+		"main.go": "package main\n",
+	}
+	ensureBuildInfrastructure(files, "go", ScenarioCapabilities{NeedsTUI: true}, testLogger())
+
+	df := files["Dockerfile"]
+	if df == "" {
+		t.Fatal("expected synthetic Dockerfile to be added")
+	}
+	if !strings.Contains(df, "/usr/local/bin/") {
+		t.Error("TUI Dockerfile should install binary to PATH")
+	}
+	if strings.Contains(df, "CMD") {
+		t.Error("TUI Dockerfile should not have CMD (exec-only)")
+	}
+}
+
+func TestEnsureBuildInfrastructure_SelectsCLIDockerfile(t *testing.T) {
+	files := map[string]string{
+		"main.go": "package main\n",
+	}
+	ensureBuildInfrastructure(files, "go", ScenarioCapabilities{NeedsExec: true}, testLogger())
+
+	df := files["Dockerfile"]
+	if df == "" {
+		t.Fatal("expected synthetic Dockerfile to be added")
+	}
+	if !strings.Contains(df, "/usr/local/bin/") {
+		t.Error("CLI Dockerfile should install binary to PATH")
+	}
+}
+
+func TestEnsureBuildInfrastructure_PreservesExistingDockerfile(t *testing.T) {
+	files := map[string]string{
+		"main.go":    "package main\n",
+		"Dockerfile": "FROM scratch\n",
+	}
+	ensureBuildInfrastructure(files, "go", ScenarioCapabilities{}, testLogger())
+
+	if files["Dockerfile"] != "FROM scratch\n" {
+		t.Error("existing Dockerfile should not be overwritten")
+	}
+}
+
+func TestEnsureBuildInfrastructure_PreservesExistingGoMod(t *testing.T) {
+	files := map[string]string{
+		"main.go": "package main\n",
+		"go.mod":  "module myapp\n\ngo 1.24\n",
+	}
+	ensureBuildInfrastructure(files, "go", ScenarioCapabilities{}, testLogger())
+
+	if files["go.mod"] != "module myapp\n\ngo 1.24\n" {
+		t.Error("existing go.mod should not be overwritten")
+	}
+}
+
+func TestEnsureBuildInfrastructure_UnknownLanguage(t *testing.T) {
+	files := map[string]string{
+		"main.go": "package main\n",
+	}
+	ensureBuildInfrastructure(files, "unknown", ScenarioCapabilities{}, testLogger())
+
+	if _, ok := files["Dockerfile"]; ok {
+		t.Error("should not synthesize Dockerfile for unknown language")
+	}
+}
+
 func TestComposedConvergence_BudgetExhausted(t *testing.T) {
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {

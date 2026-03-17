@@ -8,6 +8,7 @@ type LanguageTemplate struct {
 	BaseImage   string       // Docker base image: "golang:1.24-alpine"
 	HTTPExample ExampleBlock // example entry file + Dockerfile for HTTP apps
 	CLIExample  ExampleBlock // example entry file + Dockerfile for CLI apps
+	TUIExample  ExampleBlock // example entry file + Dockerfile for TUI apps
 	GRPCSetup   string       // protoc/plugin installation steps for Dockerfile
 	DepRules    string       // language-specific dependency rules
 }
@@ -56,6 +57,36 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("Hello from", os.Args[1])
+}`,
+			Dockerfile: `FROM golang:1.24-alpine
+WORKDIR /app
+COPY go.mod ./
+COPY . .
+RUN go mod tidy
+RUN go build -o /usr/local/bin/myapp .`,
+		},
+		TUIExample: ExampleBlock{
+			EntryFile: "main.go",
+			EntryContent: `package main
+
+import (
+	"fmt"
+	"os"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+type model struct{ msg string }
+
+func (m model) Init() (model, tea.Cmd)                 { return m, nil }
+func (m model) Update(msg tea.Msg) (model, tea.Cmd)    { return m, nil }
+func (m model) View() string                            { return m.msg }
+
+func main() {
+	if _, err := tea.NewProgram(model{msg: "Hello"}, tea.WithAltScreen()).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }`,
 			Dockerfile: `FROM golang:1.24-alpine
 WORKDIR /app

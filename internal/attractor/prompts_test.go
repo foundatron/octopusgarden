@@ -1270,6 +1270,8 @@ func TestBuildMinimalismSuffix(t *testing.T) {
 // capsSuffix returns a short string describing capabilities for test names.
 func capsSuffix(caps ScenarioCapabilities) string {
 	switch {
+	case caps.NeedsTUI:
+		return "tui"
 	case caps.NeedsHTTP:
 		return "http"
 	case caps.NeedsExec:
@@ -1405,7 +1407,7 @@ func TestBuildComponentPrompt_IncludesContractAndPatterns(t *testing.T) {
 		Interface: "HTTP handler interface for /api routes",
 		Patterns:  "Use chi router with middleware chain",
 	}
-	prompt := buildComponentPrompt("my spec", comp, nil, ScenarioCapabilities{}, "go")
+	prompt := buildComponentPrompt("my spec", comp, nil, "go")
 	if !strings.Contains(prompt, "COMPONENT CONTRACT:") {
 		t.Error("prompt should contain COMPONENT CONTRACT section")
 	}
@@ -1429,7 +1431,7 @@ func TestBuildComponentPrompt_IncludesDependencyInterfaces(t *testing.T) {
 	depInterfaces := map[string]string{
 		"models": "type User struct { ID int; Name string }",
 	}
-	prompt := buildComponentPrompt("my spec", comp, depInterfaces, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt("my spec", comp, depInterfaces, "")
 	if !strings.Contains(prompt, "DEPENDENCY INTERFACES:") {
 		t.Error("prompt should contain DEPENDENCY INTERFACES section")
 	}
@@ -1446,7 +1448,7 @@ func TestBuildComponentPrompt_NoDependencies(t *testing.T) {
 		Name:      "models",
 		Interface: "Data models",
 	}
-	prompt := buildComponentPrompt("my spec", comp, nil, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt("my spec", comp, nil, "")
 	if strings.Contains(prompt, "DEPENDENCY INTERFACES:") {
 		t.Error("prompt should not contain DEPENDENCY INTERFACES when there are no deps")
 	}
@@ -1462,7 +1464,7 @@ func TestBuildComponentPrompt_FiltersToOnlyDeclaredDeps(t *testing.T) {
 		"models": "type User struct { ID int; Name string }",
 		"auth":   "type AuthService interface { Verify(token string) bool }",
 	}
-	prompt := buildComponentPrompt("my spec", comp, depInterfaces, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt("my spec", comp, depInterfaces, "")
 	if !strings.Contains(prompt, "--- models ---") {
 		t.Error("prompt should contain declared dependency models")
 	}
@@ -1477,7 +1479,7 @@ func TestBuildComponentPrompt_SpecFirst(t *testing.T) {
 		Name:      "routes",
 		Interface: "HTTP handlers",
 	}
-	prompt := buildComponentPrompt(spec, comp, nil, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt(spec, comp, nil, "")
 	specIdx := strings.Index(prompt, spec)
 	contractIdx := strings.Index(prompt, "COMPONENT CONTRACT:")
 	if specIdx < 0 || contractIdx < 0 {
@@ -1485,5 +1487,124 @@ func TestBuildComponentPrompt_SpecFirst(t *testing.T) {
 	}
 	if specIdx >= contractIdx {
 		t.Error("spec should appear before component contract (caching correctness)")
+	}
+}
+
+func TestBuildComponentPrompt_NoDockerfileInstructions(t *testing.T) {
+	comp := gene.Component{
+		Name:      "routes",
+		Interface: "HTTP handler interface",
+	}
+	prompt := buildComponentPrompt("my spec", comp, nil, "go")
+	if !strings.Contains(prompt, "Do NOT generate a Dockerfile, dependency manifests, or build infrastructure") {
+		t.Error("component prompt should instruct not to generate Dockerfile or build infrastructure")
+	}
+	// Should not contain "Include a Dockerfile" (the monolithic instruction).
+	if strings.Contains(prompt, "Include a Dockerfile") {
+		t.Error("component prompt should not contain monolithic Dockerfile instruction")
+	}
+}
+
+func TestTUICapabilityInstructions(t *testing.T) {
+	tests := []struct {
+		name        string
+		caps        ScenarioCapabilities
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "NeedsTUI only",
+			caps: ScenarioCapabilities{NeedsTUI: true},
+			wantContain: []string{
+				"terminal user interface (TUI)",
+				"Bubble Tea",
+				"Do NOT start an HTTP server",
+			},
+			wantAbsent: []string{
+				"CLI tool invoked via command-line arguments",
+				"MUST listen on port 8080",
+			},
+		},
+		{
+			name: "NeedsTUI and NeedsExec",
+			caps: ScenarioCapabilities{NeedsTUI: true, NeedsExec: true},
+			wantContain: []string{
+				"terminal user interface (TUI)",
+				"Bubble Tea",
+				"CLI subcommands",
+				"Do NOT start an HTTP server",
+			},
+			wantAbsent: []string{
+				"CLI tool invoked via command-line arguments",
+				"MUST listen on port 8080",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := capabilityInstructions(tt.caps)
+			for _, want := range tt.wantContain {
+				if !strings.Contains(got, want) {
+					t.Errorf("capabilityInstructions should contain %q, got:\n%s", want, got)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(got, absent) {
+					t.Errorf("capabilityInstructions should not contain %q", absent)
+				}
+			}
+		})
+	}
+}
+
+func TestTUITrailingInstructions(t *testing.T) {
+	got := capabilityTrailingInstructions(ScenarioCapabilities{NeedsTUI: true})
+	if !strings.Contains(got, "full-screen TUI") {
+		t.Errorf("trailing instructions for TUI should mention full-screen TUI, got:\n%s", got)
+	}
+	if !strings.Contains(got, "PATH location") {
+		t.Errorf("trailing instructions for TUI should mention PATH, got:\n%s", got)
+	}
+}
+
+func TestTUILanguageExample(t *testing.T) {
+	tmpl, ok := LookupLanguage("go")
+	if !ok {
+		t.Fatal("go language template not found")
+	}
+
+	// TUI-only should use TUI example.
+	tuiExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsTUI: true})
+	if !strings.Contains(tuiExample, "charm.land/bubbletea/v2") {
+		t.Error("TUI example should contain bubbletea v2 import")
+	}
+	if !strings.Contains(tuiExample, "tea.NewProgram") {
+		t.Error("TUI example should contain tea.NewProgram")
+	}
+
+	// TUI+Exec should skip example (combined capability).
+	tuiExecExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsTUI: true, NeedsExec: true})
+	if tuiExecExample != "" {
+		t.Errorf("TUI+Exec should skip example block, got:\n%s", tuiExecExample)
+	}
+
+	// Exec-only should still use CLI example, not TUI.
+	execExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsExec: true})
+	if strings.Contains(execExample, "bubbletea") {
+		t.Error("Exec-only example should not contain bubbletea")
+	}
+	if !strings.Contains(execExample, "os.Args") {
+		t.Error("Exec-only example should contain os.Args")
+	}
+}
+
+func TestTUISystemPromptIntegration(t *testing.T) {
+	prompt := buildSystemPrompt("TUI app spec", ScenarioCapabilities{NeedsTUI: true, NeedsExec: true}, "go", "", "")
+	if !strings.Contains(prompt, "terminal user interface") {
+		t.Error("system prompt with TUI caps should contain TUI instructions")
+	}
+	if strings.Contains(prompt, "CLI tool invoked via command-line arguments") {
+		t.Error("system prompt with TUI+Exec should not fall through to exec-only instructions")
 	}
 }

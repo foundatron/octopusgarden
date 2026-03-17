@@ -512,6 +512,10 @@ func (a *Attractor) runComposed(ctx context.Context, rawSpec string, opts RunOpt
 	// Merge all component files into composed output (later topo order wins on overlap).
 	composedFiles := mergeComponentFiles(sorted, componentFiles, a.logger)
 
+	// Ensure build infrastructure exists — components generate only source code,
+	// so Dockerfile and go.mod may be missing. Synthesize from the language template.
+	ensureBuildInfrastructure(composedFiles, s.opts.Language, s.opts.Capabilities, a.logger)
+
 	result, err := a.validateComposed(ctx, composedFiles, s)
 	if err != nil {
 		composedSpan.RecordError(err)
@@ -538,6 +542,44 @@ func mergeComponentFiles(sorted []gene.Component, componentFiles map[string]map[
 		}
 	}
 	return composed
+}
+
+// ensureBuildInfrastructure adds a synthetic Dockerfile (and go.mod for Go) to composedFiles
+// when components did not generate them. Components generate only source code; build
+// infrastructure is synthesized deterministically from the language template.
+func ensureBuildInfrastructure(composedFiles map[string]string, language string, caps ScenarioCapabilities, logger *slog.Logger) {
+	if _, hasDockerfile := composedFiles["Dockerfile"]; hasDockerfile {
+		return
+	}
+
+	tmpl, ok := LookupLanguage(language)
+	if !ok {
+		logger.Warn("no language template for synthetic Dockerfile", "language", language)
+		return
+	}
+
+	// Select the Dockerfile template matching the app's capability profile.
+	// TUI and CLI apps need the binary installed in PATH for exec steps;
+	// HTTP apps use CMD to start the server.
+	var dockerfile string
+	switch {
+	case caps.NeedsTUI:
+		dockerfile = tmpl.TUIExample.Dockerfile
+	case caps.NeedsExec:
+		dockerfile = tmpl.CLIExample.Dockerfile
+	default:
+		dockerfile = tmpl.HTTPExample.Dockerfile
+	}
+	composedFiles["Dockerfile"] = dockerfile
+	logger.Info("synthesized Dockerfile for composed build", "language", language)
+
+	// For Go, ensure go.mod exists so `go mod tidy` can resolve dependencies.
+	if language == "go" {
+		if _, hasGoMod := composedFiles["go.mod"]; !hasGoMod {
+			composedFiles["go.mod"] = "module app\n\ngo 1.24\n"
+			logger.Info("synthesized go.mod for composed build")
+		}
+	}
 }
 
 // validateComposed writes composed files, builds, runs, and validates with integration scenarios.
@@ -694,7 +736,7 @@ func (a *Attractor) convergeComponent(ctx context.Context, rawSpec string, comp 
 // componentIteration runs one iteration of the component mini-loop.
 // Returns (files, nil) on convergence, (nil, nil) to continue, or (nil, err) on hard error.
 func (a *Attractor) componentIteration(ctx context.Context, rawSpec string, comp gene.Component, depInterfaces map[string]string, baseFiles map[string]string, validate ValidateFn, iter int, cs *componentLoopState, s *runState) (map[string]string, error) {
-	systemPrompt := buildComponentPrompt(rawSpec, comp, depInterfaces, s.opts.Capabilities, s.opts.Language)
+	systemPrompt := buildComponentPrompt(rawSpec, comp, depInterfaces, s.opts.Language)
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: systemPrompt,
 		Messages:     buildMessages(iter, cs.history),
