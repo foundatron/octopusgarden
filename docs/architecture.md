@@ -129,13 +129,13 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | ------- | ------- | --------- | ------------ |
 | `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go`, `triage.go`, `toposort.go` | `llm`, `spec`, `container`, `gene` |
 | `container` | Docker image build, container run, health check, exec sessions | `docker.go` | docker SDK |
-| `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go` | `llm` |
+| `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go`, `sources.go`, `sources_tui.go` (Unix), `sources_tui_windows.go` | `llm` |
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
 | `llm` | Model-agnostic LLM client, cost tracking, prompt templates | `client.go`, `anthropic.go`, `openai.go`, `models.go`, `json.go`, `prompt.go` | anthropic-sdk, openai-sdk |
 | `gene` | Scan exemplar codebases, LLM pattern extraction | `gene.go`, `scan.go`, `analyze.go` | `llm`, `spec` |
 | `interview` | Conversational spec-drafting, spec-completeness scoring, holdout scenario generation | `interview.go`, `prompt.go`, `scoring.go`, `scoring_prompt.go`, `scenarios.go`, `scenarios_prompt.go` | `llm`, `attractor`, `scenario` |
 | `preflight` | Pre-run quality assessment of specs and scenarios | `preflight.go`, `scenario.go` | `llm` |
-| `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go` | (none) |
+| `lint` | Structural linting for specs and scenario YAML | `spec.go`, `scenario.go`, `diagnostic.go`, `varcheck.go`, `tui_unix.go`, `tui_windows.go` | (none) |
 | `observability` | OpenTelemetry tracing wrappers | `setup.go` | `llm`, `container`, otel SDK |
 | `store` | SQLite run/iteration persistence | `db.go`, `types.go` | modernc.org/sqlite |
 | `ui` | Display implementations for interview TUI (plain text + styled terminal) | `display.go`, `styled.go` | lipgloss, glamour |
@@ -706,6 +706,11 @@ Capture sources: `screen` (current terminal screen, trailing whitespace stripped
 `TUIExecutor` is stateful across steps. `Close()` signals the entire process group with `SIGTERM`,
 waits up to 500ms, then `SIGKILL` if still running. Registered via `registerTUIExecutor`
 (`cmd/octog/tui.go`) when `ScenarioCapabilities.NeedsTUI` is true; no-op on Windows (`tui_windows.go`).
+
+Platform-conditional build tags apply in two other places:
+
+- **Capture source map** (`scenario/sources_tui.go` / `scenario/sources_tui_windows.go`): on Unix, `tuiStepExecutor()` returns `&TUIExecutor{}` so TUI capture sources are registered in `CaptureSourceMap()`; on Windows it returns nil and TUI is excluded.
+- **Lint diagnostics** (`lint/tui_unix.go` / `lint/tui_windows.go`): `tuiPlatformDiags()` returns nil on Unix; on Windows it returns a `Warning` diagnostic: _"tui steps are not supported on Windows; this scenario will fail at runtime"_.
 
 ### Variable Capture and Substitution
 

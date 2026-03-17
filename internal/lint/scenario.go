@@ -1020,7 +1020,7 @@ func lintTUI(path string, node *yaml.Node, cs *captureSet) []Diagnostic {
 		}}
 	}
 
-	var diags []Diagnostic
+	diags := tuiPlatformDiags(path, node)
 	fields := nodeFields(node)
 
 	cmdFE, hasCmd := fields["command"]

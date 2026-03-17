@@ -1,0 +1,49 @@
+id: navigation
+description: Menu navigation increments, decrements, and quits cleanly
+type: functional
+tier: 1
+satisfaction_criteria: Menu navigation works, counter updates correctly, quit exits cleanly
+
+setup:
+  - description: Launch app and wait for initial render
+    tui:
+      command: "./app"
+      wait_for: "Counter: 0"
+
+steps:
+  - description: Verify menu is visible
+    tui:
+      assert_screen: "Increment"
+    expect: "Menu is visible with at least an Increment option"
+
+  - description: Increment counter to 1
+    tui:
+      send_key: "1"
+      wait_for: "Counter: 1"
+    expect: "Counter displays 1 after pressing 1"
+
+  - description: Increment counter to 2
+    tui:
+      send_key: "1"
+      wait_for: "Counter: 2"
+    expect: "Counter displays 2 after pressing 1 again"
+
+  - description: Decrement counter to 1
+    tui:
+      send_key: "2"
+      wait_for: "Counter: 1"
+    expect: "Counter displays 1 after pressing 2 to decrement"
+
+  - description: Verify counter is 1 and Counter:2 is absent
+    tui:
+      assert_screen: "Counter: 1"
+      assert_absent: "Counter: 2"
+    expect: "Screen shows Counter: 1 and does not show Counter: 2"
+
+  - description: Quit and capture exit code
+    tui:
+      send_key: "4"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

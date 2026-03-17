@@ -1,0 +1,44 @@
+id: reset
+description: Reset returns counter to zero after incrementing
+type: functional
+tier: 1
+satisfaction_criteria: Reset returns counter to zero after incrementing
+
+setup:
+  - description: Launch app and wait for initial render
+    tui:
+      command: "./app"
+      wait_for: "Counter: 0"
+
+steps:
+  - description: Increment counter to 1
+    tui:
+      send_key: "1"
+      wait_for: "Counter: 1"
+    expect: "Counter displays 1 after pressing 1"
+
+  - description: Increment counter to 2
+    tui:
+      send_key: "1"
+      wait_for: "Counter: 2"
+    expect: "Counter displays 2 after pressing 1 again"
+
+  - description: Reset counter to 0
+    tui:
+      send_key: "3"
+      wait_for: "Counter: 0"
+    expect: "Counter displays 0 after pressing 3 to reset"
+
+  - description: Verify counter is 0 and Counter:2 is absent
+    tui:
+      assert_screen: "Counter: 0"
+      assert_absent: "Counter: 2"
+    expect: "Screen shows Counter: 0 and does not show Counter: 2"
+
+  - description: Quit and capture exit code
+    tui:
+      send_key: "4"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

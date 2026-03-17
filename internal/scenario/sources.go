@@ -12,6 +12,10 @@ func CaptureSourceMap() map[string]map[string]bool {
 		"request": &HTTPExecutor{},
 	}
 
+	if e := tuiStepExecutor(); e != nil {
+		types["tui"] = e
+	}
+
 	result := make(map[string]map[string]bool, len(types))
 	for name, exec := range types {
 		sources := exec.ValidCaptureSources()
