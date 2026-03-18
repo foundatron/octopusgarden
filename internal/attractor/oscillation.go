@@ -44,8 +44,3 @@ Break out by trying a fundamentally different approach:
 - If you fixed something in a previous attempt that was then undone, keep that fix and build on it
 
 Do NOT revert to a previous implementation. Make a genuinely new attempt.`
-
-// buildOscillationSteering returns steering text to inject when oscillation is detected.
-func buildOscillationSteering() string {
-	return oscillationSteeringText
-}

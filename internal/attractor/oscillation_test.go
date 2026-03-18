@@ -83,12 +83,11 @@ func TestDetectOscillation(t *testing.T) {
 	}
 }
 
-func TestBuildOscillationSteering(t *testing.T) {
-	text := buildOscillationSteering()
-	if !strings.Contains(text, "OSCILLATION DETECTED") {
+func TestOscillationSteeringText(t *testing.T) {
+	if !strings.Contains(oscillationSteeringText, "OSCILLATION DETECTED") {
 		t.Error("expected steering text to contain \"OSCILLATION DETECTED\"")
 	}
-	if strings.Contains(text, "STALL NOTICE") {
+	if strings.Contains(oscillationSteeringText, "STALL NOTICE") {
 		t.Error("expected steering text to not contain \"STALL NOTICE\"")
 	}
 }

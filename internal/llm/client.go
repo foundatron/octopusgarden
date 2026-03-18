@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 // Sentinel errors for agent loop operations.
@@ -117,4 +118,11 @@ type AgentResponse struct {
 // AgentClient extends Client with an agentic tool-use loop.
 type AgentClient interface {
 	AgentLoop(ctx context.Context, req AgentRequest, handler ToolHandler) (AgentResponse, error)
+}
+
+// AvailableModel holds metadata about an available model.
+type AvailableModel struct {
+	ID          string
+	DisplayName string
+	CreatedAt   time.Time
 }

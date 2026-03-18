@@ -875,7 +875,7 @@ type RunResult struct {
       - If stalling → wonder/reflect two-phase process (see below)
       - Otherwise → normal single-call generation
    h. Parse LLM output into files (=== FILE: path === ... === END FILE ===)
-   i. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
+   i. In patch mode, mergeFiles(newFiles, bestFiles) to carry forward unchanged files
    j. Record SHA-256 hash of file set (for oscillation detection)
    k. Write files to workspace/{run_id}/iter_{n}/
    l. docker build → StartSession (when NeedsExec or NeedsTUI) → startServiceContainer (gRPC → RunMultiPort; TUI-only → session only; HTTP/browser/legacy → Run + WaitHealthy)
@@ -947,7 +947,7 @@ file contents here
 === END FILE ===
 ```
 
-In patch mode, `MergeFiles(newFiles, prevFiles)` copies all previous best files and overlays new
+In patch mode, `mergeFiles(newFiles, prevFiles)` copies all previous best files and overlays new
 output on top.
 
 ### File Triage (`internal/attractor/triage.go`)
@@ -1156,17 +1156,17 @@ Two system prompts live in `prompt.go`:
 
 `--seed` and `--prompt` are mutually exclusive (`errSeedAndPromptConflict`).
 
-## Spec-Completeness Scoring (`interview.Scorer`)
+## Spec-Completeness Scoring (`interview.scorer`)
 
-`interview.NewScorer(client llm.Client, model string) *Scorer` — scores a spec against five
+`interview.newScorer(client llm.Client, model string) *scorer` — scores a spec against five
 weighted dimensions using an LLM judge. Distinct from `preflight.Check` (which gates the attractor
 loop); this scorer is used by the `octog interview` command to show the user how complete their
 drafted spec is.
 
 ```go
-type Scorer struct { client llm.Client; model string }
+type scorer struct { client llm.Client; model string }
 
-func (s *Scorer) Score(ctx context.Context, specContent string) (CompletenessResult, error)
+func (s *scorer) Score(ctx context.Context, specContent string) (CompletenessResult, error)
 
 type CompletenessResult struct {
     Dimensions []DimensionScore
@@ -1223,7 +1223,7 @@ Pipeline:
 5. Filename collisions (after base-name normalization) keep the first occurrence.
 6. If no valid scenarios survive, returns `errNoValidScenarios`.
 
-Sentinel errors: `errEmptySpec` (shared with `Scorer`), `errParseScenarioOutput`,
+Sentinel errors: `errEmptySpec` (shared with `scorer`), `errParseScenarioOutput`,
 `errNoValidScenarios`.
 
 `cmd/octog.writeGeneratedScenarios` wraps `ScenarioGenerator.Generate`, writes files to a

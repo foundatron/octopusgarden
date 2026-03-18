@@ -46,15 +46,15 @@ type CompletenessResult struct {
 	CostUSD    float64
 }
 
-// Scorer scores spec completeness using an LLM judge.
-type Scorer struct {
+// scorer scores spec completeness using an LLM judge.
+type scorer struct {
 	client llm.Client
 	model  string
 }
 
-// NewScorer creates a Scorer that uses the given LLM client and model.
-func NewScorer(client llm.Client, model string) *Scorer {
-	return &Scorer{client: client, model: model}
+// newScorer creates a scorer that uses the given LLM client and model.
+func newScorer(client llm.Client, model string) *scorer {
+	return &scorer{client: client, model: model}
 }
 
 // scoringResponse is the expected JSON structure from the scoring LLM.
@@ -67,7 +67,7 @@ type scoringResponse struct {
 }
 
 // Score evaluates the completeness of specContent and returns a CompletenessResult.
-func (s *Scorer) Score(ctx context.Context, specContent string) (CompletenessResult, error) {
+func (s *scorer) Score(ctx context.Context, specContent string) (CompletenessResult, error) {
 	if strings.TrimSpace(specContent) == "" {
 		return CompletenessResult{}, errEmptySpec
 	}

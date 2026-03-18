@@ -28,7 +28,7 @@ func TestScorerHappyPath(t *testing.T) {
 		},
 	}
 
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	result, err := scorer.Score(context.Background(), "# My Spec\n\nSome content.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -94,7 +94,7 @@ func TestScorerEmptySpec(t *testing.T) {
 					return llm.GenerateResponse{}, nil
 				},
 			}
-			scorer := NewScorer(client, "test-model")
+			scorer := newScorer(client, "test-model")
 			_, err := scorer.Score(context.Background(), input)
 			if !errors.Is(err, errEmptySpec) {
 				t.Errorf("expected errEmptySpec, got %v", err)
@@ -114,7 +114,7 @@ func TestScorerLLMError(t *testing.T) {
 			return llm.GenerateResponse{}, errAPI
 		},
 	}
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	_, err := scorer.Score(context.Background(), "some spec")
 	if err == nil {
 		t.Fatal("expected error")
@@ -134,7 +134,7 @@ func TestScorerMalformedJSON(t *testing.T) {
 			return llm.GenerateResponse{Content: "not json"}, nil
 		},
 	}
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	_, err := scorer.Score(context.Background(), "some spec")
 	if !errors.Is(err, errMalformedResponse) {
 		t.Errorf("expected errMalformedResponse, got %v", err)
@@ -155,7 +155,7 @@ func TestScorerMissingDimensions(t *testing.T) {
 			}, nil
 		},
 	}
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	_, err := scorer.Score(context.Background(), "some spec")
 	if !errors.Is(err, errIncompleteDimensions) {
 		t.Errorf("expected errIncompleteDimensions, got %v", err)
@@ -177,7 +177,7 @@ func TestScorerScoreClamping(t *testing.T) {
 			}, nil
 		},
 	}
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	result, err := scorer.Score(context.Background(), "some spec")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -215,7 +215,7 @@ func TestScorerWeightedAverage(t *testing.T) {
 			}, nil
 		},
 	}
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	result, err := scorer.Score(context.Background(), "some spec")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -241,7 +241,7 @@ func TestScorerUnknownDimensionName(t *testing.T) {
 			}, nil
 		},
 	}
-	scorer := NewScorer(client, "test-model")
+	scorer := newScorer(client, "test-model")
 	_, err := scorer.Score(context.Background(), "some spec")
 	if !errors.Is(err, errIncompleteDimensions) {
 		t.Errorf("expected errIncompleteDimensions for unknown dimension, got %v", err)
