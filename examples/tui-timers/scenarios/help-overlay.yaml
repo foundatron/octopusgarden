@@ -33,7 +33,7 @@ steps:
 
   - description: Help mentions tab keybinding
     tui:
-      assert_screen: "Tab"
+      assert_screen: "tab"
     expect: "Help overlay mentions Tab for focus switching"
 
   - description: Dismiss help with escape

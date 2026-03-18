@@ -18,31 +18,31 @@ steps:
   - description: Move down to Bravo
     tui:
       send_key: "j"
-      wait_for: "Bravo"
+      wait_for: "> Bravo"
     expect: "Selection moved to Bravo"
 
   - description: Move down to Charlie
     tui:
       send_key: "Down"
-      wait_for: "Charlie"
+      wait_for: "> Charlie"
     expect: "Selection moved to Charlie"
 
   - description: Move down past end stays on Charlie
     tui:
       send_key: "j"
-      assert_screen: "Charlie"
+      assert_screen: "> Charlie"
     expect: "Selection stays on Charlie (no wrap)"
 
   - description: Move up to Bravo
     tui:
       send_key: "k"
-      wait_for: "Bravo"
+      wait_for: "> Bravo"
     expect: "Selection moved back to Bravo"
 
   - description: Move up to Alpha
     tui:
       send_key: "Up"
-      wait_for: "Alpha"
+      wait_for: "> Alpha"
     expect: "Selection moved to Alpha"
 
   - description: Move up past start stays on Alpha

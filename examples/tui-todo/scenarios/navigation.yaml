@@ -18,31 +18,31 @@ steps:
   - description: Move down to Second
     tui:
       send_key: "j"
-      wait_for: "Second"
+      wait_for: "> Second"
     expect: "Selection moved to Second task"
 
   - description: Move down to Third
     tui:
       send_key: "Down"
-      wait_for: "Third"
+      wait_for: "> Third"
     expect: "Selection moved to Third task"
 
   - description: Move down past end stays on Third
     tui:
       send_key: "j"
-      assert_screen: "Third"
+      assert_screen: "> Third"
     expect: "Selection stays on Third (no wrap)"
 
   - description: Move up to Second
     tui:
       send_key: "k"
-      wait_for: "Second"
+      wait_for: "> Second"
     expect: "Selection moved back to Second"
 
   - description: Move up to First
     tui:
       send_key: "Up"
-      wait_for: "First"
+      wait_for: "> First"
     expect: "Selection moved to First"
 
   - description: Move up past start stays on First

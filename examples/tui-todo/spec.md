@@ -65,8 +65,8 @@ The TUI shows a scrollable task list. Each task is displayed as:
 [x] Write tests
 ```
 
-The currently selected task is visually highlighted (e.g., reverse video, `>` prefix, or color). A
-status bar at the bottom shows `N tasks (M done)`.
+The currently selected task is marked with a `>` prefix. Unselected tasks are indented with spaces
+to align. A status bar at the bottom shows `N tasks (M done)`.
 
 ### Navigation
 

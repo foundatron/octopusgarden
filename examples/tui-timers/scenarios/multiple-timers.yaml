@@ -24,12 +24,13 @@ steps:
   - description: Navigate to second timer
     tui:
       send_key: "j"
-      wait_for: "Bravo"
+      wait_for: "> Bravo"
     expect: "Selection moved to Bravo"
 
   - description: Start second timer
     tui:
       send_key: "space"
+      wait_for: "Started: Bravo"
     expect: "Second timer Bravo started"
 
   - description: Log shows both started events

@@ -77,7 +77,8 @@ The Timer panel is focused by default when the TUI starts.
 ### Timer Display
 
 Each timer in the timer panel shows its name, remaining time as MM:SS, and state. The currently
-selected timer is visually highlighted (e.g., reverse video, `>` prefix, or color). Example:
+selected timer is marked with a `>` prefix. Unselected timers are indented with spaces to align.
+Example:
 
 ```text
   Eggs       03:00  READY

@@ -129,7 +129,7 @@ content and failure feedback as strings. The validator (scenario runner + judge)
 | ------- | ------- | --------- | ------------ |
 | `attractor` | Convergence loop: generate code, build, validate, iterate | `attractor.go`, `convergence.go`, `diagnosis.go`, `escalation.go`, `oscillation.go`, `regression.go`, `prompts.go`, `fileparse.go`, `languages.go`, `triage.go`, `toposort.go` | `llm`, `spec`, `container`, `gene` |
 | `container` | Docker image build, container run, health check, exec sessions | `docker.go` | docker SDK |
-| `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go`, `sources.go`, `sources_tui.go` (Unix), `sources_tui_windows.go` | `llm` |
+| `scenario` | Load YAML scenarios, execute steps, LLM-judge scoring | `types.go`, `loader.go`, `runner.go`, `judge.go`, `result.go`, `jsonpath.go`, `grpc.go`, `tui.go` (Unix), `tui_windows.go`, `sources.go`, `sources_tui.go` (Unix), `sources_tui_windows.go` | `llm` |
 | `spec` | Parse markdown specs, pyramid summarization | `parser.go`, `types.go`, `summary.go` | (none) |
 | `llm` | Model-agnostic LLM client, cost tracking, prompt templates | `client.go`, `anthropic.go`, `openai.go`, `models.go`, `json.go`, `prompt.go` | anthropic-sdk, openai-sdk |
 | `gene` | Scan exemplar codebases, LLM pattern extraction | `gene.go`, `scan.go`, `analyze.go` | `llm`, `spec` |
@@ -707,6 +707,12 @@ Capture sources: `screen` (current terminal screen, trailing whitespace stripped
 waits up to 500ms, then `SIGKILL` if still running. Registered via `registerTUIExecutor`
 (`cmd/octog/tui.go`) when `ScenarioCapabilities.NeedsTUI` is true; no-op on Windows (`tui_windows.go`).
 
+**Container integration**: `TUIExecutor.ContainerID` (set by `registerTUIExecutor` from
+`session.ContainerID()`) routes commands through `docker exec -it <id> sh -c <command>` instead of
+running locally. The host-side PTY (creack/pty) connects to the container-side PTY allocated by
+`docker exec -it`, creating a relay chain: host PTY <-> docker exec <-> container PTY <-> TUI app.
+When `ContainerID` is empty, commands run locally via `sh -c` as before.
+
 Platform-conditional build tags apply in two other places:
 
 - **Capture source map** (`scenario/sources_tui.go` / `scenario/sources_tui_windows.go`): on Unix, `tuiStepExecutor()` returns `&TUIExecutor{}` so TUI capture sources are registered in `CaptureSourceMap()`; on Windows it returns nil and TUI is excluded.
@@ -872,7 +878,7 @@ type RunResult struct {
    i. In patch mode, MergeFiles(newFiles, bestFiles) to carry forward unchanged files
    j. Record SHA-256 hash of file set (for oscillation detection)
    k. Write files to workspace/{run_id}/iter_{n}/
-   l. docker build → startServiceContainer (capability-routing: gRPC → RunMultiPort; TUI-only → no container; HTTP/browser/legacy → Run + WaitHealthy)
+   l. docker build → StartSession (when NeedsExec or NeedsTUI) → startServiceContainer (gRPC → RunMultiPort; TUI-only → session only; HTTP/browser/legacy → Run + WaitHealthy)
    m. Run test command if configured (non-zero exit → test_fail)
    n. call validate(ctx, url, maxTier) → satisfaction, failures
       - maxTier = activeTier in stratified mode; 0 = all scenarios (non-stratified)
@@ -998,19 +1004,28 @@ exec-based scenarios; `Session.Exec()` runs commands inside it via `docker exec`
 
 ### Capability-Based Container Routing
 
-`startServiceContainer` (and `startComposedContainer` for composed convergence) selects the container
-strategy from `ScenarioCapabilities`:
+Container startup is two-phase: `buildRunValidate` first starts a **session container** (when
+`NeedsExec || NeedsTUI`) via `StartSession`, then calls `startServiceContainer` for the **service
+container** (HTTP/gRPC). Session and service containers share the same image tag but run
+independently.
+
+Session container: `StartSession` creates a long-lived container running `sleep infinity`. For exec
+scenarios, `Session.Exec()` runs commands inside it. For TUI scenarios, `Session.ContainerID()` is
+passed to `TUIExecutor`, which uses `docker exec -it` to run TUI apps with full PTY support inside
+the container.
+
+`startServiceContainer` (and `startComposedContainer` for composed convergence) selects the service
+container strategy from `ScenarioCapabilities`:
 
 | Condition | Strategy |
 | --------- | -------- |
 | `NeedsGRPC` | `RunMultiPort` (ports 8080 + 50051); `grpcTargetProvider` set on session |
-| `NeedsTUI && !NeedsHTTP && !NeedsGRPC` | No container started; steps run locally via PTY |
+| `NeedsTUI && !NeedsHTTP && !NeedsGRPC` | No service container (session container handles TUI via `docker exec -it`) |
 | `NeedsHTTP \|\| NeedsBrowser \|\| !NeedsExec` | `Run` + `WaitHealthy` (HTTP path, legacy fallback) |
-| `NeedsExec` (only) | `StartSession` for exec-only; no HTTP port |
+| `NeedsExec` (only) | No service container (session container handles exec) |
 
-TUI-only scenarios skip container startup entirely — `startServiceContainer` returns an empty URL
-and nil stop function. The `serviceContainerResult` struct carries `{url, containerID, restartFn,
-stop, stalled}` back to the caller; `stop` is nil when no service container is needed.
+The `serviceContainerResult` struct carries `{url, containerID, restartFn, stop, stalled}` back to
+the caller; `stop` is nil when no service container is needed (TUI-only, exec-only).
 
 ## Stall Recovery (Wonder/Reflect)
 
