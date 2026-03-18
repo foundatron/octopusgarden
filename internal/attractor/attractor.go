@@ -771,7 +771,7 @@ func (a *Attractor) componentIteration(ctx context.Context, rawSpec string, comp
 		return nil, nil
 	}
 
-	buildContext := MergeFiles(files, baseFiles)
+	buildContext := mergeFiles(files, baseFiles)
 	iterDir := filepath.Join(s.baseDir, fmt.Sprintf("comp_%s_iter_%d", comp.Name, iter))
 	if err := writeFiles(iterDir, buildContext); err != nil {
 		return nil, fmt.Errorf("attractor: write component %q files: %w", comp.Name, err)
@@ -1077,7 +1077,7 @@ func (a *Attractor) generateAgentic(ctx context.Context, specContent, iterDir st
 	}
 
 	if detectOscillation(s.codeHashes) {
-		messages[len(messages)-1].Content += "\n\n" + buildOscillationSteering()
+		messages[len(messages)-1].Content += "\n\n" + oscillationSteeringText
 	}
 
 	handler, err := newAgentToolHandler(iterDir, a.logger)
@@ -1150,7 +1150,7 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 
 	// Inject oscillation steering when the last 4 code hashes form an A→B→A→B pattern.
 	if detectOscillation(s.codeHashes) {
-		messages[len(messages)-1].Content += "\n\n" + buildOscillationSteering()
+		messages[len(messages)-1].Content += "\n\n" + oscillationSteeringText
 	}
 
 	// Generate code: wonder/reflect on stall, normal generation otherwise.
@@ -1182,7 +1182,7 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 
 	// In patch mode, merge new output over previous best to carry forward unchanged files.
 	if patching {
-		files = MergeFiles(files, s.bestFiles)
+		files = mergeFiles(files, s.bestFiles)
 	}
 
 	// Write files to iteration directory.

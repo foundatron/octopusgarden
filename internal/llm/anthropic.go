@@ -153,13 +153,6 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 	}, nil
 }
 
-// AvailableModel holds metadata about an available model.
-type AvailableModel struct {
-	ID          string
-	DisplayName string
-	CreatedAt   time.Time
-}
-
 // ListModels queries the Anthropic API for available models.
 func (c *AnthropicClient) ListModels(ctx context.Context) ([]AvailableModel, error) {
 	iter := c.client.Models.ListAutoPaging(ctx, anthropic.ModelListParams{})

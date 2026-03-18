@@ -345,7 +345,7 @@ func TestMergeFiles(t *testing.T) {
 			origNew := maps.Clone(tt.newFiles)
 			origPrev := maps.Clone(tt.prevFiles)
 
-			got := MergeFiles(tt.newFiles, tt.prevFiles)
+			got := mergeFiles(tt.newFiles, tt.prevFiles)
 
 			if len(got) != len(tt.want) {
 				t.Fatalf("expected %d files, got %d: %v", len(tt.want), len(got), got)

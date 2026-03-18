@@ -117,7 +117,7 @@ func extractFilePath(trimmed string) (string, bool) {
 }
 
 // isUnchangedMarker returns true for === UNCHANGED: path === advisory markers.
-// These are skipped during parsing — carry-forward is handled by MergeFiles.
+// These are skipped during parsing — carry-forward is handled by mergeFiles.
 func isUnchangedMarker(trimmed string) bool {
 	return strings.HasPrefix(trimmed, unchangedPrefix) && strings.HasSuffix(trimmed, unchangedSuffix)
 }
@@ -134,17 +134,6 @@ func validatePath(path string) error {
 	return nil
 }
 
-// MergeFiles merges new LLM output into the previous best file set.
-// Files present in newFiles replace their counterparts in prevFiles.
-// Files present in prevFiles but absent from newFiles are carried forward unchanged.
-// The result is a new map — prevFiles and newFiles are never mutated.
-func MergeFiles(newFiles, prevFiles map[string]string) map[string]string {
-	merged := make(map[string]string, len(prevFiles)+len(newFiles))
-	maps.Copy(merged, prevFiles)
-	maps.Copy(merged, newFiles)
-	return merged
-}
-
 // normalizeTrailingNewline ensures content ends with exactly one newline.
 func normalizeTrailingNewline(s string) string {
 	s = strings.TrimRight(s, "\n")
@@ -152,4 +141,15 @@ func normalizeTrailingNewline(s string) string {
 		return "\n"
 	}
 	return s + "\n"
+}
+
+// mergeFiles merges new LLM output into the previous best file set.
+// Files present in newFiles replace their counterparts in prevFiles.
+// Files present in prevFiles but absent from newFiles are carried forward unchanged.
+// The result is a new map — prevFiles and newFiles are never mutated.
+func mergeFiles(newFiles, prevFiles map[string]string) map[string]string {
+	merged := make(map[string]string, len(prevFiles)+len(newFiles))
+	maps.Copy(merged, prevFiles)
+	maps.Copy(merged, newFiles)
+	return merged
 }
