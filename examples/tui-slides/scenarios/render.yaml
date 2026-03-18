@@ -1,0 +1,39 @@
+id: render
+description: First slide renders correctly, second slide is not visible
+type: functional
+tier: 1
+satisfaction_criteria: First slide content is displayed, second slide content is not visible, status bar shows correct position
+
+setup:
+  - description: Write a two-slide file
+    exec:
+      command: sh -c 'printf "Hello World\n---\nGoodbye World" > /tmp/slides.txt'
+
+  - description: Launch slide viewer
+    tui:
+      command: "myapp /tmp/slides.txt"
+      wait_for: "Slide 1 of 2"
+
+steps:
+  - description: First slide content is visible
+    tui:
+      assert_screen: "Hello World"
+    expect: "Screen contains the text Hello World"
+
+  - description: Second slide content is not visible
+    tui:
+      assert_absent: "Goodbye World"
+    expect: "Screen does not contain Goodbye World since we are on slide 1"
+
+  - description: Status bar shows slide 1 of 2
+    tui:
+      assert_screen: "Slide 1 of 2"
+    expect: "Status bar shows Slide 1 of 2"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

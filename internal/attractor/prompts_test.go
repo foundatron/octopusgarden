@@ -1576,10 +1576,13 @@ func TestTUILanguageExample(t *testing.T) {
 		t.Fatal("go language template not found")
 	}
 
-	// TUI-only should skip example block (framework choice driven by spec/genes).
+	// TUI-only should emit Dockerfile-only example (no entry file, but Dockerfile is non-empty).
 	tuiExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsTUI: true})
-	if tuiExample != "" {
-		t.Errorf("TUI example should be empty (no framework-specific example), got:\n%s", tuiExample)
+	if !strings.Contains(tuiExample, "Dockerfile") {
+		t.Errorf("TUI example should contain Dockerfile example, got:\n%s", tuiExample)
+	}
+	if strings.Contains(tuiExample, "main.go") {
+		t.Error("TUI example should not contain main.go (no framework-specific entry file)")
 	}
 
 	// TUI+Exec should skip example (combined capability).

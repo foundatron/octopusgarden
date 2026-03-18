@@ -342,10 +342,16 @@ func buildLanguageExample(tmpl LanguageTemplate, caps ScenarioCapabilities) stri
 
 	ex := selectExampleBlock(tmpl, caps)
 
-	// Skip example block when the template has no entry file (e.g., TUI --
-	// framework choice is driven by spec/genes, not by the language template).
+	// When the template has no entry file (e.g., TUI -- framework choice is
+	// driven by spec/genes), emit a Dockerfile-only example if available.
 	if ex.EntryFile == "" {
-		return ""
+		if ex.Dockerfile == "" {
+			return ""
+		}
+		var db strings.Builder
+		db.WriteString("\nEXAMPLE (showing correct Dockerfile format):\n\n")
+		fmt.Fprintf(&db, "=== FILE: Dockerfile ===\n%s\n=== END FILE ===\n", ex.Dockerfile)
+		return db.String()
 	}
 
 	var b strings.Builder

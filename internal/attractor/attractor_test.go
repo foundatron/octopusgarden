@@ -592,12 +592,17 @@ func TestNeedsBrowserTriggersHTTPContainer(t *testing.T) {
 }
 
 func TestTUIOnlySkipsHTTPContainer(t *testing.T) {
+	var sessionStarted atomic.Bool
 	client := &mockLLMClient{
 		generateFn: func(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
 			return llm.GenerateResponse{Content: validLLMOutput(), CostUSD: 0.01}, nil
 		},
 	}
 	mgr := &mockContainerMgr{
+		startSessionFn: func(_ context.Context, _ string) (*container.Session, container.StopFunc, error) {
+			sessionStarted.Store(true)
+			return nil, func() {}, nil
+		},
 		runFn: func(_ context.Context, _ string) (container.RunResult, container.StopFunc, error) {
 			t.Fatal("Run should not be called for TUI-only scenarios")
 			return container.RunResult{}, nil, nil
@@ -621,6 +626,9 @@ func TestTUIOnlySkipsHTTPContainer(t *testing.T) {
 	}
 	if result.Status != StatusConverged {
 		t.Errorf("expected converged, got %q", result.Status)
+	}
+	if !sessionStarted.Load() {
+		t.Error("expected StartSession to be called for NeedsTUI=true")
 	}
 }
 

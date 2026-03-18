@@ -1,0 +1,27 @@
+id: cli-list
+description: List subcommand shows tasks with correct done markers
+type: functional
+tier: 1
+satisfaction_criteria: List output shows [ ] for undone and [x] for done tasks
+
+setup:
+  - description: Write a todo file with mixed done states
+    exec:
+      command: sh -c 'printf "[{\"text\":\"Undone task\",\"done\":false},{\"text\":\"Done task\",\"done\":true}]" > /tmp/todos.json'
+
+steps:
+  - description: List shows correct markers
+    exec:
+      command: myapp list --file /tmp/todos.json
+    expect: "Stdout shows [ ] Undone task and [x] Done task"
+    capture:
+      - name: list_output
+        source: stdout
+
+  - description: List with empty file shows nothing
+    exec:
+      command: sh -c 'printf "[]" > /tmp/empty.json && myapp list --file /tmp/empty.json'
+    expect: "Exit code 0 and stdout is empty or blank"
+    capture:
+      - name: empty_exit
+        source: exitcode

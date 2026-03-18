@@ -77,7 +77,7 @@ RUN go mod tidy
 RUN go build -o /usr/local/bin/myapp .`,
 		},
 		GRPCSetup: "RUN apk add --no-cache protobuf-dev && go install google.golang.org/protobuf/cmd/protoc-gen-go@latest && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest",
-		DepRules:  "- For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid)\n- For Go: generate only go.mod with no \"require\" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run \"go mod tidy\" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build",
+		DepRules:  "- For Go: use golang:1.25-alpine as the Docker base image — older versions will fail to resolve modern dependencies\n- For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid)\n- For Go: generate only go.mod with no \"require\" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run \"go mod tidy\" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build",
 	},
 	"python": {
 		Name:      "Python",

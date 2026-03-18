@@ -1,0 +1,54 @@
+id: no-wraparound
+description: Navigation does not wrap past first or last slide
+type: functional
+tier: 1
+satisfaction_criteria: Pressing left on first slide stays on slide 1, pressing right on last slide stays on last slide
+
+setup:
+  - description: Write a two-slide file
+    exec:
+      command: sh -c 'printf "First\n---\nLast" > /tmp/slides.txt'
+
+  - description: Launch slide viewer
+    tui:
+      command: "myapp /tmp/slides.txt"
+      wait_for: "Slide 1 of 2"
+
+steps:
+  - description: Press left on first slide, still on slide 1
+    tui:
+      send_key: "Left"
+      assert_screen: "Slide 1 of 2"
+    expect: "Still on Slide 1 of 2 after pressing left on first slide"
+
+  - description: First slide content still visible
+    tui:
+      assert_screen: "First"
+      assert_absent: "Last"
+    expect: "Screen still shows First and not Last"
+
+  - description: Navigate to last slide
+    tui:
+      send_key: "Right"
+      wait_for: "Slide 2 of 2"
+    expect: "Now on Slide 2 of 2"
+
+  - description: Press right on last slide, still on slide 2
+    tui:
+      send_key: "Right"
+      assert_screen: "Slide 2 of 2"
+    expect: "Still on Slide 2 of 2 after pressing right on last slide"
+
+  - description: Last slide content still visible
+    tui:
+      assert_screen: "Last"
+      assert_absent: "First"
+    expect: "Screen still shows Last and not First"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

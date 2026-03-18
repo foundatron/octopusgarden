@@ -1,0 +1,14 @@
+id: invalid-file
+description: Missing or nonexistent file argument produces error exit
+type: functional
+tier: 1
+satisfaction_criteria: Running with a nonexistent file exits with code 1
+
+steps:
+  - description: Run with nonexistent file
+    exec:
+      command: myapp /tmp/nonexistent-file.txt
+    expect: "Exit code 1. Stderr contains an error message."
+    capture:
+      - name: exit_code
+        source: exitcode

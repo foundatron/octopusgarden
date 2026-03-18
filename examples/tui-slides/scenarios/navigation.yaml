@@ -1,0 +1,65 @@
+id: navigation
+description: Arrow keys navigate between slides, status bar updates
+type: functional
+tier: 1
+satisfaction_criteria: Forward and backward navigation works, status bar reflects current position
+
+setup:
+  - description: Write a three-slide file
+    exec:
+      command: sh -c 'printf "Alpha\n---\nBeta\n---\nGamma" > /tmp/slides.txt'
+
+  - description: Launch slide viewer
+    tui:
+      command: "myapp /tmp/slides.txt"
+      wait_for: "Slide 1 of 3"
+
+steps:
+  - description: First slide shows Alpha
+    tui:
+      assert_screen: "Alpha"
+    expect: "Screen shows Alpha on first slide"
+
+  - description: Navigate forward to slide 2
+    tui:
+      send_key: "Right"
+      wait_for: "Slide 2 of 3"
+    expect: "Status bar shows Slide 2 of 3 after pressing right arrow"
+
+  - description: Second slide shows Beta
+    tui:
+      assert_screen: "Beta"
+      assert_absent: "Alpha"
+    expect: "Screen shows Beta and not Alpha"
+
+  - description: Navigate forward to slide 3
+    tui:
+      send_key: "Right"
+      wait_for: "Slide 3 of 3"
+    expect: "Status bar shows Slide 3 of 3"
+
+  - description: Third slide shows Gamma
+    tui:
+      assert_screen: "Gamma"
+      assert_absent: "Beta"
+    expect: "Screen shows Gamma and not Beta"
+
+  - description: Navigate backward to slide 2
+    tui:
+      send_key: "Left"
+      wait_for: "Slide 2 of 3"
+    expect: "Status bar shows Slide 2 of 3 after pressing left arrow"
+
+  - description: Back on slide 2 shows Beta
+    tui:
+      assert_screen: "Beta"
+      assert_absent: "Gamma"
+    expect: "Screen shows Beta and not Gamma"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

@@ -625,7 +625,7 @@ func (a *Attractor) validateComposed(ctx context.Context, composedFiles map[stri
 
 	caps := s.opts.Capabilities
 
-	if caps.NeedsExec {
+	if caps.NeedsExec || caps.NeedsTUI {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {
 			return nil, errComponentFallback
@@ -828,7 +828,7 @@ func (a *Attractor) buildAndValidateComponent(ctx context.Context, iterDir, comp
 		return 0, nil, fmt.Errorf("%w: %w", errComponentBuildFail, err)
 	}
 
-	if s.opts.Capabilities.NeedsExec {
+	if s.opts.Capabilities.NeedsExec || s.opts.Capabilities.NeedsTUI {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: %w", errComponentSessionFail, err)
@@ -1212,10 +1212,11 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	var url string
 	var containerID string
 
-	// When both HTTP and exec capabilities are needed, two containers run from the same image:
-	// - Session container: runs "sleep infinity" for docker exec commands
-	// - HTTP container: runs the image's CMD to serve HTTP on port 8080
-	if caps.NeedsExec {
+	// When exec or TUI capabilities are needed, a session container runs from the same image:
+	// - Session container: runs "sleep infinity" for docker exec commands (exec) and
+	//   docker exec -it commands via PTY (TUI)
+	// - HTTP container (if needed): runs the image's CMD to serve HTTP on port 8080
+	if caps.NeedsExec || caps.NeedsTUI {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {
 			a.logger.Warn("session start failed", "iteration", iter, "error", err)

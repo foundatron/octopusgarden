@@ -1,0 +1,74 @@
+id: delete-confirm
+description: Delete overlay confirms before removing a task
+type: functional
+tier: 1
+satisfaction_criteria: Pressing d shows delete overlay, y deletes the task, n cancels without deleting
+
+setup:
+  - description: Create todo file with two tasks
+    exec:
+      command: sh -c 'printf "[{\"text\":\"Keep me\",\"done\":false},{\"text\":\"Remove me\",\"done\":false}]" > /tmp/todos.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/todos.json"
+      wait_for: "Keep me"
+
+steps:
+  - description: Navigate to second task
+    tui:
+      send_key: "j"
+      wait_for: "Remove me"
+    expect: "Selection moved to Remove me"
+
+  - description: Press d to show delete overlay
+    tui:
+      send_key: "d"
+      wait_for: "Delete"
+    expect: "Delete confirmation overlay appears"
+
+  - description: Press n to cancel deletion
+    tui:
+      send_key: "n"
+      wait_for: "Remove me"
+    expect: "Overlay dismissed, Remove me still in list"
+
+  - description: Both tasks still present after cancel
+    tui:
+      assert_screen: "2 tasks"
+    expect: "Status bar still shows 2 tasks"
+
+  - description: Press d again to show delete overlay
+    tui:
+      send_key: "d"
+      wait_for: "Delete"
+    expect: "Delete confirmation overlay appears again"
+
+  - description: Press y to confirm deletion
+    tui:
+      send_key: "y"
+      wait_for: "1 task"
+    expect: "Status bar shows 1 task after deletion"
+
+  - description: Removed task is gone
+    tui:
+      assert_absent: "Remove me"
+    expect: "Remove me no longer visible in task list"
+
+  - description: Kept task still visible
+    tui:
+      assert_screen: "Keep me"
+    expect: "Keep me still in the list"
+
+  - description: Quit and verify persistence
+    tui:
+      send_key: "q"
+    expect: "Application exits"
+
+  - description: List confirms deletion persisted
+    exec:
+      command: myapp list --file /tmp/todos.json
+    expect: "Only Keep me appears, Remove me is gone"
+    capture:
+      - name: list_output
+        source: stdout

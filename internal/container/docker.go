@@ -470,6 +470,11 @@ type Session struct {
 	logger      *slog.Logger
 }
 
+// ContainerID returns the Docker container ID for this session.
+func (s *Session) ContainerID() string {
+	return s.containerID
+}
+
 // defaultMaxOutputBytes is the fallback for ExecOptions.MaxOutputBytes when not set.
 const defaultMaxOutputBytes = limits.MaxResponseBytes
 
