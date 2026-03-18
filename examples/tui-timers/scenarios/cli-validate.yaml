@@ -1,0 +1,39 @@
+id: cli-validate
+description: Validate subcommand checks file format
+type: functional
+tier: 1
+satisfaction_criteria: Valid file prints ok with count, malformed file exits 1
+
+setup:
+  - description: Create valid timer file
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180},{\"name\":\"Tea\",\"seconds\":120}]" > /tmp/timers.json'
+
+steps:
+  - description: Validate valid file
+    exec:
+      command: myapp validate --file /tmp/timers.json
+    expect: "Exit code 0. Stdout contains ok and 2 timers."
+    capture:
+      - name: valid_exit
+        source: exitcode
+      - name: valid_output
+        source: stdout
+
+  - description: Validate malformed JSON exits 1
+    exec:
+      command: sh -c 'printf "not json" > /tmp/bad.json && myapp validate --file /tmp/bad.json'
+    expect: "Exit code 1. Stderr contains an error message about invalid JSON."
+    capture:
+      - name: bad_exit
+        source: exitcode
+
+  - description: Validate empty array is valid
+    exec:
+      command: sh -c 'printf "[]" > /tmp/empty.json && myapp validate --file /tmp/empty.json'
+    expect: "Exit code 0. Stdout contains ok and 0 timers."
+    capture:
+      - name: empty_exit
+        source: exitcode
+      - name: empty_output
+        source: stdout

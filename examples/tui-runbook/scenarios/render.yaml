@@ -1,0 +1,66 @@
+id: render
+description: TUI displays first step content and correct status bar
+type: functional
+tier: 1
+satisfaction_criteria: TUI shows step content, step count, and default theme in status bar
+
+setup:
+  - description: Create a three-step runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Prerequisites
+
+        Make sure you have the following ready.
+
+        ---
+
+        ## Installation
+
+        Run the installer.
+
+        ---
+
+        ## Verification
+
+        Confirm it works.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Prerequisites"
+
+steps:
+  - description: First step content visible
+    tui:
+      assert_screen: "Prerequisites"
+    expect: "Screen shows Prerequisites heading"
+
+  - description: Step description visible
+    tui:
+      assert_screen: "ready"
+    expect: "Screen shows the step content text"
+
+  - description: Status bar shows step position
+    tui:
+      assert_screen: "Step 1 of 3"
+    expect: "Status bar shows Step 1 of 3"
+
+  - description: Status bar shows default theme
+    tui:
+      assert_screen: "Theme: dark"
+    expect: "Status bar shows Theme: dark"
+
+  - description: Later steps not visible
+    tui:
+      assert_absent: "Installation"
+    expect: "Step 2 content not visible on first step"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

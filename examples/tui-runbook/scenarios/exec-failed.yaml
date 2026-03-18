@@ -1,0 +1,31 @@
+id: exec-failed
+description: Failed command shows error output in the output panel
+type: functional
+tier: 1
+satisfaction_criteria: A command that writes to stderr and exits 1 shows its error output
+
+setup:
+  - description: Create runbook with a failing command
+    exec:
+      command: sh -c 'printf "## Deploy\n\nRun deployment:\n\n\`\`\`sh\necho DEPLOY_FAILED_ERR >&2 && exit 1\n\`\`\`\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Deploy"
+
+steps:
+  - description: Execute the failing command
+    tui:
+      send_key: "x"
+      wait_for: "DEPLOY_FAILED_ERR"
+      timeout: 5s
+    expect: "Output panel shows DEPLOY_FAILED_ERR from stderr"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

@@ -1,0 +1,51 @@
+id: multiple-timers
+description: Multiple timers can run simultaneously
+type: functional
+tier: 1
+satisfaction_criteria: Two timers can be started independently and both show RUNNING
+
+setup:
+  - description: Create timer file with two timers
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Alpha\",\"seconds\":30},{\"name\":\"Bravo\",\"seconds\":30}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Alpha"
+
+steps:
+  - description: Start first timer
+    tui:
+      send_key: "space"
+      wait_for: "RUNNING"
+    expect: "First timer Alpha is now RUNNING"
+
+  - description: Navigate to second timer
+    tui:
+      send_key: "j"
+      wait_for: "Bravo"
+    expect: "Selection moved to Bravo"
+
+  - description: Start second timer
+    tui:
+      send_key: "space"
+    expect: "Second timer Bravo started"
+
+  - description: Log shows both started events
+    tui:
+      assert_screen: "Started: Alpha"
+    expect: "Log shows Alpha was started"
+
+  - description: Log shows Bravo started
+    tui:
+      assert_screen: "Started: Bravo"
+    expect: "Log shows Bravo was started"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

@@ -1,0 +1,48 @@
+id: markdown-list
+description: List items are rendered with their content visible
+type: functional
+tier: 1
+satisfaction_criteria: All list item text is displayed on screen
+
+setup:
+  - description: Create runbook with a list
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Requirements
+
+        You will need:
+
+        - Docker installed
+        - kubectl configured
+        - Helm v3 ready
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Requirements"
+
+steps:
+  - description: First list item visible
+    tui:
+      assert_screen: "Docker installed"
+    expect: "Screen shows Docker installed"
+
+  - description: Second list item visible
+    tui:
+      assert_screen: "kubectl configured"
+    expect: "Screen shows kubectl configured"
+
+  - description: Third list item visible
+    tui:
+      assert_screen: "Helm v3 ready"
+    expect: "Screen shows Helm v3 ready"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

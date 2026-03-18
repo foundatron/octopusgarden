@@ -1,0 +1,67 @@
+id: full-workflow
+description: Navigate, execute commands, switch themes, and use index in one session
+type: functional
+tier: 1
+satisfaction_criteria: Multiple features work together in a single session without interference
+
+setup:
+  - description: Create a multi-step runbook with executable blocks
+    exec:
+      command: sh -c 'printf "## Setup\n\nPrepare the environment:\n\n\`\`\`sh\necho SETUP_COMPLETE_321\n\`\`\`\n---\n## Deploy\n\nRun deployment:\n\n\`\`\`sh\necho DEPLOY_DONE_654\n\`\`\`\n---\n## Verify\n\nCheck results.\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Setup"
+
+steps:
+  - description: Execute on first step
+    tui:
+      send_key: "x"
+      wait_for: "SETUP_COMPLETE_321"
+      timeout: 5s
+    expect: "Output shows command result from step 1"
+
+  - description: Navigate to step 2
+    tui:
+      send_key: "Right"
+      wait_for: "Deploy"
+    expect: "Navigated to Deploy step"
+
+  - description: Execute on second step
+    tui:
+      send_key: "x"
+      wait_for: "DEPLOY_DONE_654"
+      timeout: 5s
+    expect: "Output shows command result from step 2"
+
+  - description: Switch theme
+    tui:
+      send_key: "t"
+      wait_for: "Theme: light"
+    expect: "Theme changed to light"
+
+  - description: Open index overlay
+    tui:
+      send_key: "g"
+      wait_for: "Index"
+    expect: "Index overlay appears showing all steps"
+
+  - description: Index shows all step titles
+    tui:
+      assert_screen: "Setup"
+    expect: "Index lists Setup step"
+
+  - description: Dismiss index
+    tui:
+      send_key: "escape"
+      wait_for: "Step 2 of 3"
+    expect: "Back to normal view on step 2"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

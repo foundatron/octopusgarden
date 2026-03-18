@@ -1,0 +1,56 @@
+id: help-overlay
+description: Help overlay shows keybindings and can be dismissed
+type: functional
+tier: 1
+satisfaction_criteria: Pressing ? shows help overlay with Help text, pressing escape dismisses it
+
+setup:
+  - description: Create timer file
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Eggs"
+
+steps:
+  - description: Help overlay not visible initially
+    tui:
+      assert_absent: "Help"
+    expect: "No Help overlay visible on startup"
+
+  - description: Open help overlay
+    tui:
+      send_text: "?"
+      wait_for: "Help"
+    expect: "Help overlay appears with Help title"
+
+  - description: Help mentions quit keybinding
+    tui:
+      assert_screen: "q"
+    expect: "Help overlay mentions the q key"
+
+  - description: Help mentions tab keybinding
+    tui:
+      assert_screen: "Tab"
+    expect: "Help overlay mentions Tab for focus switching"
+
+  - description: Dismiss help with escape
+    tui:
+      send_key: "escape"
+      wait_for: "Eggs"
+    expect: "Help overlay dismissed, timer list visible again"
+
+  - description: Help text gone after dismiss
+    tui:
+      assert_absent: "Help"
+    expect: "Help overlay is no longer visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

@@ -1,0 +1,44 @@
+id: markdown-code
+description: Code blocks display their content visually distinct from text
+type: functional
+tier: 1
+satisfaction_criteria: Code block content is visible on screen alongside regular text
+
+setup:
+  - description: Create runbook with a display-only code block
+    exec:
+      command: sh -c 'printf "## Example Code\n\nHere is a sample:\n\n\`\`\`python\nprint(hello_world)\nx = 42\n\`\`\`\n\nUse this as a reference.\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Example Code"
+
+steps:
+  - description: Heading visible
+    tui:
+      assert_screen: "Example Code"
+    expect: "Heading text is displayed"
+
+  - description: Code block content visible
+    tui:
+      assert_screen: "hello_world"
+    expect: "Code block shows print(hello_world)"
+
+  - description: More code content visible
+    tui:
+      assert_screen: "x = 42"
+    expect: "Code block shows x = 42"
+
+  - description: Surrounding text visible
+    tui:
+      assert_screen: "reference"
+    expect: "Text after the code block is also visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

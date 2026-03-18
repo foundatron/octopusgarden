@@ -1,0 +1,50 @@
+id: cli-list
+description: List subcommand prints numbered step titles
+type: functional
+tier: 1
+satisfaction_criteria: List output shows numbered step titles extracted from headings
+
+setup:
+  - description: Create a three-step runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Check Environment
+
+        Verify tools.
+
+        ---
+
+        ## Deploy Application
+
+        Run deployment.
+
+        ---
+
+        ## Verify Health
+
+        Check status.
+        ENDOFRUNBOOK
+
+steps:
+  - description: List shows numbered titles
+    exec:
+      command: myapp list /tmp/runbook.md
+    expect: "Stdout shows three numbered lines: 1. Check Environment, 2. Deploy Application, 3. Verify Health"
+    capture:
+      - name: list_output
+        source: stdout
+
+  - description: List with single-step file
+    exec:
+      command: |
+        cat > /tmp/single.md << 'ENDOFRUNBOOK'
+        ## Only Step
+
+        Content.
+        ENDOFRUNBOOK
+        myapp list /tmp/single.md
+    expect: "Stdout shows 1. Only Step"
+    capture:
+      - name: single_output
+        source: stdout

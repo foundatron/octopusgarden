@@ -1,0 +1,78 @@
+id: index-overlay
+description: Index overlay shows numbered step list and can be dismissed
+type: functional
+tier: 1
+satisfaction_criteria: Pressing g shows Index overlay with step titles, escape dismisses it
+
+setup:
+  - description: Create a three-step runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Setup Database
+
+        Initialize the database.
+
+        ---
+
+        ## Run Migrations
+
+        Apply schema changes.
+
+        ---
+
+        ## Seed Data
+
+        Load initial data.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Setup Database"
+
+steps:
+  - description: Index not visible initially
+    tui:
+      assert_absent: "Index"
+    expect: "No Index overlay visible on startup"
+
+  - description: Open index overlay
+    tui:
+      send_key: "g"
+      wait_for: "Index"
+    expect: "Index overlay appears with Index title"
+
+  - description: Index shows first step title
+    tui:
+      assert_screen: "Setup Database"
+    expect: "Index lists Setup Database"
+
+  - description: Index shows second step title
+    tui:
+      assert_screen: "Run Migrations"
+    expect: "Index lists Run Migrations"
+
+  - description: Index shows third step title
+    tui:
+      assert_screen: "Seed Data"
+    expect: "Index lists Seed Data"
+
+  - description: Dismiss index with escape
+    tui:
+      send_key: "escape"
+      wait_for: "Step 1 of 3"
+    expect: "Index overlay dismissed, normal view restored"
+
+  - description: Index text gone after dismiss
+    tui:
+      assert_absent: "Index"
+    expect: "Index overlay no longer visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

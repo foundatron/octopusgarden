@@ -1,0 +1,48 @@
+id: focus-isolation
+description: Timer panel keys only work when Timer panel is focused
+type: functional
+tier: 1
+satisfaction_criteria: Space does not start timer when Log panel is focused, but works when Timer panel is focused
+
+setup:
+  - description: Create timer file
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":60}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "READY"
+
+steps:
+  - description: Switch to Log panel
+    tui:
+      send_key: "tab"
+      wait_for: "Focus: Log"
+    expect: "Focus is now on Log panel"
+
+  - description: Press space while Log focused
+    tui:
+      send_key: "space"
+      assert_screen: "READY"
+    expect: "Timer remains READY because space has no timer effect in Log panel"
+
+  - description: Switch back to Timer panel
+    tui:
+      send_key: "tab"
+      wait_for: "Focus: Timers"
+    expect: "Focus is back on Timer panel"
+
+  - description: Press space while Timer focused
+    tui:
+      send_key: "space"
+      wait_for: "RUNNING"
+    expect: "Timer starts running because space works in Timer panel"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

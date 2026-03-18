@@ -1,0 +1,47 @@
+id: exec-output-toggle
+description: Pressing o toggles the output panel visibility
+type: functional
+tier: 1
+satisfaction_criteria: Output panel can be hidden with o and shown again with o
+
+setup:
+  - description: Create runbook with an executable block
+    exec:
+      command: sh -c 'printf "## Toggle Test\n\nRun this:\n\n\`\`\`sh\necho TOGGLE_OUTPUT_555\n\`\`\`\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Toggle Test"
+
+steps:
+  - description: Execute to make output panel appear
+    tui:
+      send_key: "x"
+      wait_for: "TOGGLE_OUTPUT_555"
+      timeout: 5s
+    expect: "Output panel visible with command output"
+
+  - description: Hide output panel with o
+    tui:
+      send_key: "o"
+    expect: "Output panel hidden"
+
+  - description: Output text no longer visible
+    tui:
+      assert_absent: "TOGGLE_OUTPUT_555"
+    expect: "TOGGLE_OUTPUT_555 not visible after hiding output panel"
+
+  - description: Show output panel again with o
+    tui:
+      send_key: "o"
+      wait_for: "TOGGLE_OUTPUT_555"
+    expect: "Output panel visible again showing previous output"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

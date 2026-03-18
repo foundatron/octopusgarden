@@ -1,0 +1,46 @@
+id: reset-timer
+description: Pressing r resets a timer to its original duration
+type: functional
+tier: 1
+satisfaction_criteria: Reset restores original time and sets state to READY
+
+setup:
+  - description: Create timer file with a short timer
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Quick\",\"seconds\":10}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "READY"
+
+steps:
+  - description: Timer shows original time
+    tui:
+      assert_screen: "00:10"
+    expect: "Timer displays 00:10"
+
+  - description: Start the timer
+    tui:
+      send_key: "space"
+      wait_for: "RUNNING"
+    expect: "Timer is now RUNNING"
+
+  - description: Reset the timer
+    tui:
+      send_key: "r"
+      wait_for: "READY"
+    expect: "Timer state returns to READY after reset"
+
+  - description: Time restored to original
+    tui:
+      assert_screen: "00:10"
+    expect: "Timer shows 00:10 again after reset"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

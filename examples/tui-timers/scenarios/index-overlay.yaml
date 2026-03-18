@@ -1,0 +1,56 @@
+id: index-overlay
+description: Index overlay shows all timers with their state
+type: functional
+tier: 1
+satisfaction_criteria: Pressing i shows Index overlay with timer names and states, escape dismisses it
+
+setup:
+  - description: Create timer file with two presets
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180},{\"name\":\"Tea\",\"seconds\":120}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Eggs"
+
+steps:
+  - description: Index not visible initially
+    tui:
+      assert_absent: "Index"
+    expect: "No Index overlay visible on startup"
+
+  - description: Open index overlay
+    tui:
+      send_key: "i"
+      wait_for: "Index"
+    expect: "Index overlay appears with Index title"
+
+  - description: Index shows Eggs timer
+    tui:
+      assert_screen: "Eggs"
+    expect: "Index overlay lists Eggs timer"
+
+  - description: Index shows Tea timer
+    tui:
+      assert_screen: "Tea"
+    expect: "Index overlay lists Tea timer"
+
+  - description: Dismiss index with escape
+    tui:
+      send_key: "escape"
+      wait_for: "Focus:"
+    expect: "Index overlay dismissed, normal view restored"
+
+  - description: Index text gone after dismiss
+    tui:
+      assert_absent: "Index"
+    expect: "Index overlay is no longer visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

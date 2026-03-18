@@ -1,0 +1,40 @@
+id: theme-flag
+description: The --theme CLI flag sets the initial theme
+type: functional
+tier: 1
+satisfaction_criteria: Launching with --theme ocean shows ocean in status bar
+
+setup:
+  - description: Create runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Flag Test
+
+        Testing theme flag.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI with ocean theme
+    tui:
+      command: "myapp view /tmp/runbook.md --theme ocean"
+      wait_for: "Theme: ocean"
+
+steps:
+  - description: Theme is ocean from CLI flag
+    tui:
+      assert_screen: "Theme: ocean"
+    expect: "Status bar shows Theme: ocean set by --theme flag"
+
+  - description: Cycle forward goes to dark
+    tui:
+      send_key: "t"
+      wait_for: "Theme: dark"
+    expect: "Cycling from ocean goes to dark"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

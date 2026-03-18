@@ -1,0 +1,60 @@
+id: navigation
+description: Arrow keys and j/k move selection through timer list
+type: functional
+tier: 1
+satisfaction_criteria: Selection moves down and up without wrapping
+
+setup:
+  - description: Create timer file with three presets
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Alpha\",\"seconds\":60},{\"name\":\"Bravo\",\"seconds\":120},{\"name\":\"Charlie\",\"seconds\":180}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Alpha"
+
+steps:
+  - description: Move down to Bravo
+    tui:
+      send_key: "j"
+      wait_for: "Bravo"
+    expect: "Selection moved to Bravo"
+
+  - description: Move down to Charlie
+    tui:
+      send_key: "Down"
+      wait_for: "Charlie"
+    expect: "Selection moved to Charlie"
+
+  - description: Move down past end stays on Charlie
+    tui:
+      send_key: "j"
+      assert_screen: "Charlie"
+    expect: "Selection stays on Charlie (no wrap)"
+
+  - description: Move up to Bravo
+    tui:
+      send_key: "k"
+      wait_for: "Bravo"
+    expect: "Selection moved back to Bravo"
+
+  - description: Move up to Alpha
+    tui:
+      send_key: "Up"
+      wait_for: "Alpha"
+    expect: "Selection moved to Alpha"
+
+  - description: Move up past start stays on Alpha
+    tui:
+      send_key: "k"
+      assert_screen: "Alpha"
+    expect: "Selection stays on Alpha (no wrap)"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

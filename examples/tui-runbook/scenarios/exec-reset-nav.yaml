@@ -1,0 +1,62 @@
+id: exec-reset-nav
+description: Navigating away and back resets the execution position
+type: functional
+tier: 1
+satisfaction_criteria: After navigating away and returning, x runs the first block again
+
+setup:
+  - description: Create runbook with two steps each having executable blocks
+    exec:
+      command: sh -c 'printf "## Step One\n\nFirst:\n\n\`\`\`sh\necho FIRST_BLOCK_111\n\`\`\`\n\nSecond:\n\n\`\`\`sh\necho SECOND_BLOCK_222\n\`\`\`\n---\n## Step Two\n\nAnother step.\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Step One"
+
+steps:
+  - description: Execute first block
+    tui:
+      send_key: "x"
+      wait_for: "FIRST_BLOCK_111"
+      timeout: 5s
+    expect: "First block executed, showing FIRST_BLOCK_111"
+
+  - description: Execute second block to advance position
+    tui:
+      send_key: "x"
+      wait_for: "SECOND_BLOCK_222"
+      timeout: 5s
+    expect: "Second block executed, showing SECOND_BLOCK_222"
+
+  - description: Navigate to step 2
+    tui:
+      send_key: "Right"
+      wait_for: "Step Two"
+    expect: "Navigated to Step Two"
+
+  - description: Navigate back to step 1
+    tui:
+      send_key: "Left"
+      wait_for: "Step One"
+    expect: "Navigated back to Step One"
+
+  - description: Execute again runs first block (position was reset)
+    tui:
+      send_key: "x"
+      wait_for: "FIRST_BLOCK_111"
+      timeout: 5s
+    expect: "Output shows FIRST_BLOCK_111 again, confirming execution position was reset"
+
+  - description: Second block output no longer showing
+    tui:
+      assert_absent: "SECOND_BLOCK_222"
+    expect: "SECOND_BLOCK_222 is not visible because first block was re-run"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"
