@@ -1,0 +1,52 @@
+id: log-events
+description: Timer actions produce log entries and log can be cleared
+type: functional
+tier: 1
+satisfaction_criteria: Starting and completing timers add log entries, clearing the log removes them
+
+setup:
+  - description: Create timer file with a 3-second timer
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Quick\",\"seconds\":3}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "READY"
+
+steps:
+  - description: Start timer to generate log entry
+    tui:
+      send_key: "space"
+      wait_for: "Started: Quick"
+    expect: "Log shows Started event"
+
+  - description: Wait for timer to complete
+    tui:
+      wait_for: "Done: Quick"
+      timeout: 8s
+    expect: "Log shows Done event after timer completes"
+
+  - description: Switch focus to Log panel
+    tui:
+      send_key: "tab"
+      wait_for: "Focus: Log"
+    expect: "Focus switches to Log panel"
+
+  - description: Clear log entries
+    tui:
+      send_key: "c"
+    expect: "Log entries are cleared"
+
+  - description: Log entries are gone
+    tui:
+      assert_absent: "Started: Quick"
+    expect: "Started event no longer visible after clearing log"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

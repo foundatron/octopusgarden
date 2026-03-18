@@ -107,6 +107,16 @@ octog run \
   --spec examples/todo-app/spec.md \
   --scenarios examples/todo-app/scenarios/
 
+# TUI timer board (terminal UI with PTY interaction)
+octog run \
+  --spec examples/tui-timers/spec.md \
+  --scenarios examples/tui-timers/scenarios/
+
+# TUI runbook runner (markdown execution, themes, overlays)
+octog run \
+  --spec examples/tui-runbook/spec.md \
+  --scenarios examples/tui-runbook/scenarios/
+
 # Validate a running service independently
 octog validate \
   --scenarios examples/hello-api/scenarios/ \

@@ -63,6 +63,12 @@ var keyMap = map[string][]byte{
 type TUIExecutor struct {
 	Logger *slog.Logger
 
+	// ContainerID, when non-empty, causes commands to be executed inside the
+	// Docker container via "docker exec -it <id> sh -c <command>" instead of
+	// running locally. This allows TUI apps built inside Docker to be exercised
+	// with full PTY support through the host-side terminal emulator.
+	ContainerID string
+
 	cmd     *exec.Cmd
 	ptyFile *os.File
 	state   *vt10x.State
@@ -164,7 +170,15 @@ func (e *TUIExecutor) launchProcess(command string) error {
 
 	// context.Background(): the process persists across multiple Execute calls within a scenario;
 	// cleanup is handled by Close() which sends SIGTERM/SIGKILL.
-	cmd := exec.CommandContext(context.Background(), "sh", "-c", command) //nolint:gosec // command comes from scenario file, not user input
+	var cmd *exec.Cmd
+	if e.ContainerID != "" {
+		// Run inside the Docker container with a TTY. The host-side PTY (from creack/pty)
+		// provides the terminal, and docker exec -it allocates a container-side PTY, creating
+		// a clean PTY relay chain: host PTY ↔ docker exec ↔ container PTY ↔ TUI app.
+		cmd = exec.CommandContext(context.Background(), "docker", "exec", "-it", e.ContainerID, "sh", "-c", command) //nolint:gosec // containerID and command come from internal orchestration
+	} else {
+		cmd = exec.CommandContext(context.Background(), "sh", "-c", command) //nolint:gosec // command comes from scenario file, not user input
+	}
 	// creack/pty.StartWithSize sets Setsid on the child, placing it in a new session and
 	// process group. Close() signals the process group via syscall.Kill(-pid, ...) so the
 	// actual TUI app (not just the shell) receives SIGTERM/SIGKILL.
@@ -274,16 +288,29 @@ func (e *TUIExecutor) readScreen() string {
 	return strings.Join(lines, "\n")
 }
 
-// exitCode returns the process exit code if the process has already exited, or "" if still running.
+// exitCode returns the process exit code, waiting briefly for the process to exit if it
+// appears to be shutting down. Returns "" if the process hasn't been started or is still running.
 func (e *TUIExecutor) exitCode() string {
-	if e.cmd == nil || e.cmd.ProcessState == nil {
+	if e.cmd == nil {
+		return ""
+	}
+	// The process may have just received a quit key but the background goroutine
+	// hasn't called cmd.Wait() yet. Wait briefly for the done channel.
+	if e.cmd.ProcessState == nil && e.done != nil {
+		select {
+		case <-e.done:
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if e.cmd.ProcessState == nil {
 		return ""
 	}
 	return fmt.Sprintf("%d", e.cmd.ProcessState.ExitCode())
 }
 
 // mapKey translates a key name to its ANSI byte sequence.
-// Supports named keys (enter, escape, up, etc.) and ctrl+X patterns.
+// Supports named keys (enter, escape, up, etc.), ctrl+X patterns,
+// and single printable characters (letters, digits, punctuation).
 func mapKey(name string) ([]byte, error) {
 	lower := strings.ToLower(name)
 	if seq, ok := keyMap[lower]; ok {
@@ -295,6 +322,10 @@ func mapKey(name string) ([]byte, error) {
 		if ch >= 'a' && ch <= 'z' {
 			return []byte{ch & 0x1f}, nil
 		}
+	}
+	// Single printable ASCII character: pass through as-is.
+	if len(name) == 1 && name[0] >= 0x20 && name[0] <= 0x7e {
+		return []byte{name[0]}, nil
 	}
 	return nil, fmt.Errorf("%w: %q", errTUIUnknownKey, name)
 }
@@ -317,6 +348,10 @@ func buildTUIOutput(screen string, assertions []string, exitCodeVal string) Step
 	var observed strings.Builder
 	observed.WriteString("TUI screen:\n")
 	observed.WriteString(screen)
+	if exitCodeVal != "" {
+		observed.WriteString("\nExit code: ")
+		observed.WriteString(exitCodeVal)
+	}
 	if len(assertions) > 0 {
 		observed.WriteString("\nAssertions:\n")
 		observed.WriteString(strings.Join(assertions, "\n"))

@@ -1,0 +1,54 @@
+id: cli-validate
+description: Validate subcommand checks file existence and reports step count
+type: functional
+tier: 1
+satisfaction_criteria: Valid file prints ok with step count, missing file exits 1
+
+setup:
+  - description: Create a valid runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Step One
+
+        Content.
+
+        ---
+
+        ## Step Two
+
+        More content.
+        ENDOFRUNBOOK
+
+steps:
+  - description: Validate valid file
+    exec:
+      command: myapp validate /tmp/runbook.md
+    expect: "Exit code 0. Stdout contains ok and 2 steps."
+    capture:
+      - name: valid_exit
+        source: exitcode
+      - name: valid_output
+        source: stdout
+
+  - description: Validate nonexistent file exits 1
+    exec:
+      command: myapp validate /tmp/nonexistent_file_xyz.md
+    expect: "Exit code 1. Stderr contains an error message."
+    capture:
+      - name: missing_exit
+        source: exitcode
+
+  - description: Validate single-step file
+    exec:
+      command: |
+        cat > /tmp/single.md << 'ENDOFRUNBOOK'
+        ## Just One
+
+        Hello.
+        ENDOFRUNBOOK
+        myapp validate /tmp/single.md
+    expect: "Exit code 0. Stdout contains ok and 1 steps."
+    capture:
+      - name: single_output
+        source: stdout

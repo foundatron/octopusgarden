@@ -1,0 +1,30 @@
+id: cli-errors
+description: CLI rejects invalid input with non-zero exit
+type: functional
+tier: 1
+satisfaction_criteria: Missing name, bad seconds, and duplicate name all exit 1
+
+steps:
+  - description: Add with missing name exits 1
+    exec:
+      command: myapp add --file /tmp/timers.json
+    expect: "Exit code 1. Stderr contains an error message."
+    capture:
+      - name: no_name_exit
+        source: exitcode
+
+  - description: Add with zero seconds exits 1
+    exec:
+      command: myapp add --file /tmp/timers.json Eggs 0
+    expect: "Exit code 1. Stderr contains an error message about invalid seconds."
+    capture:
+      - name: zero_exit
+        source: exitcode
+
+  - description: Add duplicate name exits 1
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180}]" > /tmp/timers.json && myapp add --file /tmp/timers.json Eggs 120'
+    expect: "Exit code 1. Stderr contains an error about duplicate name."
+    capture:
+      - name: dup_exit
+        source: exitcode

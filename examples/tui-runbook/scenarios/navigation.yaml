@@ -1,0 +1,80 @@
+id: navigation
+description: Arrow keys and h/l navigate between steps
+type: functional
+tier: 1
+satisfaction_criteria: Navigation moves between steps and updates status bar
+
+setup:
+  - description: Create a three-step runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Alpha Step
+
+        Alpha content here.
+
+        ---
+
+        ## Bravo Step
+
+        Bravo content here.
+
+        ---
+
+        ## Charlie Step
+
+        Charlie content here.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Alpha"
+
+steps:
+  - description: First step shows Alpha
+    tui:
+      assert_screen: "Alpha"
+    expect: "Screen shows Alpha step content"
+
+  - description: Navigate forward to step 2
+    tui:
+      send_key: "Right"
+      wait_for: "Bravo"
+    expect: "Screen shows Bravo after pressing right arrow"
+
+  - description: Status bar updated
+    tui:
+      assert_screen: "Step 2 of 3"
+    expect: "Status bar shows Step 2 of 3"
+
+  - description: Alpha no longer visible
+    tui:
+      assert_absent: "Alpha"
+    expect: "Previous step content not visible"
+
+  - description: Navigate forward with l key
+    tui:
+      send_key: "l"
+      wait_for: "Charlie"
+    expect: "Screen shows Charlie after pressing l"
+
+  - description: Navigate backward with left arrow
+    tui:
+      send_key: "Left"
+      wait_for: "Bravo"
+    expect: "Screen shows Bravo after pressing left arrow"
+
+  - description: Navigate backward with h key
+    tui:
+      send_key: "h"
+      wait_for: "Alpha"
+    expect: "Screen shows Alpha after pressing h"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

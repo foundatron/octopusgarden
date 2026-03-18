@@ -273,6 +273,30 @@ func (s *runState) budgetExceeded() bool {
 	return s.opts.BudgetUSD > 0 && s.totalCost >= s.opts.BudgetUSD
 }
 
+// newRunState creates a runState for the monolithic loop, optionally seeding
+// history with composed failure context so the first iteration sees it.
+func newRunState(opts RunOptions, composedCost float64, composedContext string, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn, logger *slog.Logger) *runState {
+	s := &runState{
+		runID:              generateRunID(),
+		opts:               opts,
+		startTime:          time.Now(),
+		patchActive:        opts.PatchMode,
+		sessionProvider:    sessionProvider,
+		grpcTargetProvider: grpcTargetProvider,
+		escalation:         newEscalationState(opts.FrugalModel, opts.Model, logger),
+		totalCost:          composedCost,
+		activeTier:         initialActiveTier(opts.Stratified),
+	}
+	if composedContext != "" {
+		s.history = append(s.history, iterationFeedback{
+			iteration: 0,
+			kind:      feedbackBuildError,
+			message:   composedContext,
+		})
+	}
+	return s
+}
+
 func (s *runState) recordStall(iter int, kind, message string) {
 	s.stallCount++
 	s.history = append(s.history, iterationFeedback{
@@ -319,7 +343,8 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 	// Try composed convergence when gene components and component validators are available.
 	// composedCost carries costs from the composed attempt even on fallback, so the
 	// monolithic loop starts with an accurate budget accounting.
-	composedResult, composedCost, err := a.tryComposed(ctx, rawSpec, opts, sessionProvider, grpcTargetProvider)
+	// composedContext carries error context from the composed attempt for seeding monolithic history.
+	composedResult, composedCost, composedContext, err := a.tryComposed(ctx, rawSpec, opts, sessionProvider, grpcTargetProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -327,17 +352,7 @@ func (a *Attractor) Run(ctx context.Context, rawSpec string, opts RunOptions, va
 		return composedResult, nil
 	}
 
-	s := &runState{
-		runID:              generateRunID(),
-		opts:               opts,
-		startTime:          time.Now(),
-		patchActive:        opts.PatchMode,
-		sessionProvider:    sessionProvider,
-		grpcTargetProvider: grpcTargetProvider,
-		escalation:         newEscalationState(opts.FrugalModel, opts.Model, a.logger),
-		totalCost:          composedCost,
-		activeTier:         initialActiveTier(opts.Stratified),
-	}
+	s := newRunState(opts, composedCost, composedContext, sessionProvider, grpcTargetProvider, a.logger)
 	s.baseDir = filepath.Join(opts.WorkspaceDir, s.runID)
 	s.bestDir = filepath.Join(s.baseDir, "best")
 
@@ -431,26 +446,31 @@ func validateRunInputs(rawSpec string, opts RunOptions) error {
 }
 
 // tryComposed attempts composed convergence if gene components and validators are available.
-// Returns (nil, 0, nil) to fall through to the monolithic loop.
+// Returns (nil, 0, "", nil) to fall through to the monolithic loop.
 // The returned cost reflects LLM and validation spend during the composed attempt,
 // even when falling back, so callers can seed the monolithic budget correctly.
-func (a *Attractor) tryComposed(ctx context.Context, rawSpec string, opts RunOptions, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn) (*RunResult, float64, error) {
+// composedContext is non-empty when falling back with error context for the monolithic loop.
+func (a *Attractor) tryComposed(ctx context.Context, rawSpec string, opts RunOptions, sessionProvider SessionProviderFn, grpcTargetProvider GRPCTargetProviderFn) (*RunResult, float64, string, error) {
 	if len(opts.GeneComponents) == 0 || len(opts.ComponentValidators) == 0 {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	if opts.Agentic {
 		a.logger.Warn("composed convergence skipped: not supported in agentic mode, falling back to monolithic")
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	result, cost, err := a.runComposed(ctx, rawSpec, opts, sessionProvider, grpcTargetProvider)
 	if err != nil && !errors.Is(err, errComponentFallback) {
-		return nil, cost, err
+		return nil, cost, "", err
 	}
 	if result != nil {
-		return result, cost, nil
+		return result, cost, "", nil
 	}
 	a.logger.Info("composed convergence failed, falling back to monolithic loop")
-	return nil, cost, nil
+	composedContext := ""
+	if err != nil {
+		composedContext = fmt.Sprintf("A prior composed build attempt failed: %s", err)
+	}
+	return nil, cost, composedContext, nil
 }
 
 // Component mini-loop tuning constants.
@@ -512,6 +532,10 @@ func (a *Attractor) runComposed(ctx context.Context, rawSpec string, opts RunOpt
 	// Merge all component files into composed output (later topo order wins on overlap).
 	composedFiles := mergeComponentFiles(sorted, componentFiles, a.logger)
 
+	// Ensure build infrastructure exists — components generate only source code,
+	// so Dockerfile and go.mod may be missing. Synthesize from the language template.
+	ensureBuildInfrastructure(composedFiles, s.opts.Language, s.opts.Capabilities, a.logger)
+
 	result, err := a.validateComposed(ctx, composedFiles, s)
 	if err != nil {
 		composedSpan.RecordError(err)
@@ -538,6 +562,35 @@ func mergeComponentFiles(sorted []gene.Component, componentFiles map[string]map[
 		}
 	}
 	return composed
+}
+
+// ensureBuildInfrastructure adds a synthetic Dockerfile (and go.mod for Go) to composedFiles
+// when components did not generate them. Components generate only source code; build
+// infrastructure is synthesized deterministically from the language template.
+func ensureBuildInfrastructure(composedFiles map[string]string, language string, caps ScenarioCapabilities, logger *slog.Logger) {
+	if _, hasDockerfile := composedFiles["Dockerfile"]; hasDockerfile {
+		return
+	}
+
+	tmpl, ok := LookupLanguage(language)
+	if !ok {
+		logger.Warn("no language template for synthetic Dockerfile", "language", language)
+		return
+	}
+
+	// Select the Dockerfile template matching the app's capability profile.
+	// TUI and CLI apps need the binary installed in PATH for exec steps;
+	// HTTP apps use CMD to start the server.
+	composedFiles["Dockerfile"] = selectExampleBlock(tmpl, caps).Dockerfile
+	logger.Info("synthesized Dockerfile for composed build", "language", language)
+
+	// For Go, ensure go.mod exists so `go mod tidy` can resolve dependencies.
+	if language == "go" {
+		if _, hasGoMod := composedFiles["go.mod"]; !hasGoMod {
+			composedFiles["go.mod"] = "module app\n\ngo 1.25\n"
+			logger.Info("synthesized go.mod for composed build")
+		}
+	}
 }
 
 // validateComposed writes composed files, builds, runs, and validates with integration scenarios.
@@ -572,7 +625,7 @@ func (a *Attractor) validateComposed(ctx context.Context, composedFiles map[stri
 
 	caps := s.opts.Capabilities
 
-	if caps.NeedsExec {
+	if caps.NeedsExec || caps.NeedsTUI {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {
 			return nil, errComponentFallback
@@ -694,7 +747,7 @@ func (a *Attractor) convergeComponent(ctx context.Context, rawSpec string, comp 
 // componentIteration runs one iteration of the component mini-loop.
 // Returns (files, nil) on convergence, (nil, nil) to continue, or (nil, err) on hard error.
 func (a *Attractor) componentIteration(ctx context.Context, rawSpec string, comp gene.Component, depInterfaces map[string]string, baseFiles map[string]string, validate ValidateFn, iter int, cs *componentLoopState, s *runState) (map[string]string, error) {
-	systemPrompt := buildComponentPrompt(rawSpec, comp, depInterfaces, s.opts.Capabilities, s.opts.Language)
+	systemPrompt := buildComponentPrompt(rawSpec, comp, depInterfaces, s.opts.Language)
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: systemPrompt,
 		Messages:     buildMessages(iter, cs.history),
@@ -775,7 +828,7 @@ func (a *Attractor) buildAndValidateComponent(ctx context.Context, iterDir, comp
 		return 0, nil, fmt.Errorf("%w: %w", errComponentBuildFail, err)
 	}
 
-	if s.opts.Capabilities.NeedsExec {
+	if s.opts.Capabilities.NeedsExec || s.opts.Capabilities.NeedsTUI {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: %w", errComponentSessionFail, err)
@@ -1107,7 +1160,7 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 	}
 
 	// Parse files from LLM output.
-	files, parseErr := ParseFiles(genResp.Content)
+	parseResult, parseErr := ParseFilesWithMetadata(genResp.Content)
 	if parseErr != nil {
 		// When the output was truncated, surface truncation as the feedback kind
 		// instead of a generic parse error -- this gives the LLM actionable signal.
@@ -1124,6 +1177,8 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 		s.recordStall(iter, feedbackParseError, fmt.Sprintf("Failed to parse generated files: %s", parseErr))
 		return a.checkStalled(iter, s), nil, nil
 	}
+	files := parseResult.Files
+	a.logFileInventory(iter, parseResult, genResp.FinishReason)
 
 	// In patch mode, merge new output over previous best to carry forward unchanged files.
 	if patching {
@@ -1149,7 +1204,7 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 		a.logger.Warn("build failed", "iteration", iter, "error", err)
 		s.lastOutcome = OutcomeBuildFail
 		s.lastSatisfaction = 0
-		s.recordStall(iter, feedbackBuildError, fmt.Sprintf("Docker build failed: %s", err))
+		s.recordStall(iter, feedbackBuildError, fmt.Sprintf("Docker build failed: %s", stripBuildNoise(err.Error())))
 		return a.checkStalled(iter, s), nil
 	}
 
@@ -1157,10 +1212,11 @@ func (a *Attractor) buildRunValidate(ctx context.Context, iter int, iterDir stri
 	var url string
 	var containerID string
 
-	// When both HTTP and exec capabilities are needed, two containers run from the same image:
-	// - Session container: runs "sleep infinity" for docker exec commands
-	// - HTTP container: runs the image's CMD to serve HTTP on port 8080
-	if caps.NeedsExec {
+	// When exec or TUI capabilities are needed, a session container runs from the same image:
+	// - Session container: runs "sleep infinity" for docker exec commands (exec) and
+	//   docker exec -it commands via PTY (TUI)
+	// - HTTP container (if needed): runs the image's CMD to serve HTTP on port 8080
+	if caps.NeedsExec || caps.NeedsTUI {
 		session, stopSession, err := a.containerMgr.StartSession(ctx, tag)
 		if err != nil {
 			a.logger.Warn("session start failed", "iteration", iter, "error", err)
@@ -1398,6 +1454,26 @@ func (a *Attractor) waitGRPCHealth(ctx context.Context, iter int, caps ScenarioC
 		}
 	}
 	return nil
+}
+
+// logFileInventory logs file counts, sizes, and any truncation/drop warnings after parsing.
+func (a *Attractor) logFileInventory(iter int, result ParseResult, finishReason string) {
+	totalBytes := 0
+	for _, content := range result.Files {
+		totalBytes += len(content)
+	}
+	a.logger.Info("files parsed", "iteration", iter, "count", len(result.Files), "total_bytes", totalBytes)
+
+	for path, content := range result.Files {
+		a.logger.Debug("parsed file", "iteration", iter, "path", path, "bytes", len(content))
+	}
+
+	if len(result.DroppedFiles) > 0 {
+		a.logger.Warn("incomplete files dropped", "iteration", iter, "dropped", result.DroppedFiles, "finish_reason", finishReason)
+	}
+	if result.Truncated && finishReason == "max_tokens" {
+		a.logger.Warn("output truncated, files lost", "iteration", iter, "dropped", result.DroppedFiles)
+	}
 }
 
 func (a *Attractor) logIterationResult(iter int, satisfaction float64, failures []string, threshold float64) {

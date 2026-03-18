@@ -1,0 +1,32 @@
+id: cli-validation
+description: CLI validation rejects bad input with non-zero exit
+type: functional
+tier: 1
+satisfaction_criteria: Empty add text and malformed validate file both exit 1
+
+steps:
+  - description: Add with no text exits 1
+    exec:
+      command: myapp add --file /tmp/todos.json
+    expect: "Exit code 1. Stderr contains an error message."
+    capture:
+      - name: no_text_exit
+        source: exitcode
+
+  - description: Validate with malformed JSON exits 1
+    exec:
+      command: sh -c 'printf "not json" > /tmp/bad.json && myapp validate --file /tmp/bad.json'
+    expect: "Exit code 1. Stderr contains an error message about invalid JSON."
+    capture:
+      - name: bad_json_exit
+        source: exitcode
+
+  - description: Validate with valid file exits 0
+    exec:
+      command: sh -c 'printf "[{\"text\":\"A\",\"done\":false}]" > /tmp/good.json && myapp validate --file /tmp/good.json'
+    expect: "Exit code 0. Stdout contains ok and 1 task."
+    capture:
+      - name: valid_exit
+        source: exitcode
+      - name: valid_output
+        source: stdout

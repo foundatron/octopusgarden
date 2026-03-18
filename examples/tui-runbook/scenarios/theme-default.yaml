@@ -1,0 +1,34 @@
+id: theme-default
+description: Default theme is dark and shown in status bar
+type: functional
+tier: 1
+satisfaction_criteria: "Status bar shows Theme: dark on startup without --theme flag"
+
+setup:
+  - description: Create runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Getting Started
+
+        Welcome to the runbook.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI with default theme
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Getting Started"
+
+steps:
+  - description: Default theme is dark
+    tui:
+      assert_screen: "Theme: dark"
+    expect: "Status bar shows Theme: dark"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

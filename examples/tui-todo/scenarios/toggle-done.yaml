@@ -1,0 +1,51 @@
+id: toggle-done
+description: Space toggles task done status and persists to file
+type: functional
+tier: 1
+satisfaction_criteria: Toggling a task updates the display and persists the change to the JSON file
+
+setup:
+  - description: Create todo file with two undone tasks
+    exec:
+      command: sh -c 'printf "[{\"text\":\"Task A\",\"done\":false},{\"text\":\"Task B\",\"done\":false}]" > /tmp/todos.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/todos.json"
+      wait_for: "Task A"
+
+steps:
+  - description: Status bar shows 0 done initially
+    tui:
+      assert_screen: "0 done"
+    expect: "Status bar shows 0 done"
+
+  - description: Toggle first task done
+    tui:
+      send_key: "space"
+      wait_for: "1 done"
+    expect: "Status bar updates to 1 done after toggling"
+
+  - description: Done marker visible
+    tui:
+      assert_screen: "[x]"
+    expect: "Screen shows [x] marker for the toggled task"
+
+  - description: Toggle it back to undone
+    tui:
+      send_key: "space"
+      wait_for: "0 done"
+    expect: "Status bar returns to 0 done after un-toggling"
+
+  - description: Quit and verify file was persisted
+    tui:
+      send_key: "q"
+    expect: "Application exits"
+
+  - description: List from CLI confirms persistence
+    exec:
+      command: myapp list --file /tmp/todos.json
+    expect: "Both tasks shown as [ ] (undone) confirming the toggle-back was saved"
+    capture:
+      - name: list_output
+        source: stdout

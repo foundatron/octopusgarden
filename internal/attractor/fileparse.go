@@ -21,12 +21,32 @@ const (
 	unchangedSuffix = " ==="
 )
 
+// ParseResult holds the output of ParseFilesWithMetadata, including metadata
+// about files that were opened but never closed (dropped due to truncation or
+// a new header appearing before the end marker).
+type ParseResult struct {
+	Files        map[string]string
+	DroppedFiles []string // paths opened but never closed (discarded)
+	Truncated    bool     // output ended mid-block (last file was never closed)
+}
+
 // ParseFiles extracts file blocks from LLM output.
 // Format: === FILE: path === ... === END FILE ===
 // Text between blocks is ignored. Unclosed blocks are skipped.
 // Returns a map of path → content.
 func ParseFiles(output string) (map[string]string, error) {
+	result, err := ParseFilesWithMetadata(output)
+	if err != nil {
+		return nil, err
+	}
+	return result.Files, nil
+}
+
+// ParseFilesWithMetadata extracts file blocks from LLM output, returning metadata
+// about dropped and truncated files alongside the successfully parsed files.
+func ParseFilesWithMetadata(output string) (ParseResult, error) {
 	files := make(map[string]string)
+	var droppedFiles []string
 	lines := strings.Split(output, "\n")
 
 	var currentPath string
@@ -44,9 +64,12 @@ func ParseFiles(output string) (map[string]string, error) {
 		path, ok := extractFilePath(trimmed)
 		if ok {
 			if err := validatePath(path); err != nil {
-				return nil, err
+				return ParseResult{}, err
 			}
 			// If we were already in a block, discard it (unclosed).
+			if currentPath != "" {
+				droppedFiles = append(droppedFiles, currentPath)
+			}
 			currentPath = path
 			currentContent.Reset()
 			continue
@@ -65,10 +88,19 @@ func ParseFiles(output string) (map[string]string, error) {
 		}
 	}
 
-	if len(files) == 0 {
-		return nil, errNoFiles
+	truncated := currentPath != ""
+	if truncated {
+		droppedFiles = append(droppedFiles, currentPath)
 	}
-	return files, nil
+
+	if len(files) == 0 {
+		return ParseResult{}, errNoFiles
+	}
+	return ParseResult{
+		Files:        files,
+		DroppedFiles: droppedFiles,
+		Truncated:    truncated,
+	}, nil
 }
 
 // extractFilePath returns the path from a === FILE: path === header line.

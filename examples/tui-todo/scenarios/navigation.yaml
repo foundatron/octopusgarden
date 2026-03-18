@@ -1,0 +1,60 @@
+id: navigation
+description: Arrow keys and j/k move selection through task list
+type: functional
+tier: 1
+satisfaction_criteria: Selection moves down and up without wrapping
+
+setup:
+  - description: Create todo file with three tasks
+    exec:
+      command: sh -c 'printf "[{\"text\":\"First\",\"done\":false},{\"text\":\"Second\",\"done\":false},{\"text\":\"Third\",\"done\":false}]" > /tmp/todos.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/todos.json"
+      wait_for: "First"
+
+steps:
+  - description: Move down to Second
+    tui:
+      send_key: "j"
+      wait_for: "> Second"
+    expect: "Selection moved to Second task"
+
+  - description: Move down to Third
+    tui:
+      send_key: "Down"
+      wait_for: "> Third"
+    expect: "Selection moved to Third task"
+
+  - description: Move down past end stays on Third
+    tui:
+      send_key: "j"
+      assert_screen: "> Third"
+    expect: "Selection stays on Third (no wrap)"
+
+  - description: Move up to Second
+    tui:
+      send_key: "k"
+      wait_for: "> Second"
+    expect: "Selection moved back to Second"
+
+  - description: Move up to First
+    tui:
+      send_key: "Up"
+      wait_for: "> First"
+    expect: "Selection moved to First"
+
+  - description: Move up past start stays on First
+    tui:
+      send_key: "k"
+      assert_screen: "First"
+    expect: "Selection stays on First (no wrap)"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

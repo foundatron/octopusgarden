@@ -1,0 +1,42 @@
+id: timer-countdown
+description: Running timer counts down automatically every second
+type: functional
+tier: 1
+satisfaction_criteria: Timer remaining time decreases without user input while RUNNING
+
+setup:
+  - description: Create timer file with a 5-second timer
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Quick\",\"seconds\":5}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "00:05"
+
+steps:
+  - description: Start the timer
+    tui:
+      send_key: "space"
+      wait_for: "RUNNING"
+    expect: "Timer is now RUNNING"
+
+  - description: Timer counts down automatically
+    tui:
+      wait_for: "00:03"
+      timeout: 5s
+    expect: "Timer has counted down to 00:03 or less without any keypress"
+
+  - description: Timer continues counting
+    tui:
+      wait_for: "00:01"
+      timeout: 5s
+    expect: "Timer continues counting down automatically"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

@@ -1,0 +1,74 @@
+id: delete-confirm
+description: Delete overlay confirms before removing a timer
+type: functional
+tier: 1
+satisfaction_criteria: Pressing d shows delete overlay, y deletes the timer, n cancels without deleting
+
+setup:
+  - description: Create timer file with two presets
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Keep\",\"seconds\":60},{\"name\":\"Remove\",\"seconds\":120}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Keep"
+
+steps:
+  - description: Navigate to second timer
+    tui:
+      send_key: "j"
+      wait_for: "Remove"
+    expect: "Selection moved to Remove"
+
+  - description: Press d to show delete overlay
+    tui:
+      send_key: "d"
+      wait_for: "Delete"
+    expect: "Delete confirmation overlay appears"
+
+  - description: Press n to cancel deletion
+    tui:
+      send_key: "n"
+      wait_for: "Remove"
+    expect: "Overlay dismissed, Remove still in list"
+
+  - description: Both timers still present
+    tui:
+      assert_screen: "2 timers"
+    expect: "Status bar still shows 2 timers"
+
+  - description: Press d again to show delete overlay
+    tui:
+      send_key: "d"
+      wait_for: "Delete"
+    expect: "Delete confirmation overlay appears again"
+
+  - description: Press y to confirm deletion
+    tui:
+      send_key: "y"
+      wait_for: "1 timer"
+    expect: "Status bar shows 1 timer after deletion"
+
+  - description: Removed timer is gone
+    tui:
+      assert_absent: "Remove"
+    expect: "Remove no longer visible in timer list"
+
+  - description: Kept timer still visible
+    tui:
+      assert_screen: "Keep"
+    expect: "Keep still in the list"
+
+  - description: Quit and verify persistence
+    tui:
+      send_key: "q"
+    expect: "Application exits"
+
+  - description: List confirms deletion persisted
+    exec:
+      command: myapp list --file /tmp/timers.json
+    expect: "Only Keep appears, Remove is gone"
+    capture:
+      - name: list_output
+        source: stdout

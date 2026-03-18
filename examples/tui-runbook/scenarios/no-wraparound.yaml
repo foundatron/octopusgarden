@@ -1,0 +1,63 @@
+id: no-wraparound
+description: Navigation does not wrap at first or last step
+type: functional
+tier: 1
+satisfaction_criteria: Left on first step stays on first, right on last step stays on last
+
+setup:
+  - description: Create a two-step runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## First Step
+
+        Beginning content.
+
+        ---
+
+        ## Last Step
+
+        Ending content.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "First Step"
+
+steps:
+  - description: Left on first step stays on first
+    tui:
+      send_key: "Left"
+      assert_screen: "First Step"
+    expect: "Still on First Step after pressing left at the beginning"
+
+  - description: Status bar still shows step 1
+    tui:
+      assert_screen: "Step 1 of 2"
+    expect: "Status bar confirms we are on Step 1 of 2"
+
+  - description: Navigate to last step
+    tui:
+      send_key: "Right"
+      wait_for: "Last Step"
+    expect: "Navigated to Last Step"
+
+  - description: Right on last step stays on last
+    tui:
+      send_key: "Right"
+      assert_screen: "Last Step"
+    expect: "Still on Last Step after pressing right at the end"
+
+  - description: Status bar still shows step 2
+    tui:
+      assert_screen: "Step 2 of 2"
+    expect: "Status bar confirms we are on Step 2 of 2"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

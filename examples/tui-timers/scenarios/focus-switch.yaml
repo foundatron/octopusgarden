@@ -1,0 +1,47 @@
+id: focus-switch
+description: Tab switches focus between Timer and Log panels
+type: functional
+tier: 1
+satisfaction_criteria: Tab toggles focus indicator in status bar between Timers and Log
+
+setup:
+  - description: Create timer file
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Focus: Timers"
+
+steps:
+  - description: Default focus is Timers
+    tui:
+      assert_screen: "Focus: Timers"
+    expect: "Status bar shows Focus: Timers on startup"
+
+  - description: Tab switches to Log focus
+    tui:
+      send_key: "tab"
+      wait_for: "Focus: Log"
+    expect: "Status bar changes to Focus: Log"
+
+  - description: Tab switches back to Timers
+    tui:
+      send_key: "tab"
+      wait_for: "Focus: Timers"
+    expect: "Status bar changes back to Focus: Timers"
+
+  - description: Tab again to Log
+    tui:
+      send_key: "tab"
+      wait_for: "Focus: Log"
+    expect: "Focus toggles back to Log"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

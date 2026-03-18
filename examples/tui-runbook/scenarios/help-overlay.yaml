@@ -1,0 +1,61 @@
+id: help-overlay
+description: Help overlay shows keybindings and can be dismissed
+type: functional
+tier: 1
+satisfaction_criteria: Pressing ? shows Help overlay with keybinding info, escape dismisses it
+
+setup:
+  - description: Create runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Help Test
+
+        Testing help overlay.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Help Test"
+
+steps:
+  - description: Help overlay not visible initially
+    tui:
+      assert_absent: "Help"
+    expect: "No Help overlay visible on startup"
+
+  - description: Open help overlay
+    tui:
+      send_text: "?"
+      wait_for: "Help"
+    expect: "Help overlay appears with Help title"
+
+  - description: Help mentions quit key
+    tui:
+      assert_screen: "q"
+    expect: "Help overlay mentions the q key"
+
+  - description: Help mentions execute key
+    tui:
+      assert_screen: "x"
+    expect: "Help overlay mentions the x key for execution"
+
+  - description: Dismiss help with escape
+    tui:
+      send_key: "escape"
+      wait_for: "Help Test"
+    expect: "Help overlay dismissed, step content visible again"
+
+  - description: Help text gone after dismiss
+    tui:
+      assert_absent: "Help"
+    expect: "Help overlay no longer visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

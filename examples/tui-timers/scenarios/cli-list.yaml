@@ -1,0 +1,27 @@
+id: cli-list
+description: List subcommand shows timers with correct format
+type: functional
+tier: 1
+satisfaction_criteria: List output shows timer names with MM:SS durations
+
+setup:
+  - description: Create timer file with two presets
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180},{\"name\":\"Tea\",\"seconds\":120}]" > /tmp/timers.json'
+
+steps:
+  - description: List shows correct format
+    exec:
+      command: myapp list --file /tmp/timers.json
+    expect: "Stdout shows Eggs with 03:00 and Tea with 02:00, each on its own line"
+    capture:
+      - name: list_output
+        source: stdout
+
+  - description: List with empty file shows nothing
+    exec:
+      command: sh -c 'printf "[]" > /tmp/empty.json && myapp list --file /tmp/empty.json'
+    expect: "Exit code 0 and stdout is empty or blank"
+    capture:
+      - name: empty_exit
+        source: exitcode

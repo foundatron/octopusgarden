@@ -1,0 +1,49 @@
+id: display
+description: TUI displays tasks and status bar correctly
+type: functional
+tier: 1
+satisfaction_criteria: TUI shows all tasks with done markers and status bar with count
+
+setup:
+  - description: Create todo file with three tasks
+    exec:
+      command: sh -c 'printf "[{\"text\":\"Alpha\",\"done\":false},{\"text\":\"Bravo\",\"done\":true},{\"text\":\"Charlie\",\"done\":false}]" > /tmp/todos.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/todos.json"
+      wait_for: "Alpha"
+
+steps:
+  - description: All three tasks visible
+    tui:
+      assert_screen: "Alpha"
+    expect: "Screen shows Alpha"
+
+  - description: Bravo is visible
+    tui:
+      assert_screen: "Bravo"
+    expect: "Screen shows Bravo"
+
+  - description: Charlie is visible
+    tui:
+      assert_screen: "Charlie"
+    expect: "Screen shows Charlie"
+
+  - description: Status bar shows task count
+    tui:
+      assert_screen: "3 tasks"
+    expect: "Status bar shows 3 tasks"
+
+  - description: Status bar shows done count
+    tui:
+      assert_screen: "1 done"
+    expect: "Status bar shows 1 done"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

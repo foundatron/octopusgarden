@@ -1,0 +1,43 @@
+id: exec-multi-block
+description: Multiple executable blocks in a step are run sequentially with x
+type: functional
+tier: 1
+satisfaction_criteria: First x runs first block, second x runs second block, output updates
+
+setup:
+  - description: Create runbook with two executable blocks
+    exec:
+      command: sh -c 'printf "## Multi Commands\n\nFirst check:\n\n\`\`\`sh\necho BLOCK_ONE_AAA\n\`\`\`\n\nSecond check:\n\n\`\`\`sh\necho BLOCK_TWO_BBB\n\`\`\`\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Multi Commands"
+
+steps:
+  - description: Execute first block
+    tui:
+      send_key: "x"
+      wait_for: "BLOCK_ONE_AAA"
+      timeout: 5s
+    expect: "Output panel shows BLOCK_ONE_AAA from first executable block"
+
+  - description: First block output visible
+    tui:
+      assert_screen: "BLOCK_ONE_AAA"
+    expect: "BLOCK_ONE_AAA still visible in output panel"
+
+  - description: Execute second block
+    tui:
+      send_key: "x"
+      wait_for: "BLOCK_TWO_BBB"
+      timeout: 5s
+    expect: "Output panel now shows BLOCK_TWO_BBB from second executable block"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

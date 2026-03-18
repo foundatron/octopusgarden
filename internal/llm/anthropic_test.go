@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -22,7 +23,7 @@ func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// anthropicResponse builds a canned Anthropic API JSON response.
+// anthropicResponse builds a canned Anthropic API JSON response (non-streaming, used by Judge tests).
 func anthropicResponse(text string, inputTokens, cacheCreation, cacheRead, outputTokens int) string {
 	resp := map[string]any{
 		"id":   "msg_test",
@@ -43,6 +44,158 @@ func anthropicResponse(text string, inputTokens, cacheCreation, cacheRead, outpu
 	}
 	b, _ := json.Marshal(resp)
 	return string(b)
+}
+
+// anthropicStreamResponse builds SSE-formatted streaming events for a text response.
+func anthropicStreamResponse(text, stopReason string, inputTokens, cacheCreation, cacheRead, outputTokens int) string {
+	msgStart := map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":    "msg_test",
+			"type":  "message",
+			"role":  "assistant",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":                inputTokens,
+				"cache_creation_input_tokens": cacheCreation,
+				"cache_read_input_tokens":     cacheRead,
+				"output_tokens":               0,
+			},
+			"content":       []any{},
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+		},
+	}
+	blockStart := map[string]any{
+		"type":          "content_block_start",
+		"index":         0,
+		"content_block": map[string]any{"type": "text", "text": ""},
+	}
+	blockDelta := map[string]any{
+		"type":  "content_block_delta",
+		"index": 0,
+		"delta": map[string]any{"type": "text_delta", "text": text},
+	}
+	blockStop := map[string]any{
+		"type":  "content_block_stop",
+		"index": 0,
+	}
+	msgDelta := map[string]any{
+		"type": "message_delta",
+		"usage": map[string]any{
+			"output_tokens": outputTokens,
+		},
+		"delta": map[string]any{
+			"stop_reason":   stopReason,
+			"stop_sequence": nil,
+		},
+	}
+	msgStop := map[string]any{
+		"type": "message_stop",
+	}
+
+	var b strings.Builder
+	for _, evt := range []struct {
+		name string
+		data any
+	}{
+		{"message_start", msgStart},
+		{"content_block_start", blockStart},
+		{"content_block_delta", blockDelta},
+		{"content_block_stop", blockStop},
+		{"message_delta", msgDelta},
+		{"message_stop", msgStop},
+	} {
+		d, _ := json.Marshal(evt.data)
+		b.WriteString("event: " + evt.name + "\ndata: " + string(d) + "\n\n")
+	}
+	return b.String()
+}
+
+// anthropicStreamToolResponse builds SSE-formatted streaming events for a tool_use response.
+func anthropicStreamToolResponse(tools []struct {
+	id, name, inputJSON string
+}, inputTokens, outputTokens int,
+) string {
+	msgStart := map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":    "msg_test",
+			"type":  "message",
+			"role":  "assistant",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":                inputTokens,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     0,
+				"output_tokens":               0,
+			},
+			"content":       []any{},
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+		},
+	}
+
+	var b strings.Builder
+	d, _ := json.Marshal(msgStart)
+	b.WriteString("event: message_start\ndata: " + string(d) + "\n\n")
+
+	for i, tool := range tools {
+		blockStart := map[string]any{
+			"type":  "content_block_start",
+			"index": i,
+			"content_block": map[string]any{
+				"type":  "tool_use",
+				"id":    tool.id,
+				"name":  tool.name,
+				"input": map[string]any{},
+			},
+		}
+		d, _ = json.Marshal(blockStart)
+		b.WriteString("event: content_block_start\ndata: " + string(d) + "\n\n")
+
+		if tool.inputJSON != "{}" && tool.inputJSON != "" {
+			blockDelta := map[string]any{
+				"type":  "content_block_delta",
+				"index": i,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": tool.inputJSON},
+			}
+			d, _ = json.Marshal(blockDelta)
+			b.WriteString("event: content_block_delta\ndata: " + string(d) + "\n\n")
+		}
+
+		blockStop := map[string]any{
+			"type":  "content_block_stop",
+			"index": i,
+		}
+		d, _ = json.Marshal(blockStop)
+		b.WriteString("event: content_block_stop\ndata: " + string(d) + "\n\n")
+	}
+
+	msgDelta := map[string]any{
+		"type": "message_delta",
+		"usage": map[string]any{
+			"output_tokens": outputTokens,
+		},
+		"delta": map[string]any{
+			"stop_reason":   "tool_use",
+			"stop_sequence": nil,
+		},
+	}
+	d, _ = json.Marshal(msgDelta)
+	b.WriteString("event: message_delta\ndata: " + string(d) + "\n\n")
+
+	msgStop := map[string]any{"type": "message_stop"}
+	d, _ = json.Marshal(msgStop)
+	b.WriteString("event: message_stop\ndata: " + string(d) + "\n\n")
+
+	return b.String()
+}
+
+// writeSSE writes an SSE response with the correct content type and body.
+func writeSSE(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Write([]byte(body))
 }
 
 func TestAnthropicGenerate(t *testing.T) {
@@ -81,8 +234,7 @@ func TestAnthropicGenerate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(anthropicResponse("generated code", 100, tt.cacheCreation, tt.cacheRead, 50)))
+				writeSSE(w, anthropicStreamResponse("generated code", "end_turn", 100, tt.cacheCreation, tt.cacheRead, 50))
 			}))
 			defer server.Close()
 
@@ -250,8 +402,7 @@ func TestCacheControlPropagation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		json.Unmarshal(body, &capturedBody)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(anthropicResponse("ok", 100, 0, 0, 10)))
+		writeSSE(w, anthropicStreamResponse("ok", "end_turn", 100, 0, 0, 10))
 	}))
 	defer server.Close()
 
@@ -354,39 +505,17 @@ func TestListModels(t *testing.T) {
 	}
 }
 
-// anthropicToolUseResponse builds a canned Anthropic API JSON response with a single tool_use block.
-func anthropicToolUseResponse(id, name, inputJSON string, inputTokens, outputTokens int) string {
-	return anthropicMultiToolResponse([]map[string]any{
-		{"type": "tool_use", "id": id, "name": name, "input": json.RawMessage(inputJSON)},
+// streamToolUseResponse builds SSE-formatted streaming events for a single tool_use block.
+func streamToolUseResponse(id, name, inputJSON string, inputTokens, outputTokens int) string {
+	return anthropicStreamToolResponse([]struct{ id, name, inputJSON string }{
+		{id, name, inputJSON},
 	}, inputTokens, outputTokens)
-}
-
-// anthropicMultiToolResponse builds a canned response with multiple tool_use blocks.
-func anthropicMultiToolResponse(tools []map[string]any, inputTokens, outputTokens int) string {
-	resp := map[string]any{
-		"id":            "msg_test",
-		"type":          "message",
-		"role":          "assistant",
-		"content":       tools,
-		"model":         "claude-sonnet-4-20250514",
-		"stop_reason":   "tool_use",
-		"stop_sequence": nil,
-		"usage": map[string]any{
-			"input_tokens":                inputTokens,
-			"cache_creation_input_tokens": 0,
-			"cache_read_input_tokens":     0,
-			"output_tokens":               outputTokens,
-		},
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
 }
 
 func TestAnthropicAgentLoop_SingleTurn(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(anthropicResponse("done", 100, 0, 0, 20)))
+		writeSSE(w, anthropicStreamResponse("done", "end_turn", 100, 0, 0, 20))
 	}))
 	defer server.Close()
 
@@ -418,13 +547,12 @@ func TestAnthropicAgentLoop_MultiTurn(t *testing.T) {
 	var handlerCallInput json.RawMessage
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		n := counter.Add(1)
 		switch n {
 		case 1:
-			w.Write([]byte(anthropicToolUseResponse("call_1", "my_tool", `{"x":1}`, 100, 30)))
+			writeSSE(w, streamToolUseResponse("call_1", "my_tool", `{"x":1}`, 100, 30))
 		default:
-			w.Write([]byte(anthropicResponse("result", 120, 0, 0, 25)))
+			writeSSE(w, anthropicStreamResponse("result", "end_turn", 120, 0, 0, 25))
 		}
 	}))
 	defer server.Close()
@@ -467,17 +595,15 @@ func TestAnthropicAgentLoop_MultipleToolsPerTurn(t *testing.T) {
 	var handlerCalls []string // protected by mu; tools run in parallel
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		n := counter.Add(1)
 		switch n {
 		case 1:
-			body := anthropicMultiToolResponse([]map[string]any{
-				{"type": "tool_use", "id": "call_a", "name": "tool_a", "input": json.RawMessage(`{"q":"a"}`)},
-				{"type": "tool_use", "id": "call_b", "name": "tool_b", "input": json.RawMessage(`{"q":"b"}`)},
-			}, 100, 40)
-			w.Write([]byte(body))
+			writeSSE(w, anthropicStreamToolResponse([]struct{ id, name, inputJSON string }{
+				{"call_a", "tool_a", `{"q":"a"}`},
+				{"call_b", "tool_b", `{"q":"b"}`},
+			}, 100, 40))
 		default:
-			w.Write([]byte(anthropicResponse("done", 150, 0, 0, 20)))
+			writeSSE(w, anthropicStreamResponse("done", "end_turn", 150, 0, 0, 20))
 		}
 	}))
 	defer server.Close()
@@ -515,8 +641,7 @@ func TestAnthropicAgentLoop_MultipleToolsPerTurn(t *testing.T) {
 func TestAnthropicAgentLoop_MaxTurnsExceeded(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(anthropicToolUseResponse("call_x", "tool_x", `{}`, 50, 20)))
+		writeSSE(w, streamToolUseResponse("call_x", "tool_x", `{}`, 50, 20))
 	}))
 	defer server.Close()
 
@@ -541,8 +666,7 @@ func TestAnthropicAgentLoop_HandlerError(t *testing.T) {
 	var counter atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		counter.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(anthropicToolUseResponse("call_e", "err_tool", `{}`, 50, 20)))
+		writeSSE(w, streamToolUseResponse("call_e", "err_tool", `{}`, 50, 20))
 	}))
 	defer server.Close()
 
@@ -579,8 +703,7 @@ func TestBuildAgentToolParams_InvalidSchema(t *testing.T) {
 func TestAnthropicAgentLoop_ContextCancellation(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(anthropicResponse("ok", 50, 0, 0, 10)))
+		writeSSE(w, anthropicStreamResponse("ok", "end_turn", 50, 0, 0, 10))
 	}))
 	defer server.Close()
 
@@ -601,13 +724,12 @@ func TestAnthropicAgentLoop_CostAccumulation(t *testing.T) {
 	t.Parallel()
 	var counter atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		n := counter.Add(1)
 		switch n {
 		case 1:
-			w.Write([]byte(anthropicToolUseResponse("call_c", "cost_tool", `{}`, 100, 50)))
+			writeSSE(w, streamToolUseResponse("call_c", "cost_tool", `{}`, 100, 50))
 		default:
-			w.Write([]byte(anthropicResponse("final", 200, 0, 0, 30)))
+			writeSSE(w, anthropicStreamResponse("final", "end_turn", 200, 0, 0, 30))
 		}
 	}))
 	defer server.Close()
@@ -644,8 +766,7 @@ func TestAnthropicAgentLoop_CacheControl(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		json.Unmarshal(body, &capturedBody)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(anthropicResponse("cached", 100, 0, 0, 10)))
+		writeSSE(w, anthropicStreamResponse("cached", "end_turn", 100, 0, 0, 10))
 	}))
 	defer server.Close()
 
@@ -715,5 +836,70 @@ func TestJudgeRetries529(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 3 {
 		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+}
+
+func TestStreamRetriesOnConnectionReset(t *testing.T) {
+	t.Parallel()
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n <= 2 {
+			// Hijack and close immediately to produce a connection reset error
+			// before any HTTP response is written.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("server does not support hijack")
+			}
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+			return
+		}
+		writeSSE(w, anthropicStreamResponse("recovered", "end_turn", 100, 0, 0, 50))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient("test-key", newTestLogger(),
+		option.WithBaseURL(server.URL),
+		option.WithMaxRetries(0), // disable SDK-level retries to test our stream retry
+	)
+
+	resp, err := client.Generate(context.Background(), GenerateRequest{
+		SystemPrompt: "test",
+		Messages:     []Message{{Role: "user", Content: "hello"}},
+		Model:        "claude-sonnet-4-20250514",
+	})
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got error: %v", err)
+	}
+	if resp.Content != "recovered" {
+		t.Errorf("content = %q, want %q", resp.Content, "recovered")
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+}
+
+func TestIsTransientNetError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"connection reset string", fmt.Errorf("read tcp: connection reset by peer"), true},
+		{"broken pipe string", fmt.Errorf("write: broken pipe"), true},
+		{"unexpected EOF string", fmt.Errorf("unexpected EOF"), true},
+		{"context canceled", context.Canceled, false},
+		{"generic error", errors.New("something else"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isTransientNetError(tt.err); got != tt.want {
+				t.Errorf("isTransientNetError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

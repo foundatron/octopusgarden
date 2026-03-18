@@ -1,0 +1,58 @@
+id: theme-cycle
+description: Pressing t cycles through themes in order
+type: functional
+tier: 1
+satisfaction_criteria: Theme cycles dark to light to ocean to dark with t key
+
+setup:
+  - description: Create runbook
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Theme Test
+
+        Testing theme cycling.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Theme: dark"
+
+steps:
+  - description: Initial theme is dark
+    tui:
+      assert_screen: "Theme: dark"
+    expect: "Status bar shows Theme: dark"
+
+  - description: Cycle to light
+    tui:
+      send_key: "t"
+      wait_for: "Theme: light"
+    expect: "Status bar shows Theme: light after pressing t"
+
+  - description: Cycle to ocean
+    tui:
+      send_key: "t"
+      wait_for: "Theme: ocean"
+    expect: "Status bar shows Theme: ocean after pressing t"
+
+  - description: Cycle wraps back to dark
+    tui:
+      send_key: "t"
+      wait_for: "Theme: dark"
+    expect: "Status bar shows Theme: dark after full cycle"
+
+  - description: Shift-T cycles backward to ocean
+    tui:
+      send_key: "T"
+      wait_for: "Theme: ocean"
+    expect: "Status bar shows Theme: ocean after pressing T (backward cycle)"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

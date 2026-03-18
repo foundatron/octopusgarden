@@ -1,0 +1,30 @@
+id: cli-errors
+description: CLI rejects missing arguments and unknown subcommands
+type: functional
+tier: 1
+satisfaction_criteria: Missing file argument and unknown subcommands exit 1
+
+steps:
+  - description: View with no file argument exits 1
+    exec:
+      command: myapp view
+    expect: "Exit code 1. Stderr contains usage or error message."
+    capture:
+      - name: nofile_exit
+        source: exitcode
+
+  - description: List with no file argument exits 1
+    exec:
+      command: myapp list
+    expect: "Exit code 1. Stderr contains usage or error message."
+    capture:
+      - name: nofile_list_exit
+        source: exitcode
+
+  - description: Unknown subcommand exits 1
+    exec:
+      command: myapp unknowncmd
+    expect: "Exit code 1. Stderr contains an error about unknown subcommand."
+    capture:
+      - name: unknown_exit
+        source: exitcode

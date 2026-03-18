@@ -5,9 +5,10 @@ import "slices"
 // LanguageTemplate holds language-specific code generation examples and configuration.
 type LanguageTemplate struct {
 	Name        string       // human-readable name: "Go", "Python", "Node.js", "Rust"
-	BaseImage   string       // Docker base image: "golang:1.24-alpine"
+	BaseImage   string       // Docker base image: "golang:1.25-alpine"
 	HTTPExample ExampleBlock // example entry file + Dockerfile for HTTP apps
 	CLIExample  ExampleBlock // example entry file + Dockerfile for CLI apps
+	TUIExample  ExampleBlock // example entry file + Dockerfile for TUI apps
 	GRPCSetup   string       // protoc/plugin installation steps for Dockerfile
 	DepRules    string       // language-specific dependency rules
 }
@@ -23,7 +24,7 @@ type ExampleBlock struct {
 var languageRegistry = map[string]LanguageTemplate{
 	"go": {
 		Name:      "Go",
-		BaseImage: "golang:1.24-alpine",
+		BaseImage: "golang:1.25-alpine",
 		HTTPExample: ExampleBlock{
 			EntryFile: "main.go",
 			EntryContent: `package main
@@ -33,7 +34,7 @@ import "net/http"
 func main() {
 	http.ListenAndServe(":8080", nil)
 }`,
-			Dockerfile: `FROM golang:1.24-alpine
+			Dockerfile: `FROM golang:1.25-alpine
 WORKDIR /app
 COPY go.mod ./
 COPY . .
@@ -57,7 +58,18 @@ func main() {
 	}
 	fmt.Println("Hello from", os.Args[1])
 }`,
-			Dockerfile: `FROM golang:1.24-alpine
+			Dockerfile: `FROM golang:1.25-alpine
+WORKDIR /app
+COPY go.mod ./
+COPY . .
+RUN go mod tidy
+RUN go build -o /usr/local/bin/myapp .`,
+		},
+		TUIExample: ExampleBlock{
+			// EntryFile and EntryContent intentionally empty: TUI framework choice
+			// (Bubble Tea, tview, tcell, etc.) is driven by the spec and genes,
+			// not by octopusgarden's language template.
+			Dockerfile: `FROM golang:1.25-alpine
 WORKDIR /app
 COPY go.mod ./
 COPY . .
@@ -65,7 +77,7 @@ RUN go mod tidy
 RUN go build -o /usr/local/bin/myapp .`,
 		},
 		GRPCSetup: "RUN apk add --no-cache protobuf-dev && go install google.golang.org/protobuf/cmd/protoc-gen-go@latest && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest",
-		DepRules:  "- For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid)\n- For Go: generate only go.mod with no \"require\" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run \"go mod tidy\" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build",
+		DepRules:  "- For Go: use golang:1.25-alpine as the Docker base image — older versions will fail to resolve modern dependencies\n- For Go: use net/http (not gorilla/mux), use crypto/rand or math/rand for UUIDs (not google/uuid)\n- For Go: generate only go.mod with no \"require\" block (or minimal requires). In the Dockerfile, COPY all source files first, THEN run \"go mod tidy\" to resolve dependencies, THEN build. Example Dockerfile order: COPY go.mod ./ then COPY . . then RUN go mod tidy then RUN go build",
 	},
 	"python": {
 		Name:      "Python",

@@ -1,0 +1,44 @@
+id: markdown-heading
+description: Headings are rendered without raw markdown syntax
+type: functional
+tier: 1
+satisfaction_criteria: Heading text is visible but the ## prefix is not shown verbatim
+
+setup:
+  - description: Create runbook with headings
+    exec:
+      command: |
+        cat > /tmp/runbook.md << 'ENDOFRUNBOOK'
+        ## Prerequisites
+
+        Check your setup before proceeding.
+        ENDOFRUNBOOK
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Prerequisites"
+
+steps:
+  - description: Heading text is displayed
+    tui:
+      assert_screen: "Prerequisites"
+    expect: "The heading text Prerequisites is visible"
+
+  - description: Raw markdown syntax is not shown
+    tui:
+      assert_absent: "## Prerequisites"
+    expect: "The raw ## prefix is not displayed before the heading"
+
+  - description: Body text also visible
+    tui:
+      assert_screen: "setup"
+    expect: "The paragraph text is also visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

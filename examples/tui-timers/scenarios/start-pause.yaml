@@ -1,0 +1,52 @@
+id: start-pause
+description: Space starts and pauses timers
+type: functional
+tier: 1
+satisfaction_criteria: Space toggles between READY/RUNNING and RUNNING/PAUSED states
+
+setup:
+  - description: Create timer file
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":60}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "READY"
+
+steps:
+  - description: Timer starts in READY state
+    tui:
+      assert_screen: "READY"
+    expect: "Timer shows READY state initially"
+
+  - description: Press space to start timer
+    tui:
+      send_key: "space"
+      wait_for: "RUNNING"
+    expect: "Timer state changes to RUNNING"
+
+  - description: Log shows started event
+    tui:
+      assert_screen: "Started"
+    expect: "Log panel shows Started event for the timer"
+
+  - description: Press space to pause timer
+    tui:
+      send_key: "space"
+      wait_for: "PAUSED"
+    expect: "Timer state changes to PAUSED"
+
+  - description: Press space to resume timer
+    tui:
+      send_key: "space"
+      wait_for: "RUNNING"
+    expect: "Timer state changes back to RUNNING"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

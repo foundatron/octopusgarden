@@ -1,0 +1,35 @@
+id: cli-run
+description: Run subcommand executes code blocks non-interactively
+type: functional
+tier: 1
+satisfaction_criteria: Run executes sh blocks in the specified step and prints their output
+
+setup:
+  - description: Create runbook with executable blocks
+    exec:
+      command: sh -c 'printf "## Step One\n\nRun check:\n\n\`\`\`sh\necho RUN_OUTPUT_ABC\n\`\`\`\n---\n## Step Two\n\nNo commands here.\n" > /tmp/runbook.md'
+
+steps:
+  - description: Run step 1 prints command output
+    exec:
+      command: myapp run /tmp/runbook.md --step 1
+    expect: "Stdout contains RUN_OUTPUT_ABC"
+    capture:
+      - name: run_output
+        source: stdout
+
+  - description: Run step with no executable blocks exits 0
+    exec:
+      command: myapp run /tmp/runbook.md --step 2
+    expect: "Exit code 0. No command output since step 2 has no executable blocks."
+    capture:
+      - name: noblock_exit
+        source: exitcode
+
+  - description: Run with out-of-range step exits 1
+    exec:
+      command: myapp run /tmp/runbook.md --step 99
+    expect: "Exit code 1. Stderr contains an error about invalid step number."
+    capture:
+      - name: bad_step_exit
+        source: exitcode

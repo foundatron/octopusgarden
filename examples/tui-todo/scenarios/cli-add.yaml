@@ -1,0 +1,27 @@
+id: cli-add
+description: Add subcommand creates tasks and the file
+type: functional
+tier: 1
+satisfaction_criteria: Adding tasks creates the file, exits 0, and tasks appear in list output
+
+steps:
+  - description: Add first task
+    exec:
+      command: myapp add --file /tmp/todos.json "Buy milk"
+    expect: "Exit code 0"
+    capture:
+      - name: add_exit
+        source: exitcode
+
+  - description: Add second task
+    exec:
+      command: myapp add --file /tmp/todos.json "Write tests"
+    expect: "Exit code 0"
+
+  - description: List shows both tasks
+    exec:
+      command: myapp list --file /tmp/todos.json
+    expect: "Stdout contains both Buy milk and Write tests, each prefixed with [ ]"
+    capture:
+      - name: list_output
+        source: stdout

@@ -1,0 +1,54 @@
+id: render
+description: TUI displays timers and status bar correctly
+type: functional
+tier: 1
+satisfaction_criteria: TUI shows all timers with MM:SS times, READY state, and correct status bar
+
+setup:
+  - description: Create timer file with three presets
+    exec:
+      command: sh -c 'printf "[{\"name\":\"Eggs\",\"seconds\":180},{\"name\":\"Tea\",\"seconds\":120},{\"name\":\"Pasta\",\"seconds\":600}]" > /tmp/timers.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/timers.json"
+      wait_for: "Eggs"
+
+steps:
+  - description: All timers visible
+    tui:
+      assert_screen: "Eggs"
+    expect: "Screen shows Eggs"
+
+  - description: Tea visible
+    tui:
+      assert_screen: "Tea"
+    expect: "Screen shows Tea"
+
+  - description: Pasta visible
+    tui:
+      assert_screen: "Pasta"
+    expect: "Screen shows Pasta"
+
+  - description: Timers show READY state
+    tui:
+      assert_screen: "READY"
+    expect: "At least one timer shows READY state"
+
+  - description: Status bar shows timer count
+    tui:
+      assert_screen: "3 timers"
+    expect: "Status bar shows 3 timers"
+
+  - description: Default focus is Timers
+    tui:
+      assert_screen: "Focus: Timers"
+    expect: "Status bar shows Focus: Timers"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

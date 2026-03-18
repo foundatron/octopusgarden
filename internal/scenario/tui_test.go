@@ -26,6 +26,12 @@ func TestMapKey(t *testing.T) {
 		{name: "ctrl+c", key: "ctrl+c", want: []byte{0x03}},
 		{name: "ctrl+t", key: "ctrl+t", want: []byte{0x14}},
 		{name: "ctrl+a", key: "ctrl+a", want: []byte{0x01}},
+		{name: "digit 1", key: "1", want: []byte{'1'}},
+		{name: "digit 9", key: "9", want: []byte{'9'}},
+		{name: "letter q", key: "q", want: []byte{'q'}},
+		{name: "letter Q (uppercase)", key: "Q", want: []byte{'Q'}},
+		{name: "letter j", key: "j", want: []byte{'j'}},
+		{name: "punctuation ?", key: "?", want: []byte{'?'}},
 		{name: "unknown", key: "F99", wantErr: true},
 		{name: "ctrl+1 (not a-z)", key: "ctrl+1", wantErr: true},
 	}

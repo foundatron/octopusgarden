@@ -1,0 +1,51 @@
+id: help-overlay
+description: Help overlay shows keybindings and can be dismissed
+type: functional
+tier: 1
+satisfaction_criteria: Pressing ? shows help overlay with Help text, pressing escape dismisses it
+
+setup:
+  - description: Create todo file
+    exec:
+      command: sh -c 'printf "[{\"text\":\"My task\",\"done\":false}]" > /tmp/todos.json'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp tui --file /tmp/todos.json"
+      wait_for: "My task"
+
+steps:
+  - description: Help overlay not visible initially
+    tui:
+      assert_absent: "Help"
+    expect: "No Help overlay visible on initial render"
+
+  - description: Open help overlay
+    tui:
+      send_text: "?"
+      wait_for: "Help"
+    expect: "Help overlay appears with Help title"
+
+  - description: Help overlay mentions quit keybinding
+    tui:
+      assert_screen: "q"
+    expect: "Help overlay mentions the q key for quitting"
+
+  - description: Dismiss help overlay with escape
+    tui:
+      send_key: "escape"
+      wait_for: "My task"
+    expect: "Help overlay dismissed, task list visible again"
+
+  - description: Help text gone after dismiss
+    tui:
+      assert_absent: "Help"
+    expect: "Help overlay is no longer visible"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

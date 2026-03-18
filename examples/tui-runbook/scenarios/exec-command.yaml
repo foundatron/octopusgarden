@@ -1,0 +1,36 @@
+id: exec-command
+description: Pressing x executes a code block and shows output
+type: functional
+tier: 1
+satisfaction_criteria: Executing a sh code block shows its real output in the output panel
+
+setup:
+  - description: Create runbook with an executable block
+    exec:
+      command: sh -c 'printf "## Run Check\n\nExecute the health check:\n\n\`\`\`sh\necho HEALTH_OK_789\n\`\`\`\n" > /tmp/runbook.md'
+
+  - description: Launch TUI
+    tui:
+      command: "myapp view /tmp/runbook.md"
+      wait_for: "Run Check"
+
+steps:
+  - description: Output panel not visible initially
+    tui:
+      assert_absent: "HEALTH_OK_789"
+    expect: "Command output not visible before execution"
+
+  - description: Execute the code block
+    tui:
+      send_key: "x"
+      wait_for: "HEALTH_OK_789"
+      timeout: 5s
+    expect: "Output panel appears showing HEALTH_OK_789 from the executed command"
+
+  - description: Quit cleanly
+    tui:
+      send_key: "q"
+    capture:
+      - name: exit_code
+        source: exit_code
+    expect: "Exit code is 0"

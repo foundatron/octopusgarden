@@ -1,0 +1,14 @@
+id: cli-themes
+description: Themes subcommand lists available theme names
+type: functional
+tier: 1
+satisfaction_criteria: Output includes dark, light, and ocean theme names
+
+steps:
+  - description: List themes
+    exec:
+      command: myapp themes
+    expect: "Stdout contains dark, light, and ocean, each on its own line"
+    capture:
+      - name: themes_output
+        source: stdout

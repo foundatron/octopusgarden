@@ -415,7 +415,7 @@ func TestBuildSystemPromptWithLanguage(t *testing.T) {
 			lang: "go",
 			caps: ScenarioCapabilities{},
 			wantContain: []string{
-				"golang:1.24-alpine",
+				"golang:1.25-alpine",
 				"main.go",
 				"go mod tidy",
 			},
@@ -425,7 +425,7 @@ func TestBuildSystemPromptWithLanguage(t *testing.T) {
 			lang: "go",
 			caps: ScenarioCapabilities{NeedsExec: true},
 			wantContain: []string{
-				"golang:1.24-alpine",
+				"golang:1.25-alpine",
 				"os.Args",
 			},
 		},
@@ -1270,6 +1270,8 @@ func TestBuildMinimalismSuffix(t *testing.T) {
 // capsSuffix returns a short string describing capabilities for test names.
 func capsSuffix(caps ScenarioCapabilities) string {
 	switch {
+	case caps.NeedsTUI:
+		return "tui"
 	case caps.NeedsHTTP:
 		return "http"
 	case caps.NeedsExec:
@@ -1405,7 +1407,7 @@ func TestBuildComponentPrompt_IncludesContractAndPatterns(t *testing.T) {
 		Interface: "HTTP handler interface for /api routes",
 		Patterns:  "Use chi router with middleware chain",
 	}
-	prompt := buildComponentPrompt("my spec", comp, nil, ScenarioCapabilities{}, "go")
+	prompt := buildComponentPrompt("my spec", comp, nil, "go")
 	if !strings.Contains(prompt, "COMPONENT CONTRACT:") {
 		t.Error("prompt should contain COMPONENT CONTRACT section")
 	}
@@ -1429,7 +1431,7 @@ func TestBuildComponentPrompt_IncludesDependencyInterfaces(t *testing.T) {
 	depInterfaces := map[string]string{
 		"models": "type User struct { ID int; Name string }",
 	}
-	prompt := buildComponentPrompt("my spec", comp, depInterfaces, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt("my spec", comp, depInterfaces, "")
 	if !strings.Contains(prompt, "DEPENDENCY INTERFACES:") {
 		t.Error("prompt should contain DEPENDENCY INTERFACES section")
 	}
@@ -1446,7 +1448,7 @@ func TestBuildComponentPrompt_NoDependencies(t *testing.T) {
 		Name:      "models",
 		Interface: "Data models",
 	}
-	prompt := buildComponentPrompt("my spec", comp, nil, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt("my spec", comp, nil, "")
 	if strings.Contains(prompt, "DEPENDENCY INTERFACES:") {
 		t.Error("prompt should not contain DEPENDENCY INTERFACES when there are no deps")
 	}
@@ -1462,7 +1464,7 @@ func TestBuildComponentPrompt_FiltersToOnlyDeclaredDeps(t *testing.T) {
 		"models": "type User struct { ID int; Name string }",
 		"auth":   "type AuthService interface { Verify(token string) bool }",
 	}
-	prompt := buildComponentPrompt("my spec", comp, depInterfaces, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt("my spec", comp, depInterfaces, "")
 	if !strings.Contains(prompt, "--- models ---") {
 		t.Error("prompt should contain declared dependency models")
 	}
@@ -1477,7 +1479,7 @@ func TestBuildComponentPrompt_SpecFirst(t *testing.T) {
 		Name:      "routes",
 		Interface: "HTTP handlers",
 	}
-	prompt := buildComponentPrompt(spec, comp, nil, ScenarioCapabilities{}, "")
+	prompt := buildComponentPrompt(spec, comp, nil, "")
 	specIdx := strings.Index(prompt, spec)
 	contractIdx := strings.Index(prompt, "COMPONENT CONTRACT:")
 	if specIdx < 0 || contractIdx < 0 {
@@ -1485,5 +1487,216 @@ func TestBuildComponentPrompt_SpecFirst(t *testing.T) {
 	}
 	if specIdx >= contractIdx {
 		t.Error("spec should appear before component contract (caching correctness)")
+	}
+}
+
+func TestBuildComponentPrompt_NoDockerfileInstructions(t *testing.T) {
+	comp := gene.Component{
+		Name:      "routes",
+		Interface: "HTTP handler interface",
+	}
+	prompt := buildComponentPrompt("my spec", comp, nil, "go")
+	if !strings.Contains(prompt, "Do NOT generate a Dockerfile, dependency manifests, or build infrastructure") {
+		t.Error("component prompt should instruct not to generate Dockerfile or build infrastructure")
+	}
+	// Should not contain "Include a Dockerfile" (the monolithic instruction).
+	if strings.Contains(prompt, "Include a Dockerfile") {
+		t.Error("component prompt should not contain monolithic Dockerfile instruction")
+	}
+}
+
+func TestTUICapabilityInstructions(t *testing.T) {
+	tests := []struct {
+		name        string
+		caps        ScenarioCapabilities
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "NeedsTUI only",
+			caps: ScenarioCapabilities{NeedsTUI: true},
+			wantContain: []string{
+				"terminal user interface (TUI)",
+				"alternate screen buffer",
+				"Do NOT start an HTTP server",
+			},
+			wantAbsent: []string{
+				"CLI tool invoked via command-line arguments",
+				"MUST listen on port 8080",
+				"Bubble Tea", // framework-specific guidance belongs in language examples, not capability instructions
+			},
+		},
+		{
+			name: "NeedsTUI and NeedsExec",
+			caps: ScenarioCapabilities{NeedsTUI: true, NeedsExec: true},
+			wantContain: []string{
+				"terminal user interface (TUI)",
+				"alternate screen buffer",
+				"CLI subcommands",
+				"Do NOT start an HTTP server",
+			},
+			wantAbsent: []string{
+				"CLI tool invoked via command-line arguments",
+				"MUST listen on port 8080",
+				"Bubble Tea",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := capabilityInstructions(tt.caps)
+			for _, want := range tt.wantContain {
+				if !strings.Contains(got, want) {
+					t.Errorf("capabilityInstructions should contain %q, got:\n%s", want, got)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(got, absent) {
+					t.Errorf("capabilityInstructions should not contain %q", absent)
+				}
+			}
+		})
+	}
+}
+
+func TestTUITrailingInstructions(t *testing.T) {
+	got := capabilityTrailingInstructions(ScenarioCapabilities{NeedsTUI: true})
+	if !strings.Contains(got, "full-screen TUI") {
+		t.Errorf("trailing instructions for TUI should mention full-screen TUI, got:\n%s", got)
+	}
+	if !strings.Contains(got, "PATH location") {
+		t.Errorf("trailing instructions for TUI should mention PATH, got:\n%s", got)
+	}
+}
+
+func TestTUILanguageExample(t *testing.T) {
+	tmpl, ok := LookupLanguage("go")
+	if !ok {
+		t.Fatal("go language template not found")
+	}
+
+	// TUI-only should emit Dockerfile-only example (no entry file, but Dockerfile is non-empty).
+	tuiExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsTUI: true})
+	if !strings.Contains(tuiExample, "Dockerfile") {
+		t.Errorf("TUI example should contain Dockerfile example, got:\n%s", tuiExample)
+	}
+	if strings.Contains(tuiExample, "main.go") {
+		t.Error("TUI example should not contain main.go (no framework-specific entry file)")
+	}
+
+	// TUI+Exec should skip example (combined capability).
+	tuiExecExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsTUI: true, NeedsExec: true})
+	if tuiExecExample != "" {
+		t.Errorf("TUI+Exec should skip example block, got:\n%s", tuiExecExample)
+	}
+
+	// Exec-only should still use CLI example, not TUI.
+	execExample := buildLanguageExample(tmpl, ScenarioCapabilities{NeedsExec: true})
+	if strings.Contains(execExample, "bubbletea") {
+		t.Error("Exec-only example should not contain bubbletea")
+	}
+	if !strings.Contains(execExample, "os.Args") {
+		t.Error("Exec-only example should contain os.Args")
+	}
+}
+
+func TestTUISystemPromptIntegration(t *testing.T) {
+	prompt := buildSystemPrompt("TUI app spec", ScenarioCapabilities{NeedsTUI: true, NeedsExec: true}, "go", "", "")
+	if !strings.Contains(prompt, "terminal user interface") {
+		t.Error("system prompt with TUI caps should contain TUI instructions")
+	}
+	if strings.Contains(prompt, "CLI tool invoked via command-line arguments") {
+		t.Error("system prompt with TUI+Exec should not fall through to exec-only instructions")
+	}
+}
+
+// buildNoisyLog generates a build log with n noise lines followed by suffix lines.
+func buildNoisyLog(noiseCount int, suffix string) string {
+	var b strings.Builder
+	b.WriteString("build error\nBuild log:\nStep 1/5 : FROM alpine\n")
+	for i := range noiseCount {
+		b.WriteString("fetch http://dl-cdn.alpinelinux.org/pkg" + string(rune('A'+i%26)) + "\n")
+	}
+	b.WriteString(suffix)
+	return b.String()
+}
+
+func TestStripBuildNoise(t *testing.T) {
+	t.Run("no build log section", func(t *testing.T) {
+		got := stripBuildNoise("plain error message")
+		if got != "plain error message" {
+			t.Errorf("expected passthrough, got: %s", got)
+		}
+	})
+
+	t.Run("reduces noise line count", func(t *testing.T) {
+		in := buildNoisyLog(100, "Step 2/5 : RUN go build\nmain.go:5:2: undefined: foo\n")
+		got := stripBuildNoise(in)
+		if !strings.Contains(got, "undefined: foo") {
+			t.Error("expected error line to be preserved")
+		}
+		inCount := strings.Count(in, "fetch http://dl-cdn")
+		gotCount := strings.Count(got, "fetch http://dl-cdn")
+		if gotCount >= inCount {
+			t.Errorf("expected noise reduction: %d noise lines in, %d out", inCount, gotCount)
+		}
+	})
+
+	t.Run("preserves Step lines", func(t *testing.T) {
+		in := buildNoisyLog(100, "Step 2/3 : RUN go build\nmain.go:1: error\n")
+		got := stripBuildNoise(in)
+		if !strings.Contains(got, "Step 1/5") {
+			t.Error("Step line should be preserved")
+		}
+	})
+
+	t.Run("short log preserved entirely", func(t *testing.T) {
+		in := "err\nBuild log:\nfetch http://example.com\nStep 2/3 : RUN go build\nmain.go:1: error\n"
+		got := stripBuildNoise(in)
+		if got != in {
+			t.Errorf("short log should be preserved entirely, got:\n%s", got)
+		}
+	})
+
+	t.Run("preserves last 50 lines unconditionally", func(t *testing.T) {
+		var b strings.Builder
+		b.WriteString("err\nBuild log:\n")
+		for i := range 100 {
+			b.WriteString("fetch http://example.com/pkg" + string(rune('A'+i%26)) + "\n")
+		}
+		b.WriteString("final error line\n")
+		got := stripBuildNoise(b.String())
+		if !strings.Contains(got, "final error line") {
+			t.Error("final error line should be preserved")
+		}
+	})
+}
+
+func TestBuildMessagesWithSeededHistory(t *testing.T) {
+	// When history is seeded (e.g. from composed fallback), iter 1 should include feedback.
+	history := []iterationFeedback{
+		{
+			iteration: 0,
+			kind:      feedbackBuildError,
+			message:   "A prior composed build attempt failed: component X compilation error",
+		},
+	}
+
+	msgs := buildMessages(1, history)
+	content := msgs[0].Content
+	if !strings.Contains(content, "composed build attempt failed") {
+		t.Errorf("iter 1 with seeded history should include feedback, got:\n%s", content)
+	}
+	if !strings.Contains(content, "BUILD FAILURE") {
+		t.Errorf("iter 1 with seeded history should include categorized header, got:\n%s", content)
+	}
+}
+
+func TestBuildMessagesEmptyHistoryIter1(t *testing.T) {
+	// Without seeded history, iter 1 should produce the simple generate prompt.
+	msgs := buildMessages(1, nil)
+	if strings.Contains(msgs[0].Content, "previous attempt") {
+		t.Error("iter 1 with no history should not reference previous attempts")
 	}
 }
