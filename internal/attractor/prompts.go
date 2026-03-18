@@ -92,6 +92,16 @@ const (
 	standardMaxIter = 4
 )
 
+// generationMode selects between file-format output (=== FILE: === blocks) and
+// tool-use output (write_file tool calls). Used by buildSystemPrompt, buildMessages,
+// and buildPatchMessages to emit mode-specific instructions.
+type generationMode int
+
+const (
+	modeFileFormat generationMode = iota // output === FILE: path === blocks
+	modeToolUse                          // output via write_file tool
+)
+
 // determineFidelity returns the appropriate feedback fidelity for the given iteration
 // and stall count. Early iterations use compact fidelity to keep prompt cost low;
 // stalls escalate one level to provide more debugging signal.
@@ -162,14 +172,15 @@ The SPECIFICATION always takes precedence over these patterns on any conflict):
 // The suffix is selected based on scenario capabilities and optional language.
 // When language is "" (auto), no language-specific examples or dep rules are emitted.
 // genes and geneLanguage are optional; when genes is empty, no gene section is emitted.
-func buildSystemPrompt(spec string, caps ScenarioCapabilities, language, genes, geneLanguage string) string {
+// mode selects file-format (=== FILE: === blocks) or tool-use (write_file) output instructions.
+func buildSystemPrompt(spec string, caps ScenarioCapabilities, language, genes, geneLanguage string, mode generationMode) string {
 	var b strings.Builder
 	b.WriteString(systemPromptPrefix)
 	b.WriteString(spec)
 	if genes != "" {
 		b.WriteString(buildGeneSection(genes, language, geneLanguage))
 	}
-	b.WriteString(buildCapabilitySuffix(caps, language))
+	b.WriteString(buildCapabilitySuffix(caps, language, mode))
 	b.WriteString(buildDepRules(language))
 	return b.String()
 }
@@ -206,20 +217,31 @@ func languageDisplayName(lang string) string {
 }
 
 // buildCapabilitySuffix assembles the instruction text for a given capability set.
-// When a language is specified, a concrete example block is appended.
-func buildCapabilitySuffix(caps ScenarioCapabilities, language string) string {
+// mode selects file-format output (=== FILE: === blocks, with language example) or
+// tool-use output (write_file tool instructions, no example block).
+func buildCapabilitySuffix(caps ScenarioCapabilities, language string, mode generationMode) string {
 	var b strings.Builder
 	b.WriteString("\n\nINSTRUCTIONS:\n")
 	b.WriteString(capabilityInstructions(caps))
-	b.WriteString("\n- Output each file in this exact format:\n\n")
-	b.WriteString("=== FILE: path/to/file ===\nfile content here\n=== END FILE ===\n")
 
-	// Append language-specific example if a language is specified.
-	if tmpl, ok := LookupLanguage(language); ok {
-		b.WriteString(buildLanguageExample(tmpl, caps))
+	switch mode {
+	case modeToolUse:
+		b.WriteString("\n- Use the write_file tool to create each file in the workspace")
+		if _, ok := LookupLanguage(language); ok {
+			b.WriteString("\n- Use read_file to inspect existing files and list_files to see what is present")
+		}
+		b.WriteString("\n- Write ALL required files; do not skip any file needed for a working application\n")
+		b.WriteString("- Minimize explanatory text; focus on writing the files\n")
+	default: // modeFileFormat
+		b.WriteString("\n- Output each file in this exact format:\n\n")
+		b.WriteString("=== FILE: path/to/file ===\nfile content here\n=== END FILE ===\n")
+		// Append language-specific example if a language is specified.
+		if tmpl, ok := LookupLanguage(language); ok {
+			b.WriteString(buildLanguageExample(tmpl, caps))
+		}
+		b.WriteString("\n- Generate ONLY the file blocks, minimize explanatory text\n")
 	}
 
-	b.WriteString("\n- Generate ONLY the file blocks, minimize explanatory text\n")
 	b.WriteString(capabilityTrailingInstructions(caps))
 	return b.String()
 }
@@ -450,12 +472,19 @@ func buildDepRules(language string) string {
 }
 
 // buildMessages constructs the user message for the current iteration.
-// Iteration 1 gets a simple "Generate" prompt; subsequent iterations include
+// Empty history produces a simple "Generate" prompt; non-empty history includes
 // the last 3 failure summaries with categorized headers.
-func buildMessages(_ int, history []iterationFeedback) []llm.Message {
+// mode selects file-format or tool-use output instructions.
+func buildMessages(_ int, history []iterationFeedback, mode generationMode) []llm.Message {
 	if len(history) == 0 {
+		var initialInstruction string
+		if mode == modeToolUse {
+			initialInstruction = "Generate the application according to the specification. Use the write_file tool to create each file."
+		} else {
+			initialInstruction = "Generate the application according to the specification. Output all files using the === FILE: path === format."
+		}
 		return []llm.Message{
-			{Role: "user", Content: "Generate the application according to the specification. Output all files using the === FILE: path === format."},
+			{Role: "user", Content: initialInstruction},
 		}
 	}
 
@@ -472,7 +501,11 @@ func buildMessages(_ int, history []iterationFeedback) []llm.Message {
 	start := max(len(history)-maxFeedbackEntries, 0)
 	writeCategorizedFeedback(&b, history[start:])
 
-	b.WriteString("Please generate a corrected version of the application. Output ALL files using the === FILE: path === format.")
+	if mode == modeToolUse {
+		b.WriteString("Please generate a corrected version of the application. Use the write_file tool to create ALL required files.")
+	} else {
+		b.WriteString("Please generate a corrected version of the application. Output ALL files using the === FILE: path === format.")
+	}
 
 	return []llm.Message{
 		{Role: "user", Content: b.String()},
@@ -480,21 +513,28 @@ func buildMessages(_ int, history []iterationFeedback) []llm.Message {
 }
 
 // buildPatchMessages constructs the user message for patch mode iterations.
-// It includes the previous best files as context and the most recent failures,
-// asking the LLM to output only changed files. omittedCount is the number of
-// files excluded from bestFiles by triage; when > 0 a note is appended after
-// the file blocks.
-func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64, omittedCount int) []llm.Message {
+// mode selects file-format or tool-use output instructions.
+// File-format mode embeds file content inline with === FILE: === delimiters and uses omittedCount.
+// Tool-use mode lists file paths as bullets (agent uses read_file to inspect) and ignores omittedCount.
+func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64, omittedCount int, mode generationMode) []llm.Message {
 	var b strings.Builder
-	fmt.Fprintf(&b, "The current best version scored %.1f/100. Here are all current files:\n\n", bestScore)
-
 	paths := slices.Sorted(maps.Keys(bestFiles))
-	for _, p := range paths {
-		fmt.Fprintf(&b, "=== FILE: %s ===\n%s=== END FILE ===\n\n", p, bestFiles[p])
-	}
 
-	if omittedCount > 0 {
-		fmt.Fprintf(&b, "(%d other files not relevant to current failures, not shown)\n\n", omittedCount)
+	switch mode {
+	case modeToolUse:
+		fmt.Fprintf(&b, "The current best version scored %.1f/100. Current files in the workspace:\n\n", bestScore)
+		for _, p := range paths {
+			fmt.Fprintf(&b, "- %s\n", p)
+		}
+		b.WriteString("\nUse read_file to inspect any file you need to review before making changes.\n\n")
+	default: // modeFileFormat
+		fmt.Fprintf(&b, "The current best version scored %.1f/100. Here are all current files:\n\n", bestScore)
+		for _, p := range paths {
+			fmt.Fprintf(&b, "=== FILE: %s ===\n%s=== END FILE ===\n\n", p, bestFiles[p])
+		}
+		if omittedCount > 0 {
+			fmt.Fprintf(&b, "(%d other files not relevant to current failures, not shown)\n\n", omittedCount)
+		}
 	}
 
 	// Inject steering for scenarios stalling across consecutive iterations (full history).
@@ -504,13 +544,22 @@ func buildPatchMessages(history []iterationFeedback, bestFiles map[string]string
 	}
 
 	if len(history) > 0 {
-		b.WriteString("Failures to fix:\n\n")
+		if mode == modeToolUse {
+			b.WriteString("Here is the feedback:\n\n")
+		} else {
+			b.WriteString("Failures to fix:\n\n")
+		}
 		start := max(len(history)-maxFeedbackEntries, 0)
 		writeCategorizedFeedback(&b, history[start:])
 	}
 
-	b.WriteString("Output ONLY the files that need to change using the === FILE: path === format. ")
-	b.WriteString("For files you are not changing, you may emit === UNCHANGED: path === as a comment, but this is optional.")
+	if mode == modeToolUse {
+		b.WriteString("Use the write_file tool to write any files that need to change. ")
+		b.WriteString("You only need to write files that require modification; unchanged files are already present.")
+	} else {
+		b.WriteString("Output ONLY the files that need to change using the === FILE: path === format. ")
+		b.WriteString("For files you are not changing, you may emit === UNCHANGED: path === as a comment, but this is optional.")
+	}
 
 	return []llm.Message{
 		{Role: "user", Content: b.String()},
@@ -759,99 +808,6 @@ func buildMinimalismSuffix(score float64, failedScenarios map[string]float64) st
 		fmt.Fprintf(&b, "- %s: %.0f%%\n", name, failedScenarios[name])
 	}
 	return b.String()
-}
-
-// buildAgenticSystemPrompt creates the system prompt for agentic (tool-use) code generation.
-// Structurally similar to buildSystemPrompt but replaces the file-format suffix with
-// tool-use instructions via buildAgenticCapabilitySuffix.
-func buildAgenticSystemPrompt(spec string, caps ScenarioCapabilities, language, genes, geneLanguage string) string {
-	var b strings.Builder
-	b.WriteString(systemPromptPrefix)
-	b.WriteString(spec)
-	if genes != "" {
-		b.WriteString(buildGeneSection(genes, language, geneLanguage))
-	}
-	b.WriteString(buildAgenticCapabilitySuffix(caps, language))
-	b.WriteString(buildDepRules(language))
-	return b.String()
-}
-
-// buildAgenticCapabilitySuffix assembles instruction text for agentic tool-use mode.
-// Uses the same capability instructions as buildCapabilitySuffix but replaces the
-// === FILE: === format instructions with write_file tool-use instructions.
-// No language example block is included.
-func buildAgenticCapabilitySuffix(caps ScenarioCapabilities, language string) string {
-	var b strings.Builder
-	b.WriteString("\n\nINSTRUCTIONS:\n")
-	b.WriteString(capabilityInstructions(caps))
-	b.WriteString("\n- Use the write_file tool to create each file in the workspace")
-	if _, ok := LookupLanguage(language); ok {
-		b.WriteString("\n- Use read_file to inspect existing files and list_files to see what is present")
-	}
-	b.WriteString("\n- Write ALL required files; do not skip any file needed for a working application\n")
-	b.WriteString("- Minimize explanatory text; focus on writing the files\n")
-	b.WriteString(capabilityTrailingInstructions(caps))
-	return b.String()
-}
-
-// buildAgenticMessages constructs the user message for agentic generation.
-// Iteration 1 gets a simple "Generate" prompt using tool calls.
-// Subsequent iterations include failure feedback.
-func buildAgenticMessages(iter int, history []iterationFeedback) []llm.Message {
-	if iter == 1 || len(history) == 0 {
-		return []llm.Message{
-			{Role: "user", Content: "Generate the application according to the specification. Use the write_file tool to create each file."},
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString("The previous attempt did not fully satisfy the specification. Here is the feedback:\n\n")
-
-	if steeringText := buildSteeringText(history); steeringText != "" {
-		b.WriteString(steeringText)
-		b.WriteString("\n")
-	}
-
-	start := max(len(history)-maxFeedbackEntries, 0)
-	writeCategorizedFeedback(&b, history[start:])
-
-	b.WriteString("Please generate a corrected version of the application. Use the write_file tool to create ALL required files.")
-
-	return []llm.Message{
-		{Role: "user", Content: b.String()},
-	}
-}
-
-// buildAgenticPatchMessages constructs the user message for agentic patch mode.
-// Lists current files as paths only (agent can read_file to inspect content).
-// Includes failure feedback and asks the agent to use write_file to update files.
-func buildAgenticPatchMessages(history []iterationFeedback, bestFiles map[string]string, bestScore float64) []llm.Message {
-	var b strings.Builder
-	fmt.Fprintf(&b, "The current best version scored %.1f/100. Current files in the workspace:\n\n", bestScore)
-
-	paths := slices.Sorted(maps.Keys(bestFiles))
-	for _, p := range paths {
-		fmt.Fprintf(&b, "- %s\n", p)
-	}
-	b.WriteString("\nUse read_file to inspect any file you need to review before making changes.\n\n")
-
-	if steeringText := buildSteeringText(history); steeringText != "" {
-		b.WriteString(steeringText)
-		b.WriteString("\n")
-	}
-
-	if len(history) > 0 {
-		b.WriteString("Here is the feedback:\n\n")
-		start := max(len(history)-maxFeedbackEntries, 0)
-		writeCategorizedFeedback(&b, history[start:])
-	}
-
-	b.WriteString("Use the write_file tool to write any files that need to change. ")
-	b.WriteString("You only need to write files that require modification; unchanged files are already present.")
-
-	return []llm.Message{
-		{Role: "user", Content: b.String()},
-	}
 }
 
 // buildLogNoisePrefixes lists line prefixes from package manager output that drown out

@@ -750,7 +750,7 @@ func (a *Attractor) componentIteration(ctx context.Context, rawSpec string, comp
 	systemPrompt := buildComponentPrompt(rawSpec, comp, depInterfaces, s.opts.Language)
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: systemPrompt,
-		Messages:     buildMessages(iter, cs.history),
+		Messages:     buildMessages(iter, cs.history, modeFileFormat),
 		MaxTokens:    s.opts.MaxTokens,
 		Model:        s.opts.Model,
 		CacheControl: &llm.CacheControl{Type: "ephemeral"},
@@ -880,7 +880,7 @@ func (a *Attractor) generateContent(ctx context.Context, specContent string, mes
 
 	// Normal generation path.
 	genResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage, modeFileFormat),
 		Messages:     messages,
 		MaxTokens:    s.opts.MaxTokens,
 		Model:        s.currentModel(),
@@ -919,7 +919,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 
 	wonderTemp := wonderTemperature
 	wonderResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage, modeFileFormat),
 		Messages:     []llm.Message{{Role: "user", Content: wonderPrompt}},
 		Model:        judgeModel,
 		Temperature:  &wonderTemp,
@@ -956,7 +956,7 @@ func (a *Attractor) wonderReflect(ctx context.Context, rawSpec string, iter int,
 	reflectPrompt := buildReflectPrompt(diagnosis, minimalism)
 	reflectTemp := reflectTemperature
 	reflectResp, err := a.llm.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		SystemPrompt: buildSystemPrompt(rawSpec, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage, modeFileFormat),
 		Messages:     []llm.Message{{Role: "user", Content: reflectPrompt}},
 		MaxTokens:    s.opts.MaxTokens,
 		Model:        opts.Model, // always use primary model; reflect crafts the next steering prompt
@@ -1067,9 +1067,9 @@ func (a *Attractor) generateAgentic(ctx context.Context, specContent, iterDir st
 
 	var messages []llm.Message
 	if patching {
-		messages = buildAgenticPatchMessages(s.history, s.bestFiles, s.bestSatisfaction)
+		messages = buildPatchMessages(s.history, s.bestFiles, s.bestSatisfaction, 0, modeToolUse)
 	} else {
-		messages = buildAgenticMessages(iter, s.history)
+		messages = buildMessages(iter, s.history, modeToolUse)
 	}
 
 	if err := applyMinimalismSuffix(messages, s.scoreHistory, s.history); err != nil {
@@ -1093,7 +1093,7 @@ func (a *Attractor) generateAgentic(ctx context.Context, specContent, iterDir st
 	}
 
 	resp, err := agentClient.AgentLoop(ctx, llm.AgentRequest{
-		SystemPrompt: buildAgenticSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage),
+		SystemPrompt: buildSystemPrompt(specContent, s.opts.Capabilities, s.opts.Language, s.opts.Genes, s.opts.GeneLanguage, modeToolUse),
 		Messages:     messages,
 		Tools:        agentTools(),
 		Model:        s.currentModel(),
@@ -1138,9 +1138,9 @@ func (a *Attractor) generateStandard(ctx context.Context, specContent, iterDir s
 		s.totalCost += triageCost
 		s.totalTokens += triageTokens
 		omitted := len(s.bestFiles) - len(relevantFiles)
-		messages = buildPatchMessages(s.history, relevantFiles, s.bestSatisfaction, omitted)
+		messages = buildPatchMessages(s.history, relevantFiles, s.bestSatisfaction, omitted, modeFileFormat)
 	} else {
-		messages = buildMessages(iter, s.history)
+		messages = buildMessages(iter, s.history, modeFileFormat)
 	}
 
 	// Inject minimalism suffix when the previous validated score is above the threshold.
