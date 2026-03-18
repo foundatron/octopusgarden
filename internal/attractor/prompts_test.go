@@ -10,14 +10,14 @@ import (
 
 func TestBuildSystemPromptContainsSpec(t *testing.T) {
 	spec := "Build a REST API for managing widgets"
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "", modeFileFormat)
 	if !strings.Contains(prompt, spec) {
 		t.Error("system prompt should contain the spec")
 	}
 }
 
 func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
-	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{}, "go", "", "")
+	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{}, "go", "", "", modeFileFormat)
 
 	checks := []string{
 		"EXAMPLE",
@@ -34,15 +34,15 @@ func TestBuildSystemPromptContainsFewShotExample(t *testing.T) {
 
 func TestBuildSystemPromptDeterministic(t *testing.T) {
 	spec := "Build a hello world app"
-	a := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
-	b := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
+	a := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "", modeFileFormat)
+	b := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "", modeFileFormat)
 	if a != b {
 		t.Error("buildSystemPrompt should produce identical output for the same spec")
 	}
 }
 
 func TestBuildMessagesIteration1(t *testing.T) {
-	msgs := buildMessages(1, nil)
+	msgs := buildMessages(1, nil, modeFileFormat)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
@@ -59,7 +59,7 @@ func TestBuildMessagesCategorizedHeaders(t *testing.T) {
 		{iteration: 1, kind: feedbackBuildError, message: "Docker build failed: syntax error"},
 		{iteration: 2, kind: feedbackValidation, message: "Satisfaction score: 40.0/100\nScenario results:\n✗ api (40/100)"},
 	}
-	msgs := buildMessages(3, history)
+	msgs := buildMessages(3, history, modeFileFormat)
 	content := msgs[0].Content
 
 	if !strings.Contains(content, "BUILD FAILURE (iteration 1)") {
@@ -87,7 +87,7 @@ func TestBuildMessagesAllKindHeaders(t *testing.T) {
 			history := []iterationFeedback{
 				{iteration: 1, kind: tt.kind, message: "some error"},
 			}
-			msgs := buildMessages(2, history)
+			msgs := buildMessages(2, history, modeFileFormat)
 			if !strings.Contains(msgs[0].Content, tt.wantHeader+" (iteration 1)") {
 				t.Errorf("expected header %q, got:\n%s", tt.wantHeader, msgs[0].Content)
 			}
@@ -102,7 +102,7 @@ func TestBuildMessagesLimitsHistory(t *testing.T) {
 		{iteration: 3, kind: feedbackValidation, message: "third"},
 		{iteration: 4, kind: feedbackValidation, message: "fourth"},
 	}
-	msgs := buildMessages(5, history)
+	msgs := buildMessages(5, history, modeFileFormat)
 	content := msgs[0].Content
 
 	if strings.Contains(content, "first") {
@@ -190,7 +190,7 @@ func TestBuildPatchMessagesCategorizedFeedback(t *testing.T) {
 		"main.go":    "package main\n",
 		"Dockerfile": "FROM scratch\n",
 	}
-	msgs := buildPatchMessages(history, bestFiles, 50.0, 0)
+	msgs := buildPatchMessages(history, bestFiles, 50.0, 0, modeFileFormat)
 	content := msgs[0].Content
 
 	if !strings.Contains(content, "current best version scored 50.0/100") {
@@ -209,7 +209,7 @@ func TestBuildPatchMessagesCategorizedFeedback(t *testing.T) {
 
 func TestBuildPatchMessagesNoHistory(t *testing.T) {
 	bestFiles := map[string]string{"main.go": "package main\n"}
-	msgs := buildPatchMessages(nil, bestFiles, 70.0, 0)
+	msgs := buildPatchMessages(nil, bestFiles, 70.0, 0, modeFileFormat)
 	content := msgs[0].Content
 
 	if strings.Contains(content, "Failures to fix") {
@@ -348,7 +348,7 @@ func TestBuildSystemPromptSuffixSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prompt := buildSystemPrompt(spec, tt.caps, "", "", "")
+			prompt := buildSystemPrompt(spec, tt.caps, "", "", "", modeFileFormat)
 			for _, want := range tt.wantContain {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("prompt should contain %q", want)
@@ -394,7 +394,7 @@ func TestBuildSystemPromptAutoModeNoLanguageBias(t *testing.T) {
 	}
 
 	for _, c := range caps {
-		prompt := buildSystemPrompt("some spec", c, "", "", "")
+		prompt := buildSystemPrompt("some spec", c, "", "", "", modeFileFormat)
 		lower := strings.ToLower(prompt)
 		for _, term := range biasTerms {
 			if strings.Contains(lower, term) {
@@ -471,7 +471,7 @@ func TestBuildSystemPromptWithLanguage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.lang+"_"+capsSuffix(tt.caps), func(t *testing.T) {
-			prompt := buildSystemPrompt("some spec", tt.caps, tt.lang, "", "")
+			prompt := buildSystemPrompt("some spec", tt.caps, tt.lang, "", "", modeFileFormat)
 			for _, want := range tt.wantContain {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("prompt should contain %q", want)
@@ -499,7 +499,7 @@ func TestBuildSystemPromptGRPCWithLanguage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.lang, func(t *testing.T) {
-			prompt := buildSystemPrompt("some spec", ScenarioCapabilities{NeedsGRPC: true}, tt.lang, "", "")
+			prompt := buildSystemPrompt("some spec", ScenarioCapabilities{NeedsGRPC: true}, tt.lang, "", "", modeFileFormat)
 			if !strings.Contains(prompt, tt.wantSetup) {
 				t.Errorf("gRPC prompt for %s should contain %q", tt.lang, tt.wantSetup)
 			}
@@ -514,7 +514,7 @@ func TestBuildSystemPromptWithGenes(t *testing.T) {
 	spec := "Build a REST API"
 	genes := "// Use repository pattern for data access\nfunc NewRepo() *Repo { ... }"
 
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", genes, "")
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", genes, "", modeFileFormat)
 
 	if !strings.Contains(prompt, "PROVEN PATTERNS") {
 		t.Error("prompt with genes should contain PROVEN PATTERNS header")
@@ -529,7 +529,7 @@ func TestBuildSystemPromptWithGenes(t *testing.T) {
 
 func TestBuildSystemPromptNoGenes(t *testing.T) {
 	spec := "Build a REST API"
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "")
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "", "", "", modeFileFormat)
 
 	if strings.Contains(prompt, "PROVEN PATTERNS") {
 		t.Error("empty genes should not include gene section")
@@ -540,7 +540,7 @@ func TestBuildSystemPromptGeneOrdering(t *testing.T) {
 	spec := "Build a REST API"
 	genes := "USE_REPO_PATTERN"
 
-	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "")
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{}, "go", genes, "", modeFileFormat)
 
 	specIdx := strings.Index(prompt, spec)
 	geneIdx := strings.Index(prompt, "PROVEN PATTERNS")
@@ -674,8 +674,8 @@ func TestBuildSystemPromptBackwardsCompat(t *testing.T) {
 	spec := "Build a REST API for widgets"
 	caps := ScenarioCapabilities{NeedsHTTP: true}
 
-	prompt := buildSystemPrompt(spec, caps, "go", "", "")
-	expected := systemPromptPrefix + spec + buildCapabilitySuffix(caps, "go") + buildDepRules("go")
+	prompt := buildSystemPrompt(spec, caps, "go", "", "", modeFileFormat)
+	expected := systemPromptPrefix + spec + buildCapabilitySuffix(caps, "go", modeFileFormat) + buildDepRules("go")
 
 	if prompt != expected {
 		t.Errorf("empty genes should produce identical output to pre-gene construction\ngot:  %s\nwant: %s", prompt, expected)
@@ -936,7 +936,7 @@ func TestBuildMessagesWithSteering(t *testing.T) {
 		},
 	}
 
-	msgs := buildMessages(3, history)
+	msgs := buildMessages(3, history, modeFileFormat)
 	content := msgs[0].Content
 
 	if !strings.Contains(content, "STALL NOTICE") {
@@ -972,7 +972,7 @@ func TestBuildMessagesNoSteeringWithoutConsecutive(t *testing.T) {
 		},
 	}
 
-	msgs := buildMessages(3, history)
+	msgs := buildMessages(3, history, modeFileFormat)
 	if strings.Contains(msgs[0].Content, "STALL NOTICE") {
 		t.Error("should not inject steering when scenarios differ each iteration")
 	}
@@ -995,7 +995,7 @@ func TestBuildPatchMessagesWithSteering(t *testing.T) {
 	}
 	bestFiles := map[string]string{"main.go": "package main\n"}
 
-	msgs := buildPatchMessages(history, bestFiles, 50.0, 0)
+	msgs := buildPatchMessages(history, bestFiles, 50.0, 0, modeFileFormat)
 	content := msgs[0].Content
 
 	if !strings.Contains(content, "STALL NOTICE") {
@@ -1267,6 +1267,26 @@ func TestBuildMinimalismSuffix(t *testing.T) {
 	}
 }
 
+func TestBuildCapabilitySuffixModes(t *testing.T) {
+	caps := ScenarioCapabilities{NeedsHTTP: true}
+
+	fileFormat := buildCapabilitySuffix(caps, "go", modeFileFormat)
+	if !strings.Contains(fileFormat, "=== FILE:") {
+		t.Error("file-format suffix should contain === FILE: format instruction")
+	}
+	if strings.Contains(fileFormat, "write_file") {
+		t.Error("file-format suffix must not contain write_file tool reference")
+	}
+
+	toolUse := buildCapabilitySuffix(caps, "go", modeToolUse)
+	if !strings.Contains(toolUse, "write_file") {
+		t.Error("tool-use suffix should contain write_file tool reference")
+	}
+	if strings.Contains(toolUse, "=== FILE:") {
+		t.Error("tool-use suffix must not contain === FILE: format instruction")
+	}
+}
+
 // capsSuffix returns a short string describing capabilities for test names.
 func capsSuffix(caps ScenarioCapabilities) string {
 	switch {
@@ -1283,36 +1303,36 @@ func capsSuffix(caps ScenarioCapabilities) string {
 	}
 }
 
-func TestBuildAgenticSystemPrompt(t *testing.T) {
+func TestBuildSystemPromptToolUseMode(t *testing.T) {
 	spec := "Build a REST API for managing widgets"
-	prompt := buildAgenticSystemPrompt(spec, ScenarioCapabilities{NeedsHTTP: true}, "go", "", "")
+	prompt := buildSystemPrompt(spec, ScenarioCapabilities{NeedsHTTP: true}, "go", "", "", modeToolUse)
 
 	if !strings.Contains(prompt, spec) {
-		t.Error("agentic system prompt should contain the spec")
+		t.Error("tool-use system prompt should contain the spec")
 	}
 	if !strings.Contains(prompt, "write_file") {
-		t.Error("agentic system prompt should mention write_file tool")
+		t.Error("tool-use system prompt should mention write_file tool")
 	}
 	// Must NOT contain the === FILE: format instruction.
 	if strings.Contains(prompt, "=== FILE:") {
-		t.Error("agentic system prompt must not contain === FILE: format instruction")
+		t.Error("tool-use system prompt must not contain === FILE: format instruction")
 	}
 	// Must NOT contain the EXAMPLE block.
 	if strings.Contains(prompt, "=== FILE: main.go ===") {
-		t.Error("agentic system prompt must not contain language example block")
+		t.Error("tool-use system prompt must not contain language example block")
 	}
 }
 
-func TestBuildAgenticSystemPromptContainsGenes(t *testing.T) {
+func TestBuildSystemPromptToolUseModeContainsGenes(t *testing.T) {
 	genes := "Use dependency injection pattern"
-	prompt := buildAgenticSystemPrompt("some spec", ScenarioCapabilities{}, "", genes, "")
+	prompt := buildSystemPrompt("some spec", ScenarioCapabilities{}, "", genes, "", modeToolUse)
 	if !strings.Contains(prompt, genes) {
-		t.Error("agentic system prompt should include gene content when provided")
+		t.Error("tool-use system prompt should include gene content when provided")
 	}
 }
 
-func TestBuildAgenticMessages_Iteration1(t *testing.T) {
-	msgs := buildAgenticMessages(1, nil)
+func TestBuildMessagesToolUse_EmptyHistory(t *testing.T) {
+	msgs := buildMessages(1, nil, modeToolUse)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
@@ -1320,35 +1340,35 @@ func TestBuildAgenticMessages_Iteration1(t *testing.T) {
 		t.Errorf("expected role user, got %q", msgs[0].Role)
 	}
 	if !strings.Contains(msgs[0].Content, "write_file") {
-		t.Error("iteration 1 message should mention write_file tool")
+		t.Error("empty-history message should mention write_file tool")
 	}
 	// Must NOT contain the === FILE: format instruction.
 	if strings.Contains(msgs[0].Content, "=== FILE:") {
-		t.Error("agentic message must not contain === FILE: format instruction")
+		t.Error("tool-use message must not contain === FILE: format instruction")
 	}
 }
 
-func TestBuildAgenticMessages_Iteration2(t *testing.T) {
+func TestBuildMessagesToolUse_WithHistory(t *testing.T) {
 	history := []iterationFeedback{
 		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 50.0/100\nneeds work"},
 	}
-	msgs := buildAgenticMessages(2, history)
+	msgs := buildMessages(2, history, modeToolUse)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
 	if !strings.Contains(msgs[0].Content, "write_file") {
-		t.Error("iteration 2 message should mention write_file tool")
+		t.Error("tool-use message with history should mention write_file tool")
 	}
 	if !strings.Contains(msgs[0].Content, "previous attempt") {
-		t.Error("iteration 2 message should reference previous attempt")
+		t.Error("tool-use message with history should reference previous attempt")
 	}
 	// Must NOT contain the === FILE: format instruction.
 	if strings.Contains(msgs[0].Content, "=== FILE:") {
-		t.Error("agentic message must not contain === FILE: format instruction")
+		t.Error("tool-use message must not contain === FILE: format instruction")
 	}
 }
 
-func TestBuildAgenticPatchMessages(t *testing.T) {
+func TestBuildPatchMessagesToolUse(t *testing.T) {
 	bestFiles := map[string]string{
 		"main.go":    "package main\n",
 		"Dockerfile": "FROM scratch\n",
@@ -1356,7 +1376,7 @@ func TestBuildAgenticPatchMessages(t *testing.T) {
 	history := []iterationFeedback{
 		{iteration: 1, kind: feedbackValidation, message: "Satisfaction score: 60.0/100\nmissing endpoint"},
 	}
-	msgs := buildAgenticPatchMessages(history, bestFiles, 60.0)
+	msgs := buildPatchMessages(history, bestFiles, 60.0, 0, modeToolUse)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
@@ -1364,28 +1384,28 @@ func TestBuildAgenticPatchMessages(t *testing.T) {
 
 	// Should list file paths, not file content.
 	if !strings.Contains(content, "main.go") {
-		t.Error("patch message should list main.go path")
+		t.Error("tool-use patch message should list main.go path")
 	}
 	if !strings.Contains(content, "Dockerfile") {
-		t.Error("patch message should list Dockerfile path")
+		t.Error("tool-use patch message should list Dockerfile path")
 	}
 	// Should mention read_file for inspection.
 	if !strings.Contains(content, "read_file") {
-		t.Error("patch message should mention read_file for inspecting files")
+		t.Error("tool-use patch message should mention read_file for inspecting files")
 	}
 	// Should mention write_file for output.
 	if !strings.Contains(content, "write_file") {
-		t.Error("patch message should mention write_file for output")
+		t.Error("tool-use patch message should mention write_file for output")
 	}
 	// Must NOT embed full file content.
 	if strings.Contains(content, "package main") {
-		t.Error("agentic patch message must not embed file content inline")
+		t.Error("tool-use patch message must not embed file content inline")
 	}
 }
 
 func TestBuildPatchMessagesOmittedCount(t *testing.T) {
 	bestFiles := map[string]string{"main.go": "package main\n"}
-	msgs := buildPatchMessages(nil, bestFiles, 80.0, 15)
+	msgs := buildPatchMessages(nil, bestFiles, 80.0, 15, modeFileFormat)
 	content := msgs[0].Content
 	if !strings.Contains(content, "(15 other files not relevant to current failures, not shown)") {
 		t.Errorf("should contain omitted-files notice, got:\n%s", content)
@@ -1394,7 +1414,7 @@ func TestBuildPatchMessagesOmittedCount(t *testing.T) {
 
 func TestBuildPatchMessagesZeroOmitted(t *testing.T) {
 	bestFiles := map[string]string{"main.go": "package main\n"}
-	msgs := buildPatchMessages(nil, bestFiles, 80.0, 0)
+	msgs := buildPatchMessages(nil, bestFiles, 80.0, 0, modeFileFormat)
 	content := msgs[0].Content
 	if strings.Contains(content, "other files not relevant") {
 		t.Errorf("should not contain omitted-files notice when omittedCount=0, got:\n%s", content)
@@ -1602,7 +1622,7 @@ func TestTUILanguageExample(t *testing.T) {
 }
 
 func TestTUISystemPromptIntegration(t *testing.T) {
-	prompt := buildSystemPrompt("TUI app spec", ScenarioCapabilities{NeedsTUI: true, NeedsExec: true}, "go", "", "")
+	prompt := buildSystemPrompt("TUI app spec", ScenarioCapabilities{NeedsTUI: true, NeedsExec: true}, "go", "", "", modeFileFormat)
 	if !strings.Contains(prompt, "terminal user interface") {
 		t.Error("system prompt with TUI caps should contain TUI instructions")
 	}
@@ -1683,7 +1703,7 @@ func TestBuildMessagesWithSeededHistory(t *testing.T) {
 		},
 	}
 
-	msgs := buildMessages(1, history)
+	msgs := buildMessages(1, history, modeFileFormat)
 	content := msgs[0].Content
 	if !strings.Contains(content, "composed build attempt failed") {
 		t.Errorf("iter 1 with seeded history should include feedback, got:\n%s", content)
@@ -1695,7 +1715,7 @@ func TestBuildMessagesWithSeededHistory(t *testing.T) {
 
 func TestBuildMessagesEmptyHistoryIter1(t *testing.T) {
 	// Without seeded history, iter 1 should produce the simple generate prompt.
-	msgs := buildMessages(1, nil)
+	msgs := buildMessages(1, nil, modeFileFormat)
 	if strings.Contains(msgs[0].Content, "previous attempt") {
 		t.Error("iter 1 with no history should not reference previous attempts")
 	}

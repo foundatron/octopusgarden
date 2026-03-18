@@ -60,7 +60,7 @@ func TestSystemPromptContainsOnlySpec(t *testing.T) {
 		t.Fatal("expected at least one LLM request to be captured")
 	}
 
-	expectedPrompt := buildSystemPrompt(specContent, ScenarioCapabilities{}, "", "", "")
+	expectedPrompt := buildSystemPrompt(specContent, ScenarioCapabilities{}, "", "", "", modeFileFormat)
 	for i, req := range captured {
 		if req.SystemPrompt != expectedPrompt {
 			t.Errorf("request %d: system prompt does not match buildSystemPrompt(spec)\ngot:  %s\nwant: %s", i, req.SystemPrompt, expectedPrompt)
