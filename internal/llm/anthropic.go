@@ -269,6 +269,12 @@ func (c *AnthropicClient) streamMessage(ctx context.Context, params anthropic.Me
 	var lastErr error
 	for attempt := range streamRetries + 1 {
 		if attempt > 0 {
+			delay := time.Duration(1<<(attempt-1)) * 500 * time.Millisecond
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return anthropic.Message{}, ctx.Err()
+			}
 			c.logger.Warn("retrying streaming request after transient error",
 				"attempt", attempt+1,
 				"error", lastErr,
@@ -318,8 +324,7 @@ func isTransientNetError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "connection reset by peer") ||
 		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "unexpected EOF") ||
-		strings.Contains(msg, "EOF")
+		strings.Contains(msg, "unexpected EOF")
 }
 
 // buildAgentToolParams converts a ToolDef slice into Anthropic SDK tool params.

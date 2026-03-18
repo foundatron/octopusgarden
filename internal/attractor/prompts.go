@@ -446,7 +446,7 @@ func buildDepRules(language string) string {
 // buildMessages constructs the user message for the current iteration.
 // Iteration 1 gets a simple "Generate" prompt; subsequent iterations include
 // the last 3 failure summaries with categorized headers.
-func buildMessages(iter int, history []iterationFeedback) []llm.Message {
+func buildMessages(_ int, history []iterationFeedback) []llm.Message {
 	if len(history) == 0 {
 		return []llm.Message{
 			{Role: "user", Content: "Generate the application according to the specification. Output all files using the === FILE: path === format."},
@@ -851,8 +851,7 @@ func buildAgenticPatchMessages(history []iterationFeedback, bestFiles map[string
 // buildLogNoisePrefixes lists line prefixes from package manager output that drown out
 // actual build errors. Lines starting with any of these are stripped from build feedback.
 var buildLogNoisePrefixes = []string{
-	"fetch ",     // apk fetch
-	"(1/", "(2/", // apk progress counters
+	"fetch ",       // apk fetch
 	"OK:",          // apk summary
 	"Get:", "Hit:", // apt-get
 	"Reading ",       // apt reading state
@@ -911,6 +910,10 @@ func isNoiseLine(trimmed string) bool {
 		if strings.HasPrefix(trimmed, pfx) {
 			return true
 		}
+	}
+	// apk progress counters: "(1/47) Installing ...", "(12/47) Installing ..."
+	if len(trimmed) > 2 && trimmed[0] == '(' && trimmed[1] >= '0' && trimmed[1] <= '9' && strings.Contains(trimmed[:min(10, len(trimmed))], "/") {
+		return true
 	}
 	return false
 }
